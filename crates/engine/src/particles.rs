@@ -84,13 +84,21 @@ impl Sim {
                 self.sys.origin[1] + dir[1] / len * dist,
                 self.sys.origin[2] + dir[2] / len * dist,
             ];
+            // Cor: um ÚNICO t interpola entre min e max (a cor fica na linha entre
+            // as duas — pra min/max cinza dá cinza). Por-canal daria arco-íris.
+            let ct = rng.unit();
+            let color = [
+                self.sys.color_min[0] + ct * (self.sys.color_max[0] - self.sys.color_min[0]),
+                self.sys.color_min[1] + ct * (self.sys.color_max[1] - self.sys.color_min[1]),
+                self.sys.color_min[2] + ct * (self.sys.color_max[2] - self.sys.color_min[2]),
+            ];
             self.particles.push(Particle {
                 pos,
                 vel: rng.range3(self.sys.velocity_min, self.sys.velocity_max),
                 age: 0.0,
                 life: rng.range(self.sys.lifetime.0, self.sys.lifetime.1).max(0.1),
                 size: rng.range(self.sys.size.0, self.sys.size.1),
-                color: rng.range3(self.sys.color_min, self.sys.color_max),
+                color,
             });
         }
     }

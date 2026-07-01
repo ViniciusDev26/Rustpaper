@@ -23,6 +23,9 @@ pub struct ParticleSystem {
     // Operadores
     pub gravity: [f32; 3],
     pub fade_in_time: f32,
+    // Metadados pro engine decidir se sabe renderizar (degradação graciosa):
+    pub renderer: String,        // "sprite" | "spritetrail" | ...
+    pub operators: Vec<String>,  // nomes dos operadores presentes
 }
 
 // "x y z" -> [x, y, z]. Aceita também número puro (replica nos 3).
@@ -88,6 +91,24 @@ impl ParticleSystem {
             .map(f32_of)
             .unwrap_or(0.0);
 
+        // Renderer (primeiro) + nomes dos operadores.
+        let renderer = root
+            .get("renderer")
+            .and_then(|r| r.as_array())
+            .and_then(|a| a.first())
+            .and_then(|r| r.get("name"))
+            .and_then(|n| n.as_str())
+            .unwrap_or("")
+            .to_string();
+        let operators = op
+            .and_then(|o| o.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|it| it.get("name").and_then(|n| n.as_str()).map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+
         Ok(ParticleSystem {
             max_count,
             material,
@@ -103,6 +124,8 @@ impl ParticleSystem {
             color_max: col_max,
             gravity,
             fade_in_time,
+            renderer,
+            operators,
         })
     }
 }
@@ -146,7 +169,8 @@ mod tests {
         "operator": [
             { "name": "movement", "gravity": "0 0 0" },
             { "name": "alphafade", "fadeintime": 0.1 }
-        ]
+        ],
+        "renderer": [{ "name": "sprite" }]
     }"#;
 
     #[test]
@@ -161,6 +185,8 @@ mod tests {
         assert_eq!(p.velocity_min, [-10.0, -50.0, 0.0]);
         assert_eq!(p.velocity_max, [-37.0, -90.0, 0.0]);
         assert_eq!(p.fade_in_time, 0.1);
+        assert_eq!(p.renderer, "sprite");
+        assert_eq!(p.operators, vec!["movement", "alphafade"]);
     }
 
     #[test]
