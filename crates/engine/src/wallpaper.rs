@@ -2,7 +2,11 @@
 // monitor conectado, e desenha em todas usando um Renderer compartilhado.
 
 use std::ptr::NonNull;
+use std::time::Duration;
 
+use calloop::timer::{TimeoutAction, Timer};
+use calloop::EventLoop;
+use calloop_wayland_source::WaylandSource;
 use raw_window_handle::{
     RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
 };
@@ -34,11 +38,11 @@ use we_core::{scene, tex};
 
 // Uma tela: sua layer surface, a wl_surface, a surface do wgpu e a config (tamanho).
 struct Monitor {
+    // O LayerSurface segura a wl_surface viva (o ponteiro dela alimenta a surface
+    // do wgpu), então não precisamos guardar a wl_surface separada.
     layer: LayerSurface,
-    wl_surface: wl_surface::WlSurface,
     surface: wgpu::Surface<'static>,
     config: Option<wgpu::SurfaceConfiguration>, // definida no primeiro configure
-    configured: bool,
 }
 
 struct Wallpaper {
@@ -50,10 +54,6 @@ struct Wallpaper {
     instance: wgpu::Instance,
     renderer: Option<Renderer>, // compartilhado; criado no 1º monitor
     monitors: Vec<Monitor>,
-    // Índice do monitor que "dá o ritmo": só os frame callbacks dele disparam o
-    // redesenho de TODAS as telas. Evita que streams de callback concorrentes se
-    // atrapalhem (o que congelava um monitor).
-    driver: Option<usize>,
     // Fonte da textura (vídeo ou imagem da cena); movida pro Renderer no 1º monitor.
     source: Option<Source>,
 }
@@ -94,7 +94,7 @@ pub fn run(dir: &Path) {
     };
 
     let conn = Connection::connect_to_env().expect("falha ao conectar no Wayland");
-    let (globals, mut event_queue) = registry_queue_init(&conn).unwrap();
+    let (globals, event_queue) = registry_queue_init(&conn).unwrap();
     let qh = event_queue.handle();
 
     let compositor = CompositorState::bind(&globals, &qh).expect("wl_compositor ausente");
@@ -105,19 +105,35 @@ pub fn run(dir: &Path) {
         output_state: OutputState::new(&globals, &qh),
         compositor,
         layer_shell,
-        conn,
+        conn: conn.clone(),
         instance: wgpu::Instance::default(),
         renderer: None,
         monitors: Vec::new(),
-        driver: None,
         source: Some(source),
     };
 
-    // O primeiro dispatch entrega os outputs já existentes -> new_output cria uma
-    // layer surface por monitor. Depois cada tela roda seu próprio loop de frames.
-    loop {
-        event_queue.blocking_dispatch(&mut state).unwrap();
-    }
+    // Event loop via calloop. O render é dirigido por um TIMER (~30fps), não pelos
+    // frame callbacks do Wayland — assim o wallpaper nunca "congela" quando o
+    // compositor para de mandar callbacks (ex.: superfície coberta por uma janela).
+    let mut event_loop: EventLoop<Wallpaper> = EventLoop::try_new().expect("criar event loop");
+    let handle = event_loop.handle();
+
+    // Fonte Wayland: entrega os eventos (outputs, configure...) pros handlers.
+    WaylandSource::new(conn, event_queue)
+        .insert(handle.clone())
+        .expect("inserir WaylandSource");
+
+    // Timer de ~30fps: redesenha todas as telas. Enquanto renderer/config ainda
+    // não existem (antes do 1º configure), render_monitor simplesmente pula.
+    let frame_interval = Duration::from_millis(33);
+    handle
+        .insert_source(Timer::from_duration(frame_interval), move |_, _, state| {
+            state.render_all();
+            TimeoutAction::ToDuration(frame_interval)
+        })
+        .expect("inserir timer");
+
+    event_loop.run(None, &mut state, |_| {}).expect("rodar event loop");
 }
 
 impl Wallpaper {
@@ -130,14 +146,7 @@ impl Wallpaper {
         }
     }
 
-    // Agenda o próximo frame callback do monitor `idx` e desenha (forma o loop).
-    fn draw(&self, idx: usize, qh: &QueueHandle<Self>) {
-        let wl = self.monitors[idx].wl_surface.clone();
-        wl.frame(qh, wl.clone());
-        self.render_monitor(idx);
-    }
-
-    // Redesenha TODAS as telas (chamado a cada tick do monitor-relógio).
+    // Redesenha TODAS as telas (chamado a cada tick do timer).
     fn render_all(&self) {
         for idx in 0..self.monitors.len() {
             self.render_monitor(idx);
@@ -166,14 +175,13 @@ impl OutputHandler for Wallpaper {
         layer.set_size(0, 0);
         layer.commit();
 
-        let wl_surface = layer.wl_surface().clone();
-
-        // Cria a surface do wgpu a partir dos ponteiros crus do Wayland.
+        // Cria a surface do wgpu a partir dos ponteiros crus do Wayland. O ponteiro
+        // da wl_surface vem do layer (que a mantém viva enquanto o Monitor existir).
         let raw_display = RawDisplayHandle::Wayland(WaylandDisplayHandle::new(
             NonNull::new(self.conn.backend().display_ptr() as *mut _).unwrap(),
         ));
         let raw_window = RawWindowHandle::Wayland(WaylandWindowHandle::new(
-            NonNull::new(wl_surface.id().as_ptr() as *mut _).unwrap(),
+            NonNull::new(layer.wl_surface().id().as_ptr() as *mut _).unwrap(),
         ));
         let wgpu_surface = unsafe {
             self.instance
@@ -192,10 +200,8 @@ impl OutputHandler for Wallpaper {
 
         self.monitors.push(Monitor {
             layer,
-            wl_surface,
             surface: wgpu_surface,
             config: None,
-            configured: false,
         });
     }
 
@@ -209,7 +215,7 @@ impl LayerShellHandler for Wallpaper {
     fn configure(
         &mut self,
         _: &Connection,
-        qh: &QueueHandle<Self>,
+        _: &QueueHandle<Self>,
         layer: &LayerSurface,
         configure: LayerSurfaceConfigure,
         _: u32,
@@ -234,12 +240,7 @@ impl LayerShellHandler for Wallpaper {
         if let Some(config) = config {
             self.monitors[idx].config = Some(config);
         }
-
-        // Inicia o loop de render desta tela uma única vez.
-        if !self.monitors[idx].configured {
-            self.monitors[idx].configured = true;
-            self.draw(idx, qh);
-        }
+        // O timer cuida de desenhar; não precisamos disparar render aqui.
     }
 }
 
@@ -249,26 +250,9 @@ impl CompositorHandler for Wallpaper {
     fn surface_enter(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: &wl_output::WlOutput) {}
     fn surface_leave(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: &wl_output::WlOutput) {}
 
-    // Frame callback. Só o monitor-relógio (driver) dirige o redesenho de todas
-    // as telas; os callbacks dos outros são ignorados (e morrem naturalmente,
-    // pois não os re-agendamos).
-    fn frame(&mut self, _: &Connection, qh: &QueueHandle<Self>, surface: &wl_surface::WlSurface, _: u32) {
-        let Some(idx) = self.monitors.iter().position(|m| &m.wl_surface == surface) else {
-            return;
-        };
-        // O primeiro callback a chegar elege o driver.
-        if self.driver.is_none() {
-            self.driver = Some(idx);
-        }
-        if self.driver != Some(idx) {
-            return; // callback de um não-driver: ignora
-        }
-        // Re-agenda o próximo callback do driver (o present abaixo o envia)...
-        let wl = self.monitors[idx].wl_surface.clone();
-        wl.frame(qh, wl.clone());
-        // ...e redesenha todas as telas neste tick.
-        self.render_all();
-    }
+    // Não usamos frame callbacks pra dirigir o render (o timer faz isso), então
+    // este handler fica vazio.
+    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {}
 }
 
 impl ProvidesRegistryState for Wallpaper {
