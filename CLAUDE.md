@@ -79,7 +79,9 @@ puxe de `/proc/<plasmashell>/environ`):
 - **.tex** (`TEXV0005`/`TEXI0001`): header com `format` (0=ARGB8888, 4=DXT5,
   6=DXT3, 7=DXT1, ...), flags, dims. Container `TEXB0001..0004` (LZ4 quando
   `compression==1`; TEXB0003/4 podem ter imagem **free-image** JPEG/PNG embutida).
-  **Suportamos ARGB8888 (bytes BGRA→RGBA) e free-image; DXT NÃO.** Strings do .tex
+  **Suportamos ARGB8888 e free-image; DXT NÃO.** ARGB8888 (apesar do nome) já vem
+  em ordem **RGBA** — NÃO trocar canais (o WE faz upload como GL_RGBA; trocar R↔B
+  faz vermelho virar azul, invisível em grayscale). Strings do .tex
   são null-terminated (diferente do .pkg, que é length-prefixed).
 - **Cadeia da cena**: `scene.json` → objeto com `image` → `models/x.json`
   (`material`) → `materials/x.json` (`passes[0].textures[0]` = nome) →
