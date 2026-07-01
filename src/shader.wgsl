@@ -1,11 +1,12 @@
-// Shader de wallpaper: triângulo de tela cheia amostrando uma TEXTURA (imagem).
+// Shader de wallpaper: triângulo de tela cheia amostrando uma textura, com
+// "cover" (preenche a tela mantendo a proporção da imagem, cortando o excesso).
 
 struct Uniforms {
+    resolution: vec2<f32>, // tamanho da tela (px)
+    image_size: vec2<f32>, // tamanho da imagem (px)
     time: f32,
-    resolution: vec2<f32>,
 };
 @group(0) @binding(0) var<uniform> u: Uniforms;
-// A textura (imagem) e o sampler (regras de leitura). Bindings 1 e 2.
 @group(0) @binding(1) var tex: texture_2d<f32>;
 @group(0) @binding(2) var samp: sampler;
 
@@ -30,11 +31,24 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Inverte o Y: imagens têm a linha 0 no TOPO; nosso uv tem origem embaixo.
-    let uv = vec2<f32>(in.uv.x, 1.0 - in.uv.y);
-    // textureSample lê a cor da textura no ponto uv, aplicando o sampler.
+    // Y invertido (imagem tem origem no topo).
+    var uv = vec2<f32>(in.uv.x, 1.0 - in.uv.y);
+
+    // COVER: escala a amostragem em torno do centro (0.5). Encolhe o eixo que
+    // "sobra" pra mostrar só a fatia central com a proporção da tela.
+    let screen_aspect = u.resolution.x / u.resolution.y;
+    let image_aspect = u.image_size.x / u.image_size.y;
+    var scale = vec2<f32>(1.0, 1.0);
+    if (screen_aspect > image_aspect) {
+        // Tela mais larga que a imagem: preenche a largura, corta em cima/baixo.
+        scale.y = image_aspect / screen_aspect;
+    } else {
+        // Tela mais "alta": preenche a altura, corta nas laterais.
+        scale.x = screen_aspect / image_aspect;
+    }
+    uv = (uv - 0.5) * scale + 0.5;
+
     var color = textureSample(tex, samp, uv);
-    // Pulsação sutil de brilho pelo tempo (prova que o uniform ainda funciona).
-    color = color * (0.85 + 0.15 * sin(u.time));
+    color = color * (0.85 + 0.15 * sin(u.time)); // pulsação sutil
     return color;
 }
