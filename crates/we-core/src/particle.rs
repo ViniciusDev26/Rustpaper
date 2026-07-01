@@ -22,10 +22,32 @@ pub struct ParticleSystem {
     pub color_max: [f32; 3],
     // Operadores
     pub gravity: [f32; 3],
+    pub drag: f32,
     pub fade_in_time: f32,
+    pub oscillate: Option<Oscillate>,
+    pub color_change: Option<ColorChange>,
     // Metadados pro engine decidir se sabe renderizar (degradação graciosa):
     pub renderer: String,        // "sprite" | "spritetrail" | ...
     pub operators: Vec<String>,  // nomes dos operadores presentes
+}
+
+// oscillateposition: desloca a partícula num seno (balanço). Faixas por partícula.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Oscillate {
+    pub mask: [f32; 3], // em quais eixos oscila
+    pub frequency: (f32, f32),
+    pub phase: (f32, f32),
+    pub scale: (f32, f32),
+}
+
+// colorchange: interpola a cor (0..1) entre start e end, entre start_time e end_time
+// (frações da vida).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColorChange {
+    pub start_time: f32,
+    pub end_time: f32,
+    pub start: [f32; 3],
+    pub end: [f32; 3],
 }
 
 // "x y z" -> [x, y, z]. Aceita também número puro (replica nos 3).
@@ -82,14 +104,36 @@ impl ParticleSystem {
 
         // Operators.
         let op = root.get("operator");
-        let gravity = find_named(op, "movement")
-            .and_then(|m| m.get("gravity"))
-            .map(vec3)
-            .unwrap_or([0.0; 3]);
+        let movement = find_named(op, "movement");
+        let gravity = movement.and_then(|m| m.get("gravity")).map(vec3).unwrap_or([0.0; 3]);
+        let drag = movement.and_then(|m| m.get("drag")).map(f32_of).unwrap_or(0.0);
         let fade_in_time = find_named(op, "alphafade")
             .and_then(|a| a.get("fadeintime"))
             .map(f32_of)
             .unwrap_or(0.0);
+
+        let oscillate = find_named(op, "oscillateposition").map(|o| Oscillate {
+            mask: o.get("mask").map(vec3).unwrap_or([1.0, 1.0, 1.0]),
+            frequency: (
+                o.get("frequencymin").map(f32_of).unwrap_or(1.0),
+                o.get("frequencymax").map(f32_of).unwrap_or(1.0),
+            ),
+            phase: (
+                o.get("phasemin").map(f32_of).unwrap_or(0.0),
+                o.get("phasemax").map(f32_of).unwrap_or(0.0),
+            ),
+            scale: (
+                o.get("scalemin").map(f32_of).unwrap_or(0.0),
+                o.get("scalemax").map(f32_of).unwrap_or(0.0),
+            ),
+        });
+
+        let color_change = find_named(op, "colorchange").map(|c| ColorChange {
+            start_time: c.get("starttime").map(f32_of).unwrap_or(0.0),
+            end_time: c.get("endtime").map(f32_of).unwrap_or(1.0),
+            start: c.get("startvalue").map(vec3).unwrap_or([1.0; 3]),
+            end: c.get("endvalue").map(vec3).unwrap_or([1.0; 3]),
+        });
 
         // Renderer (primeiro) + nomes dos operadores.
         let renderer = root
@@ -123,7 +167,10 @@ impl ParticleSystem {
             color_min: col_min,
             color_max: col_max,
             gravity,
+            drag,
             fade_in_time,
+            oscillate,
+            color_change,
             renderer,
             operators,
         })
@@ -168,6 +215,9 @@ mod tests {
         ],
         "operator": [
             { "name": "movement", "gravity": "0 0 0" },
+            { "name": "oscillateposition", "mask": "1 0.5 0",
+              "frequencymin": 0.8, "frequencymax": 1, "phasemin": 0, "phasemax": 1,
+              "scalemin": 20, "scalemax": 35 },
             { "name": "alphafade", "fadeintime": 0.1 }
         ],
         "renderer": [{ "name": "sprite" }]
@@ -186,7 +236,10 @@ mod tests {
         assert_eq!(p.velocity_max, [-37.0, -90.0, 0.0]);
         assert_eq!(p.fade_in_time, 0.1);
         assert_eq!(p.renderer, "sprite");
-        assert_eq!(p.operators, vec!["movement", "alphafade"]);
+        assert_eq!(p.operators, vec!["movement", "oscillateposition", "alphafade"]);
+        let osc = p.oscillate.expect("deveria ter oscillate");
+        assert_eq!(osc.mask, [1.0, 0.5, 0.0]);
+        assert_eq!(osc.scale, (20.0, 35.0));
     }
 
     #[test]

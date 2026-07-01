@@ -38,7 +38,11 @@ struct Particle {
     age: f32,
     life: f32,
     size: f32,
-    color: [f32; 3],
+    color: [f32; 3], // cor base (colorrandom, 0-255)
+    // Parâmetros de oscilação sorteados por partícula (0 se não houver oscillate).
+    osc_freq: f32,
+    osc_phase: f32,
+    osc_scale: f32,
 }
 
 // Simulação de um sistema (parâmetros + partículas vivas + acumulador de spawn).
@@ -54,11 +58,12 @@ impl Sim {
     }
 
     fn update(&mut self, dt: f32, rng: &mut Rng) {
-        // Envelhece + move + remove mortas.
+        // Envelhece + move (gravidade + drag) + remove mortas.
         for p in &mut self.particles {
             p.age += dt;
             for i in 0..3 {
                 p.vel[i] += self.sys.gravity[i] * dt;
+                p.vel[i] -= p.vel[i] * self.sys.drag * dt; // arrasto
                 p.pos[i] += p.vel[i] * dt;
             }
         }
@@ -92,6 +97,15 @@ impl Sim {
                 self.sys.color_min[1] + ct * (self.sys.color_max[1] - self.sys.color_min[1]),
                 self.sys.color_min[2] + ct * (self.sys.color_max[2] - self.sys.color_min[2]),
             ];
+            // Oscilação por partícula (freq/phase/scale sorteados na faixa).
+            let (osc_freq, osc_phase, osc_scale) = match &self.sys.oscillate {
+                Some(o) => (
+                    rng.range(o.frequency.0, o.frequency.1),
+                    rng.range(o.phase.0, o.phase.1),
+                    rng.range(o.scale.0, o.scale.1),
+                ),
+                None => (0.0, 0.0, 0.0),
+            };
             self.particles.push(Particle {
                 pos,
                 vel: rng.range3(self.sys.velocity_min, self.sys.velocity_max),
@@ -99,6 +113,9 @@ impl Sim {
                 life: rng.range(self.sys.lifetime.0, self.sys.lifetime.1).max(0.1),
                 size: rng.range(self.sys.size.0, self.sys.size.1),
                 color,
+                osc_freq,
+                osc_phase,
+                osc_scale,
             });
         }
     }
@@ -271,14 +288,36 @@ impl Particles {
                 if a <= 0.0 {
                     continue;
                 }
+
+                // Oscilação (balanço): desloca a posição num seno, por eixo (mask).
+                let (mut px, mut py) = (p.pos[0], p.pos[1]);
+                if let Some(osc) = &sim.sys.oscillate {
+                    use std::f32::consts::TAU;
+                    let s = p.osc_scale * (TAU * p.osc_freq * p.age + p.osc_phase * TAU).sin();
+                    px += osc.mask[0] * s;
+                    py += osc.mask[1] * s;
+                }
+
+                // Cor: colorchange (0..1, anima ao longo da vida) tem prioridade;
+                // senão a cor base do colorrandom (0-255).
+                let rgb = match &sim.sys.color_change {
+                    Some(cc) => {
+                        let denom = (cc.end_time - cc.start_time).max(1e-3);
+                        let f = ((p.age / p.life - cc.start_time) / denom).clamp(0.0, 1.0);
+                        [
+                            cc.start[0] + f * (cc.end[0] - cc.start[0]),
+                            cc.start[1] + f * (cc.end[1] - cc.start[1]),
+                            cc.start[2] + f * (cc.end[2] - cc.start[2]),
+                        ]
+                    }
+                    None => [p.color[0] / 255.0, p.color[1] / 255.0, p.color[2] / 255.0],
+                };
+
                 let hx = p.size / (self.scene_size[0] * 0.5);
                 instances.push(Instance {
-                    center: [
-                        p.pos[0] / (self.scene_size[0] * 0.5),
-                        p.pos[1] / (self.scene_size[1] * 0.5),
-                    ],
+                    center: [px / (self.scene_size[0] * 0.5), py / (self.scene_size[1] * 0.5)],
                     half: [hx, hx * scene_aspect],
-                    color: [p.color[0] / 255.0, p.color[1] / 255.0, p.color[2] / 255.0, a],
+                    color: [rgb[0], rgb[1], rgb[2], a],
                 });
             }
         }
