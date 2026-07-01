@@ -5,13 +5,27 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::video::Video;
 
+// 16 bytes: scale@0 (vec2), time@8 (f32), _pad@12. Casa com o WGSL.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
-    resolution: [f32; 2],
-    image_size: [f32; 2],
+    scale: [f32; 2],
     time: f32,
-    _pad: [f32; 3],
+    _pad: f32,
+}
+
+// Fator de escala pro "cover": preenche a tela mantendo a proporção da imagem,
+// encolhendo a amostragem no eixo que sobra. Função PURA -> testável.
+fn cover_scale(screen_w: f32, screen_h: f32, img_w: f32, img_h: f32) -> [f32; 2] {
+    let screen_aspect = screen_w / screen_h;
+    let image_aspect = img_w / img_h;
+    if screen_aspect > image_aspect {
+        // Tela mais larga: preenche a largura, corta em cima/baixo.
+        [1.0, image_aspect / screen_aspect]
+    } else {
+        // Tela mais "alta": preenche a altura, corta nas laterais.
+        [screen_aspect / image_aspect, 1.0]
+    }
 }
 
 pub struct Renderer {
@@ -209,10 +223,14 @@ impl Renderer {
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let uniforms = Uniforms {
-            resolution: [config.width as f32, config.height as f32],
-            image_size: self.image_size,
+            scale: cover_scale(
+                config.width as f32,
+                config.height as f32,
+                self.image_size[0],
+                self.image_size[1],
+            ),
             time: self.start.elapsed().as_secs_f32(),
-            _pad: [0.0; 3],
+            _pad: 0.0,
         };
         self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
@@ -243,5 +261,51 @@ impl Renderer {
 
         self.queue.submit(Some(encoder.finish()));
         frame.present();
+    }
+}
+
+// Testes de unidade. #[cfg(test)] = este módulo só é compilado com `cargo test`.
+// Por estar dentro do módulo, enxerga os itens privados (Uniforms, cover_scale).
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Compara floats com tolerância (comparar == com float é traiçoeiro).
+    fn approx(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-6
+    }
+
+    #[test]
+    fn cover_same_aspect_no_scale() {
+        // Imagem e tela com a MESMA proporção => sem corte (escala 1,1).
+        let s = cover_scale(1920.0, 1080.0, 1920.0, 1080.0);
+        assert!(approx(s[0], 1.0) && approx(s[1], 1.0), "esperava [1,1], veio {s:?}");
+    }
+
+    #[test]
+    fn cover_square_image_on_wide_screen() {
+        // Imagem quadrada (1:1) em tela 16:9 => preenche a largura, corta a altura.
+        // scale.y = image_aspect/screen_aspect = 1 / (1920/1080) = 0.5625.
+        let s = cover_scale(1920.0, 1080.0, 1000.0, 1000.0);
+        assert!(approx(s[0], 1.0), "x deveria ser 1, veio {}", s[0]);
+        assert!(approx(s[1], 0.5625), "y deveria ser 0.5625, veio {}", s[1]);
+    }
+
+    #[test]
+    fn cover_wide_image_on_tall_screen() {
+        // Imagem wide (2:1) em tela retrato (1:2) => corta as laterais (scale.x<1).
+        let s = cover_scale(1000.0, 2000.0, 2000.0, 1000.0);
+        assert!(approx(s[1], 1.0), "y deveria ser 1, veio {}", s[1]);
+        assert!(s[0] < 1.0, "x deveria ser <1 (corta laterais), veio {}", s[0]);
+    }
+
+    #[test]
+    fn uniforms_layout_matches_shader() {
+        // Trava o layout que o WGSL espera: 16 bytes, scale@0, time@8.
+        // Se alguém mexer nos campos e quebrar isso, o teste pega (senão o
+        // render sairia com dados errados, sem erro de compilação).
+        assert_eq!(std::mem::size_of::<Uniforms>(), 16);
+        assert_eq!(std::mem::offset_of!(Uniforms, scale), 0);
+        assert_eq!(std::mem::offset_of!(Uniforms, time), 8);
     }
 }

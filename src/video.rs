@@ -104,9 +104,38 @@ fn probe(path: &str) -> (u32, u32) {
         .output()
         .expect("falha ao rodar ffprobe");
     let s = String::from_utf8_lossy(&out.stdout);
-    let s = s.trim(); // "1920,1080"
+    parse_dimensions(&s).expect("saída do ffprobe inválida")
+}
+
+// Parse PURO da saída do ffprobe ("1920,1080"). Separado do subprocesso pra ser
+// testável. Devolve None se a entrada não tiver dois números válidos.
+fn parse_dimensions(s: &str) -> Option<(u32, u32)> {
+    let s = s.trim();
     let mut it = s.split(',');
-    let w = it.next().unwrap().trim().parse().expect("largura inválida");
-    let h = it.next().unwrap().trim().parse().expect("altura inválida");
-    (w, h)
+    let w = it.next()?.trim().parse().ok()?;
+    let h = it.next()?.trim().parse().ok()?;
+    Some((w, h))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_dimensions;
+
+    #[test]
+    fn parses_valid() {
+        assert_eq!(parse_dimensions("1920,1080"), Some((1920, 1080)));
+    }
+
+    #[test]
+    fn parses_with_whitespace() {
+        // ffprobe às vezes acrescenta \n/espaços.
+        assert_eq!(parse_dimensions("  1920,1080\n"), Some((1920, 1080)));
+    }
+
+    #[test]
+    fn rejects_garbage() {
+        assert_eq!(parse_dimensions("abc"), None);
+        assert_eq!(parse_dimensions("1920"), None); // falta a altura
+        assert_eq!(parse_dimensions(""), None);
+    }
 }
