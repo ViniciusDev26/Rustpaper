@@ -2,12 +2,15 @@
 // monitores (device, queue, pipeline, uniforms) — criado uma vez. As superfícies
 // (uma por monitor) vivem fora daqui e são passadas em configure()/render().
 
+// Precisa casar com a struct Uniforms do shader (offsets iguais). 32 bytes:
+// resolution@0, image_size@8, time@16, padding até 32 (uniform = múltiplo de 16).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
-    time: f32,
-    _pad: f32,
     resolution: [f32; 2],
+    image_size: [f32; 2],
+    time: f32,
+    _pad: [f32; 3],
 }
 
 pub struct Renderer {
@@ -19,6 +22,7 @@ pub struct Renderer {
     bind_group: wgpu::BindGroup,
     format: wgpu::TextureFormat, // formato de cor, escolhido uma vez
     start: std::time::Instant,
+    image_size: [f32; 2], // tamanho da textura, pra o cálculo de cover
 }
 
 impl Renderer {
@@ -156,6 +160,7 @@ impl Renderer {
             bind_group,
             format,
             start: std::time::Instant::now(),
+            image_size: [img_w as f32, img_h as f32],
         }
     }
 
@@ -196,9 +201,10 @@ impl Renderer {
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let uniforms = Uniforms {
-            time: self.start.elapsed().as_secs_f32(),
-            _pad: 0.0,
             resolution: [config.width as f32, config.height as f32],
+            image_size: self.image_size,
+            time: self.start.elapsed().as_secs_f32(),
+            _pad: [0.0; 3],
         };
         self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
