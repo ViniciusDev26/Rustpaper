@@ -45,6 +45,10 @@ struct Wallpaper {
     instance: wgpu::Instance,
     renderer: Option<Renderer>, // compartilhado; criado no 1º monitor
     monitors: Vec<Monitor>,
+    // Índice do monitor que "dá o ritmo": só os frame callbacks dele disparam o
+    // redesenho de TODAS as telas. Evita que streams de callback concorrentes se
+    // atrapalhem (o que congelava um monitor).
+    driver: Option<usize>,
 }
 
 pub fn run() {
@@ -64,6 +68,7 @@ pub fn run() {
         instance: wgpu::Instance::default(),
         renderer: None,
         monitors: Vec::new(),
+        driver: None,
     };
 
     // O primeiro dispatch entrega os outputs já existentes -> new_output cria uma
@@ -88,6 +93,13 @@ impl Wallpaper {
         let wl = self.monitors[idx].wl_surface.clone();
         wl.frame(qh, wl.clone());
         self.render_monitor(idx);
+    }
+
+    // Redesenha TODAS as telas (chamado a cada tick do monitor-relógio).
+    fn render_all(&self) {
+        for idx in 0..self.monitors.len() {
+            self.render_monitor(idx);
+        }
     }
 }
 
@@ -132,7 +144,10 @@ impl OutputHandler for Wallpaper {
 
         // O Renderer (device/pipeline) é criado uma vez, a partir da 1ª surface.
         if self.renderer.is_none() {
-            self.renderer = Some(Renderer::new(&self.instance, &wgpu_surface));
+            // Caminho absoluto do vídeo (via CARGO_MANIFEST_DIR = raiz do projeto),
+            // pra não depender do diretório de trabalho na hora de rodar.
+            let video_path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/test.mp4");
+            self.renderer = Some(Renderer::new(&self.instance, &wgpu_surface, video_path));
         }
 
         self.monitors.push(Monitor {
@@ -194,11 +209,25 @@ impl CompositorHandler for Wallpaper {
     fn surface_enter(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: &wl_output::WlOutput) {}
     fn surface_leave(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: &wl_output::WlOutput) {}
 
-    // Frame callback: descobre qual monitor e redesenha ele.
+    // Frame callback. Só o monitor-relógio (driver) dirige o redesenho de todas
+    // as telas; os callbacks dos outros são ignorados (e morrem naturalmente,
+    // pois não os re-agendamos).
     fn frame(&mut self, _: &Connection, qh: &QueueHandle<Self>, surface: &wl_surface::WlSurface, _: u32) {
-        if let Some(idx) = self.monitors.iter().position(|m| &m.wl_surface == surface) {
-            self.draw(idx, qh);
+        let Some(idx) = self.monitors.iter().position(|m| &m.wl_surface == surface) else {
+            return;
+        };
+        // O primeiro callback a chegar elege o driver.
+        if self.driver.is_none() {
+            self.driver = Some(idx);
         }
+        if self.driver != Some(idx) {
+            return; // callback de um não-driver: ignora
+        }
+        // Re-agenda o próximo callback do driver (o present abaixo o envia)...
+        let wl = self.monitors[idx].wl_surface.clone();
+        wl.frame(qh, wl.clone());
+        // ...e redesenha todas as telas neste tick.
+        self.render_all();
     }
 }
 
