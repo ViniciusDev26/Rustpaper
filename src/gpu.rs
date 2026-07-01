@@ -44,6 +44,61 @@ impl Renderer {
             mapped_at_creation: false,
         });
 
+        // --- Textura: decodifica a imagem e sobe pra GPU ---
+        // include_bytes! embute o arquivo no binário (caminho relativo a este .rs).
+        // to_rgba8() garante 4 bytes/pixel (RGBA), o layout que a GPU espera.
+        let img = image::load_from_memory(include_bytes!("../assets/test.jpg"))
+            .expect("falha ao decodificar a imagem")
+            .to_rgba8();
+        let (img_w, img_h) = img.dimensions();
+        let extent = wgpu::Extent3d {
+            width: img_w,
+            height: img_h,
+            depth_or_array_layers: 1,
+        };
+
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("wallpaper texture"),
+            size: extent,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            // Srgb: os bytes da imagem estão em espaço sRGB; a GPU converte pra
+            // linear ao amostrar (cores corretas).
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        // Copia os pixels da CPU pra textura na GPU.
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &img,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * img_w), // 4 bytes (RGBA) por pixel
+                rows_per_image: Some(img_h),
+            },
+            extent,
+        );
+
+        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge, // borda: repete o pixel da ponta
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear, // suaviza ao ampliar
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            ..Default::default()
+        });
+
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -74,12 +129,22 @@ impl Renderer {
 
         let bind_group_layout = pipeline.get_bind_group_layout(0);
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("uniform bind group"),
+            label: Some("bind group"),
             layout: &bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&texture_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
         });
 
         Self {
