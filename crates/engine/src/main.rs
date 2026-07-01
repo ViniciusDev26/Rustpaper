@@ -1,8 +1,4 @@
 mod gpu;
-mod pkg;
-mod project;
-mod scene;
-mod tex;
 mod video;
 mod wallpaper;
 

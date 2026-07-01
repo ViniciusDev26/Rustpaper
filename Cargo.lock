@@ -236,6 +236,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
+name = "engine"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "pollster",
+ "raw-window-handle",
+ "smithay-client-toolkit",
+ "wayland-backend",
+ "wayland-client",
+ "we-core",
+ "wgpu",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1166,23 +1180,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
-name = "wallpaper-engine-rs"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "image",
- "lz4_flex",
- "pollster",
- "raw-window-handle",
- "serde",
- "serde_json",
- "smithay-client-toolkit",
- "wayland-backend",
- "wayland-client",
- "wgpu",
-]
-
-[[package]]
 name = "wasm-bindgen"
 version = "0.2.126"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1331,6 +1328,16 @@ dependencies = [
  "log",
  "once_cell",
  "pkg-config",
+]
+
+[[package]]
+name = "we-core"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "lz4_flex",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
