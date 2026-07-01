@@ -1,9 +1,10 @@
 // Shader de wallpaper: triângulo de tela cheia amostrando uma textura.
-// O "cover" agora é calculado na CPU (testável) e chega pronto em `scale`.
+// - scale:   cover (preenche a tela mantendo a proporção do conteúdo)
+// - content: fração da textura que é conteúdo real (o resto é padding, ignorado)
 
 struct Uniforms {
-    scale: vec2<f32>, // fator de cover (aplicado ao uv em torno do centro)
-    time: f32,
+    scale: vec2<f32>,
+    content: vec2<f32>,
 };
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var tex: texture_2d<f32>;
@@ -30,9 +31,13 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Y invertido (imagem/vídeo têm origem no topo) + cover aplicado.
-    var uv = vec2<f32>(in.uv.x, 1.0 - in.uv.y);
-    uv = (uv - 0.5) * u.scale + 0.5;
-
-    return textureSample(tex, samp, uv);
+    // origem no topo-esquerdo (imagem/vídeo têm a linha 0 no topo)
+    var s = vec2<f32>(in.uv.x, 1.0 - in.uv.y);
+    // cover: escala em torno do centro
+    s = (s - 0.5) * u.scale + 0.5;
+    // recorta pra região de conteúdo (ignora o padding do buffer da textura)
+    s = s * u.content;
+    // alpha forçado a 1: wallpaper é fundo OPACO. Sem isso, texturas com alpha < 1
+    // deixam a surface translúcida e o compositor mistura com o fundo -> flicker.
+    return vec4<f32>(textureSample(tex, samp, s).rgb, 1.0);
 }
