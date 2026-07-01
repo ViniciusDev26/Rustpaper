@@ -1,40 +1,48 @@
-// Shader em WGSL (roda na GPU). Agora com COR POR VÉRTICE + interpolação.
+// Shader de WALLPAPER: um triângulo de tela cheia + efeito procedural no
+// fragment shader (roda por pixel). É assim que wallpapers animados funcionam.
 
-// Uma struct pra descrever o que o vertex shader ENTREGA ao fragment shader.
-// - @builtin(position): a posição (obrigatória; a GPU usa pra rasterizar).
-// - @location(0): um dado NOSSO (a cor). O número 0 é o "canal" que liga o
-//   vertex ao fragment: o vertex escreve em @location(0), o fragment lê de lá.
+struct Uniforms {
+    time: f32,
+    resolution: vec2<f32>,
+};
+@group(0) @binding(0) var<uniform> u: Uniforms;
+
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
-    @location(0) color: vec3<f32>,
+    // Agora passamos UV (coordenada 0..1 na tela) em vez de cor.
+    @location(0) uv: vec2<f32>,
 };
 
-// === VERTEX SHADER === (roda 1x por vértice)
+// === VERTEX SHADER ===
+// Três vértices que formam um triângulo GIGANTE cobrindo toda a tela [-1,1].
 @vertex
 fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
-    // Posições dos 3 cantos (x, y) em clip space (-1..+1).
     var positions = array<vec2<f32>, 3>(
-        vec2<f32>( 0.0,  0.5),  // topo
-        vec2<f32>(-0.5, -0.5),  // inferior esquerdo
-        vec2<f32>( 0.5, -0.5),  // inferior direito
+        vec2<f32>(-1.0, -1.0),  // canto inferior esquerdo
+        vec2<f32>( 3.0, -1.0),  // muito à direita (fora da tela)
+        vec2<f32>(-1.0,  3.0),  // muito acima (fora da tela)
     );
-    // Uma cor (RGB) para cada canto.
-    var colors = array<vec3<f32>, 3>(
-        vec3<f32>(1.0, 0.0, 0.0),  // vértice 0: vermelho
-        vec3<f32>(0.0, 1.0, 0.0),  // vértice 1: verde
-        vec3<f32>(0.0, 0.0, 1.0),  // vértice 2: azul
-    );
+    let p = positions[index];
 
     var out: VertexOutput;
-    out.clip_position = vec4<f32>(positions[index], 0.0, 1.0);
-    out.color = colors[index];
+    out.clip_position = vec4<f32>(p, 0.0, 1.0);
+    // Converte clip space (-1..1) pra UV (0..1). A parte que passa de 1 fica
+    // fora da tela e nunca vira pixel — só a região visível 0..1 é desenhada.
+    out.uv = p * 0.5 + 0.5;
     return out;
 }
 
-// === FRAGMENT SHADER === (roda 1x por pixel)
-// `in` chega com a cor JÁ INTERPOLADA para este pixel específico — a GPU mistura
-// as cores dos 3 cantos conforme a distância. Só precisamos devolvê-la.
+// === FRAGMENT SHADER === (roda por pixel — aqui mora o "efeito")
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return vec4<f32>(in.color, 1.0);
+    let t = u.time;
+    let uv = in.uv;
+
+    // Plasma: soma de senos em X, Y e diagonal, defasados no tempo. Cada canal de
+    // cor usa uma combinação diferente -> cores fluindo pela tela.
+    let r = 0.5 + 0.5 * sin(t + uv.x * 6.28);
+    let g = 0.5 + 0.5 * sin(t * 1.3 + uv.y * 6.28 + 2.0);
+    let b = 0.5 + 0.5 * sin(t * 0.7 + (uv.x + uv.y) * 6.28 + 4.0);
+
+    return vec4<f32>(r, g, b, 1.0);
 }

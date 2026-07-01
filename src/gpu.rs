@@ -4,6 +4,19 @@
 use std::sync::Arc;
 use winit::window::Window;
 
+// Os dados enviados ao shader por frame. Precisa casar EXATAMENTE com a struct
+// Uniforms do shader.wgsl (mesmos campos, mesma ordem, mesmo alinhamento).
+// - #[repr(C)]: layout de memória previsível (como em C), não o do Rust.
+// - Pod/Zeroable (bytemuck): permite tratar a struct como bytes crus com segurança.
+// Total: 16 bytes (time 4 + _pad 4 + resolution 8) — uniform exige múltiplo de 16.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct Uniforms {
+    time: f32,
+    _pad: f32, // preenche pra `resolution` (vec2) cair no offset 8, como no WGSL
+    resolution: [f32; 2],
+}
+
 // `pub` = visível fora deste módulo (o app.rs precisa usar GpuState).
 // Os CAMPOS continuam privados (sem `pub`): só o próprio gpu.rs mexe neles.
 pub struct GpuState {
@@ -24,6 +37,10 @@ pub struct GpuState {
     // O "render pipeline": amarra os shaders + como rasterizar + formato de saída.
     // Criado uma vez (é caro) e reusado a cada frame.
     pipeline: wgpu::RenderPipeline,
+    // Buffer na GPU que guarda os Uniforms; atualizado a cada frame.
+    uniform_buffer: wgpu::Buffer,
+    // Liga o uniform_buffer ao @group(0)@binding(0) do shader.
+    bind_group: wgpu::BindGroup,
 }
 
 impl GpuState {
@@ -64,6 +81,15 @@ impl GpuState {
         };
         surface.configure(&device, &config);
 
+        // Cria o buffer de uniforms na GPU. COPY_DST = podemos copiar dados pra ele
+        // (com write_buffer). mapped_at_creation: false = não vamos preencher agora.
+        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("uniforms"),
+            size: std::mem::size_of::<Uniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         // Carrega e compila o shader WGSL. include_wgsl! embute o arquivo no binário
         // (o caminho é relativo a ESTE arquivo, então resolve src/shader.wgsl).
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
@@ -97,7 +123,30 @@ impl GpuState {
             cache: None,
         });
 
-        Self { window, surface, device, queue, config, start: std::time::Instant::now(), pipeline }
+        // Como usamos layout: None, o wgpu DERIVOU o layout do bind group a partir
+        // do shader (@group(0)). Pegamos esse layout do próprio pipeline...
+        let bind_group_layout = pipeline.get_bind_group_layout(0);
+        // ...e criamos o bind group que conecta nosso buffer ao binding 0.
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("uniform bind group"),
+            layout: &bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buffer.as_entire_binding(),
+            }],
+        });
+
+        Self {
+            window,
+            surface,
+            device,
+            queue,
+            config,
+            start: std::time::Instant::now(),
+            pipeline,
+            uniform_buffer,
+            bind_group,
+        }
     }
 
     // Reconfigura a surface quando a janela muda de tamanho.
@@ -144,6 +193,15 @@ impl GpuState {
             a: 1.0,
         };
 
+        // Monta os uniforms deste frame e COPIA pra GPU. bytemuck::cast_slice
+        // transforma &[Uniforms] em &[u8] (bytes crus) — write_buffer só aceita bytes.
+        let uniforms = Uniforms {
+            time: t as f32,
+            _pad: 0.0,
+            resolution: [self.config.width as f32, self.config.height as f32],
+        };
+        self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+
         // O encoder grava uma lista de comandos pra GPU (nada roda ainda).
         let mut encoder = self
             .device
@@ -172,6 +230,8 @@ impl GpuState {
             });
             // Desenha o triângulo POR CIMA do fundo já limpo:
             render_pass.set_pipeline(&self.pipeline); // usa nossos shaders
+            // Ativa o bind group 0 -> o shader passa a enxergar nossos uniforms.
+            render_pass.set_bind_group(0, &self.bind_group, &[]);
             // draw(vertices, instances): 3 vértices (0..3), 1 instância (0..1).
             // A GPU chama vs_main com index=0,1,2; depois fs_main por pixel.
             render_pass.draw(0..3, 0..1);
