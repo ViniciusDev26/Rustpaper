@@ -4,4 +4,4 @@
 # (futuro) selector : app desktop pra escolher wallpaper (usará we-core)
 [workspace]
 resolver = "3"
-members = ["crates/we-core", "crates/engine"]
+members = ["crates/we-core", "crates/engine", "crates/selector"]
