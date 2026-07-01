@@ -136,19 +136,16 @@ pub fn parse(data: &[u8]) -> Result<DecodedTexture, String> {
         });
     }
 
-    // Caso raw: por ora só ARGB8888 (bytes BGRA -> RGBA). Outros (DXT...) depois.
+    // Caso raw: por ora só ARGB8888. Apesar do nome, os bytes já estão em ordem
+    // RGBA (o WE faz upload como GL_RGBA, não GL_BGRA) — então NÃO trocamos canais.
+    // (Trocar R↔B fazia vermelho virar azul; invisível em texturas grayscale.)
     if format == FORMAT_ARGB8888 {
-        let mut rgba = raw;
-        // BGRA -> RGBA (troca R e B). Ajustável se as cores saírem invertidas.
-        for px in rgba.chunks_exact_mut(4) {
-            px.swap(0, 2);
-        }
         return Ok(DecodedTexture {
             width: mip_w,
             height: mip_h,
             real_width: width,
             real_height: height,
-            rgba,
+            rgba: raw,
         });
     }
 
