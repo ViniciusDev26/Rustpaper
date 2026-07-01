@@ -1,7 +1,5 @@
-// Módulo `wallpaper`: cria uma "layer surface" na camada de FUNDO do desktop
-// (protocolo wlr-layer-shell, via smithay-client-toolkit) e entrega a surface
-// pro módulo `gpu` desenhar. É o que substitui a janela do winit pra virar
-// wallpaper de verdade.
+// Módulo `wallpaper`: cria uma layer surface na camada de FUNDO para CADA
+// monitor conectado, e desenha em todas usando um Renderer compartilhado.
 
 use std::ptr::NonNull;
 
@@ -27,98 +25,168 @@ use wayland_client::{
     Connection, Proxy, QueueHandle,
 };
 
-use crate::gpu::GpuState;
+use crate::gpu::Renderer;
 
-// Estado do app Wayland. Os handlers (traits do SCTK) são implementados pra ele.
+// Uma tela: sua layer surface, a wl_surface, a surface do wgpu e a config (tamanho).
+struct Monitor {
+    layer: LayerSurface,
+    wl_surface: wl_surface::WlSurface,
+    surface: wgpu::Surface<'static>,
+    config: Option<wgpu::SurfaceConfiguration>, // definida no primeiro configure
+    configured: bool,
+}
+
 struct Wallpaper {
     registry_state: RegistryState,
     output_state: OutputState,
-    layer: LayerSurface,
-    gpu: GpuState,
-    configured: bool, // já recebemos o primeiro configure? (pra iniciar o loop 1x)
+    compositor: CompositorState,
+    layer_shell: LayerShell,
+    conn: Connection,
+    instance: wgpu::Instance,
+    renderer: Option<Renderer>, // compartilhado; criado no 1º monitor
+    monitors: Vec<Monitor>,
 }
 
 pub fn run() {
-    // 1) Conecta ao compositor (via socket em WAYLAND_DISPLAY) e lê os globais.
     let conn = Connection::connect_to_env().expect("falha ao conectar no Wayland");
     let (globals, mut event_queue) = registry_queue_init(&conn).unwrap();
     let qh = event_queue.handle();
 
-    // 2) Pega os protocolos que precisamos.
     let compositor = CompositorState::bind(&globals, &qh).expect("wl_compositor ausente");
     let layer_shell = LayerShell::bind(&globals, &qh).expect("wlr-layer-shell ausente");
-
-    // 3) Cria a superfície e a transforma numa LAYER surface no FUNDO do desktop.
-    let surface = compositor.create_surface(&qh);
-    let layer = layer_shell.create_layer_surface(
-        &qh,
-        surface,
-        Layer::Background, // atrás das janelas/ícones = wallpaper
-        Some("wallpaper-engine-rs"),
-        None, // output: None => o compositor escolhe (1 monitor por ora)
-    );
-    // Ancora nos 4 lados => o compositor dimensiona pra tela inteira.
-    layer.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
-    // -1 = ignora zonas exclusivas (painéis) e ocupa tudo.
-    layer.set_exclusive_zone(-1);
-    // (0,0) = deixa o compositor decidir o tamanho (= tamanho do output).
-    layer.set_size(0, 0);
-    // Commit inicial SEM buffer: o compositor responde com um `configure`.
-    layer.commit();
-
-    // 4) Cria a surface do wgpu a partir dos PONTEIROS crus do Wayland. Como o
-    //    SCTK não implementa os traits do raw-window-handle diretamente, montamos
-    //    os handles na mão (o display do conn + o wl_surface da layer).
-    let instance = wgpu::Instance::default();
-    let raw_display = RawDisplayHandle::Wayland(WaylandDisplayHandle::new(
-        NonNull::new(conn.backend().display_ptr() as *mut _).unwrap(),
-    ));
-    let raw_window = RawWindowHandle::Wayland(WaylandWindowHandle::new(
-        NonNull::new(layer.wl_surface().id().as_ptr() as *mut _).unwrap(),
-    ));
-    // unsafe: nós garantimos que conn e layer vivem mais que a surface (ambos
-    // ficam vivos até o fim de run()).
-    let wgpu_surface = unsafe {
-        instance
-            .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
-                raw_display_handle: Some(raw_display),
-                raw_window_handle: raw_window,
-            })
-            .unwrap()
-    };
-
-    // Tamanho inicial provisório (1x1): o `configure` logo abaixo nos dá o real.
-    let gpu = GpuState::new(&instance, wgpu_surface, 1, 1);
 
     let mut state = Wallpaper {
         registry_state: RegistryState::new(&globals),
         output_state: OutputState::new(&globals, &qh),
-        layer,
-        gpu,
-        configured: false,
+        compositor,
+        layer_shell,
+        conn,
+        instance: wgpu::Instance::default(),
+        renderer: None,
+        monitors: Vec::new(),
     };
 
-    // 5) Loop de eventos. O primeiro `configure` inicia o loop de render, e cada
-    //    frame callback agenda o próximo (ver CompositorHandler::frame).
+    // O primeiro dispatch entrega os outputs já existentes -> new_output cria uma
+    // layer surface por monitor. Depois cada tela roda seu próprio loop de frames.
     loop {
         event_queue.blocking_dispatch(&mut state).unwrap();
     }
 }
 
 impl Wallpaper {
-    // Agenda o próximo frame callback e desenha. Chamar isto forma o loop:
-    // frame -> agenda próximo + render -> compositor chama frame de novo -> ...
-    fn draw(&mut self, qh: &QueueHandle<Self>) {
-        // Pede um frame callback: o compositor vai chamar CompositorHandler::frame
-        // quando estiver pronto pro próximo quadro. Fica pendente até o commit que
-        // o present() do wgpu faz dentro de render().
-        let wl = self.layer.wl_surface();
+    // Desenha o monitor de índice `idx` (só se já tem renderer e config).
+    fn render_monitor(&self, idx: usize) {
+        if let (Some(renderer), Some(config)) =
+            (self.renderer.as_ref(), self.monitors[idx].config.as_ref())
+        {
+            renderer.render(&self.monitors[idx].surface, config);
+        }
+    }
+
+    // Agenda o próximo frame callback do monitor `idx` e desenha (forma o loop).
+    fn draw(&self, idx: usize, qh: &QueueHandle<Self>) {
+        let wl = self.monitors[idx].wl_surface.clone();
         wl.frame(qh, wl.clone());
-        self.gpu.render();
+        self.render_monitor(idx);
     }
 }
 
-// === Handlers exigidos pelo SCTK ===
+impl OutputHandler for Wallpaper {
+    fn output_state(&mut self) -> &mut OutputState {
+        &mut self.output_state
+    }
+
+    // Chamado para cada monitor (na inicialização e em hotplug).
+    fn new_output(&mut self, _: &Connection, qh: &QueueHandle<Self>, output: wl_output::WlOutput) {
+        // Cria a layer surface ancorada a ESTE output específico.
+        let surface = self.compositor.create_surface(qh);
+        let layer = self.layer_shell.create_layer_surface(
+            qh,
+            surface,
+            Layer::Background,
+            Some("wallpaper-engine-rs"),
+            Some(&output),
+        );
+        layer.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
+        layer.set_exclusive_zone(-1);
+        layer.set_size(0, 0);
+        layer.commit();
+
+        let wl_surface = layer.wl_surface().clone();
+
+        // Cria a surface do wgpu a partir dos ponteiros crus do Wayland.
+        let raw_display = RawDisplayHandle::Wayland(WaylandDisplayHandle::new(
+            NonNull::new(self.conn.backend().display_ptr() as *mut _).unwrap(),
+        ));
+        let raw_window = RawWindowHandle::Wayland(WaylandWindowHandle::new(
+            NonNull::new(wl_surface.id().as_ptr() as *mut _).unwrap(),
+        ));
+        let wgpu_surface = unsafe {
+            self.instance
+                .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
+                    raw_display_handle: Some(raw_display),
+                    raw_window_handle: raw_window,
+                })
+                .unwrap()
+        };
+
+        // O Renderer (device/pipeline) é criado uma vez, a partir da 1ª surface.
+        if self.renderer.is_none() {
+            self.renderer = Some(Renderer::new(&self.instance, &wgpu_surface));
+        }
+
+        self.monitors.push(Monitor {
+            layer,
+            wl_surface,
+            surface: wgpu_surface,
+            config: None,
+            configured: false,
+        });
+    }
+
+    fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
+    fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
+}
+
+impl LayerShellHandler for Wallpaper {
+    fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &LayerSurface) {}
+
+    fn configure(
+        &mut self,
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+        layer: &LayerSurface,
+        configure: LayerSurfaceConfigure,
+        _: u32,
+    ) {
+        // Descobre QUAL monitor é este configure comparando a wl_surface.
+        let Some(idx) = self
+            .monitors
+            .iter()
+            .position(|m| m.layer.wl_surface() == layer.wl_surface())
+        else {
+            return;
+        };
+
+        let (w, h) = configure.new_size;
+        let (w, h) = if w == 0 || h == 0 { (1920, 1080) } else { (w, h) };
+
+        // Configura a surface do wgpu pro tamanho desta tela.
+        let config = self
+            .renderer
+            .as_ref()
+            .map(|r| r.configure(&self.monitors[idx].surface, w, h));
+        if let Some(config) = config {
+            self.monitors[idx].config = Some(config);
+        }
+
+        // Inicia o loop de render desta tela uma única vez.
+        if !self.monitors[idx].configured {
+            self.monitors[idx].configured = true;
+            self.draw(idx, qh);
+        }
+    }
+}
 
 impl CompositorHandler for Wallpaper {
     fn scale_factor_changed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: i32) {}
@@ -126,38 +194,18 @@ impl CompositorHandler for Wallpaper {
     fn surface_enter(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: &wl_output::WlOutput) {}
     fn surface_leave(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: &wl_output::WlOutput) {}
 
-    // Chamado quando o compositor está pronto pro próximo frame -> desenha.
-    fn frame(&mut self, _: &Connection, qh: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {
-        self.draw(qh);
-    }
-}
-
-impl LayerShellHandler for Wallpaper {
-    fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &LayerSurface) {}
-
-    // Compositor informa o tamanho real da layer surface (a tela).
-    fn configure(&mut self, _: &Connection, qh: &QueueHandle<Self>, _: &LayerSurface, configure: LayerSurfaceConfigure, _: u32) {
-        let (w, h) = configure.new_size;
-        if w != 0 && h != 0 {
-            self.gpu.resize(w, h);
-        }
-        // Inicia o loop de render só uma vez (no primeiro configure).
-        if !self.configured {
-            self.configured = true;
-            self.draw(qh);
+    // Frame callback: descobre qual monitor e redesenha ele.
+    fn frame(&mut self, _: &Connection, qh: &QueueHandle<Self>, surface: &wl_surface::WlSurface, _: u32) {
+        if let Some(idx) = self.monitors.iter().position(|m| &m.wl_surface == surface) {
+            self.draw(idx, qh);
         }
     }
-}
-
-impl OutputHandler for Wallpaper {
-    fn output_state(&mut self) -> &mut OutputState { &mut self.output_state }
-    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
-    fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
-    fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
 }
 
 impl ProvidesRegistryState for Wallpaper {
-    fn registry(&mut self) -> &mut RegistryState { &mut self.registry_state }
+    fn registry(&mut self) -> &mut RegistryState {
+        &mut self.registry_state
+    }
     registry_handlers![OutputState];
 }
 

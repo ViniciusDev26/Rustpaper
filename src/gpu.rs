@@ -1,9 +1,7 @@
-// Módulo `gpu`: desenho com a GPU (wgpu). É AGNÓSTICO de janela — recebe uma
-// surface pronta e desenha nela. Quem cria a surface (winit ou layer-shell) é
-// problema de outro módulo.
+// Módulo `gpu`: o `Renderer` guarda tudo que é COMPARTILHADO entre todos os
+// monitores (device, queue, pipeline, uniforms) — criado uma vez. As superfícies
+// (uma por monitor) vivem fora daqui e são passadas em configure()/render().
 
-// Os dados enviados ao shader por frame. Precisa casar EXATAMENTE com a struct
-// Uniforms do shader.wgsl (mesmos campos, ordem e alinhamento).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
@@ -12,48 +10,32 @@ struct Uniforms {
     resolution: [f32; 2],
 }
 
-pub struct GpuState {
-    surface: wgpu::Surface<'static>,
+pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    config: wgpu::SurfaceConfiguration,
-    start: std::time::Instant,
+    adapter: wgpu::Adapter, // guardado pra consultar as caps de novas surfaces
     pipeline: wgpu::RenderPipeline,
     uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
+    format: wgpu::TextureFormat, // formato de cor, escolhido uma vez
+    start: std::time::Instant,
 }
 
-impl GpuState {
-    // Recebe a instance e uma surface JÁ CRIADA (pelo chamador), mais o tamanho
-    // inicial. Escolhe a GPU, abre device/queue e monta o pipeline.
-    pub fn new(
-        instance: &wgpu::Instance,
-        surface: wgpu::Surface<'static>,
-        width: u32,
-        height: u32,
-    ) -> Self {
+impl Renderer {
+    // Criado a partir da PRIMEIRA surface (pra escolher a GPU e o formato). O
+    // device/pipeline resultante serve pra todas as outras surfaces (mesma GPU).
+    pub fn new(instance: &wgpu::Instance, first_surface: &wgpu::Surface) -> Self {
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             force_fallback_adapter: false,
-            compatible_surface: Some(&surface),
+            compatible_surface: Some(first_surface),
         }))
         .unwrap();
 
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
 
-        let caps = surface.get_capabilities(&adapter);
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: caps.formats[0],
-            width: width.max(1),
-            height: height.max(1),
-            present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode: caps.alpha_modes[0],
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
-        };
-        surface.configure(&device, &config);
+        let format = first_surface.get_capabilities(&adapter).formats[0];
 
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("uniforms"),
@@ -78,7 +60,7 @@ impl GpuState {
                 entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
+                    format,
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -101,41 +83,57 @@ impl GpuState {
         });
 
         Self {
-            surface,
             device,
             queue,
-            config,
-            start: std::time::Instant::now(),
+            adapter,
             pipeline,
             uniform_buffer,
             bind_group,
+            format,
+            start: std::time::Instant::now(),
         }
     }
 
-    pub fn resize(&mut self, width: u32, height: u32) {
-        if width > 0 && height > 0 {
-            self.config.width = width;
-            self.config.height = height;
-            self.surface.configure(&self.device, &self.config);
-        }
+    // Configura (ou reconfigura) uma surface pro tamanho dado e devolve a config.
+    pub fn configure(
+        &self,
+        surface: &wgpu::Surface,
+        width: u32,
+        height: u32,
+    ) -> wgpu::SurfaceConfiguration {
+        let caps = surface.get_capabilities(&self.adapter);
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: self.format,
+            width: width.max(1),
+            height: height.max(1),
+            present_mode: wgpu::PresentMode::Fifo,
+            alpha_mode: caps.alpha_modes[0],
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+        surface.configure(&self.device, &config);
+        config
     }
 
-    pub fn render(&mut self) {
-        let frame = match self.surface.get_current_texture() {
+    // Desenha um frame NA surface dada. Toma &self (tudo compartilhado é só leitura;
+    // o uniform_buffer é reescrito por frame, o que é seguro pois os submits são
+    // ordenados). A resolução vem da config daquela tela específica.
+    pub fn render(&self, surface: &wgpu::Surface, config: &wgpu::SurfaceConfiguration) {
+        let frame = match surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                self.surface.configure(&self.device, &self.config);
+                surface.configure(&self.device, config);
                 return;
             }
             _ => return,
         };
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let t = self.start.elapsed().as_secs_f32();
         let uniforms = Uniforms {
-            time: t,
+            time: self.start.elapsed().as_secs_f32(),
             _pad: 0.0,
-            resolution: [self.config.width as f32, self.config.height as f32],
+            resolution: [config.width as f32, config.height as f32],
         };
         self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
