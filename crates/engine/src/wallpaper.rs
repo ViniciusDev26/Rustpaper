@@ -28,9 +28,9 @@ use wayland_client::{
 use std::path::Path;
 
 use crate::gpu::{Renderer, Source};
-use crate::pkg::Pkg;
-use crate::project::{Project, WallpaperKind};
-use crate::{scene, tex};
+use we_core::pkg::Pkg;
+use we_core::project::{Project, WallpaperKind};
+use we_core::{scene, tex};
 
 // Uma tela: sua layer surface, a wl_surface, a surface do wgpu e a config (tamanho).
 struct Monitor {
