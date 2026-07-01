@@ -25,7 +25,10 @@ use wayland_client::{
     Connection, Proxy, QueueHandle,
 };
 
+use std::path::Path;
+
 use crate::gpu::Renderer;
+use crate::project::{Project, WallpaperKind};
 
 // Uma tela: sua layer surface, a wl_surface, a surface do wgpu e a config (tamanho).
 struct Monitor {
@@ -49,9 +52,23 @@ struct Wallpaper {
     // redesenho de TODAS as telas. Evita que streams de callback concorrentes se
     // atrapalhem (o que congelava um monitor).
     driver: Option<usize>,
+    // Caminho do vídeo a tocar (resolvido do project.json).
+    video_path: String,
 }
 
-pub fn run() {
+pub fn run(dir: &Path) {
+    // Lê o project.json e decide o que tocar.
+    let project = Project::load(dir).expect("falha ao ler project.json da pasta");
+    println!("Wallpaper: {:?} (tipo {:?})", project.title, project.kind);
+
+    let video_path = match project.kind {
+        WallpaperKind::Video => project.file_path(dir).to_string_lossy().into_owned(),
+        other => {
+            eprintln!("tipo {other:?} ainda não suportado — por enquanto só 'video'.");
+            std::process::exit(1);
+        }
+    };
+
     let conn = Connection::connect_to_env().expect("falha ao conectar no Wayland");
     let (globals, mut event_queue) = registry_queue_init(&conn).unwrap();
     let qh = event_queue.handle();
@@ -69,6 +86,7 @@ pub fn run() {
         renderer: None,
         monitors: Vec::new(),
         driver: None,
+        video_path,
     };
 
     // O primeiro dispatch entrega os outputs já existentes -> new_output cria uma
@@ -144,10 +162,7 @@ impl OutputHandler for Wallpaper {
 
         // O Renderer (device/pipeline) é criado uma vez, a partir da 1ª surface.
         if self.renderer.is_none() {
-            // Caminho absoluto do vídeo (via CARGO_MANIFEST_DIR = raiz do projeto),
-            // pra não depender do diretório de trabalho na hora de rodar.
-            let video_path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/test.mp4");
-            self.renderer = Some(Renderer::new(&self.instance, &wgpu_surface, video_path));
+            self.renderer = Some(Renderer::new(&self.instance, &wgpu_surface, &self.video_path));
         }
 
         self.monitors.push(Monitor {

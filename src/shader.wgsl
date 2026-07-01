@@ -34,7 +34,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var uv = vec2<f32>(in.uv.x, 1.0 - in.uv.y);
     uv = (uv - 0.5) * u.scale + 0.5;
 
-    var color = textureSample(tex, samp, uv);
-    color = color * (0.85 + 0.15 * sin(u.time)); // pulsação sutil
-    return color;
+    return textureSample(tex, samp, uv);
 }
