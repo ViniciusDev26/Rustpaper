@@ -32,9 +32,18 @@ use wayland_client::{
 use std::path::Path;
 
 use crate::gpu::{Renderer, Source};
+use we_core::particle::ParticleSystem;
 use we_core::pkg::Pkg;
 use we_core::project::{Project, WallpaperKind};
 use we_core::{scene, tex};
+
+// Renderizamos sistemas com o renderer "sprite" (partículas simples). Os que usam
+// "spritetrail" (trilhas) e afins ficariam errados no nosso render, então pulamos.
+// Operadores que não implementamos (oscillateposition, turbulence...) são só
+// ignorados — a partícula ainda fica aceitável (ex.: neve cai reto, sem balanço).
+fn is_supported(sys: &ParticleSystem) -> bool {
+    sys.renderer == "sprite"
+}
 
 // Uma tela: sua layer surface, a wl_surface, a surface do wgpu e a config (tamanho).
 struct Monitor {
@@ -88,16 +97,29 @@ fn scene_source(dir: &Path) -> Source {
         std::process::exit(1);
     });
 
-    // Partículas: sistemas + o sprite (usa a 1ª textura não-vazia; v1 assume sprite único).
+    // Partículas: só renderizamos os sistemas que sabemos fazer FIELMENTE —
+    // renderer "sprite" + operadores conhecidos (movement/alphafade). Os demais
+    // (spritetrail, controlpointattract, turbulence...) ficariam errados, então
+    // pulamos em vez de desenhar um caos (degradação graciosa).
     let scene_particles = scene::particle_systems(&pkg);
-    let sprite = scene_particles
+    let total = scene_particles.len();
+    let supported: Vec<_> = scene_particles
+        .into_iter()
+        .filter(|s| is_supported(&s.system))
+        .collect();
+    let sprite = supported
         .iter()
         .map(|s| s.texture.as_str())
         .find(|tx| !tx.is_empty())
         .and_then(|tx| load_texture(&pkg, tx));
-    let particles: Vec<_> = scene_particles.into_iter().map(|s| s.system).collect();
-    if !particles.is_empty() {
-        println!("  {} sistema(s) de partícula, sprite: {}", particles.len(), sprite.is_some());
+    let particles: Vec<_> = supported.into_iter().map(|s| s.system).collect();
+    if total > 0 {
+        println!(
+            "  partículas: {} renderizado(s) de {} ({} pulado(s): renderer/operador não suportado)",
+            particles.len(),
+            total,
+            total - particles.len()
+        );
     }
 
     Source::Scene {
