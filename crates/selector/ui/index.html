@@ -22,6 +22,8 @@
       }
       header h1 { font-size: 1rem; margin: 0; font-weight: 600; }
       header .count { color: #6c7086; font-size: .85rem; }
+      header .spacer { flex: 1; }
+      header label { font-size: .85rem; color: #a6adc8; display: flex; align-items: center; gap: 6px; cursor: pointer; }
       #status { padding: 20px; color: #a6adc8; }
       .grid {
         display: grid;
@@ -75,6 +77,8 @@
     <header>
       <h1>Wallpaper Selector</h1>
       <span class="count" id="count"></span>
+      <span class="spacer"></span>
+      <label><input type="checkbox" id="autostart" /> Iniciar no login</label>
     </header>
     <div id="status">Carregando wallpapers…</div>
     <div class="grid" id="grid"></div>
@@ -87,6 +91,7 @@
       const status = document.getElementById("status");
       const count = document.getElementById("count");
       const toast = document.getElementById("toast");
+      const autostartEl = document.getElementById("autostart");
 
       function showToast(msg) {
         toast.textContent = msg;
@@ -124,8 +129,21 @@
         return el;
       }
 
+      autostartEl.addEventListener("change", async () => {
+        try {
+          await invoke("set_autostart", { enabled: autostartEl.checked });
+          showToast(autostartEl.checked ? "Autostart ligado" : "Autostart desligado");
+        } catch (e) {
+          autostartEl.checked = !autostartEl.checked; // reverte se falhou
+          showToast(`${e}`);
+        }
+      });
+
       async function load() {
         try {
+          const settings = await invoke("get_settings");
+          autostartEl.checked = settings.autostart;
+
           const wallpapers = await invoke("list_wallpapers");
           status.style.display = "none";
           count.textContent = `${wallpapers.length} wallpapers`;

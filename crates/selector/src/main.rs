@@ -3,6 +3,8 @@
 //   list_wallpapers -> lista {id, título, tipo, preview}
 //   apply(id)       -> spawna o engine renderizando aquele wallpaper
 
+mod settings;
+
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::Mutex;
@@ -96,6 +98,43 @@ fn apply(id: String, state: tauri::State<EngineState>) -> Result<(), String> {
         .spawn()
         .map_err(|e| format!("falha ao iniciar o engine: {e}"))?;
     *guard = Some(child);
+    drop(guard);
+
+    // Persiste o último wallpaper e, se o autostart estiver ligado, aponta o
+    // .desktop pra ele (pra voltar no próximo login).
+    let mut s = settings::load();
+    s.last_id = Some(id);
+    if s.autostart {
+        let _ = settings::write_autostart(&engine, &dir);
+    }
+    settings::save(&s);
+    Ok(())
+}
+
+#[tauri::command]
+fn get_settings() -> settings::Settings {
+    settings::load()
+}
+
+#[tauri::command]
+fn set_autostart(enabled: bool) -> Result<(), String> {
+    let mut s = settings::load();
+    s.autostart = enabled;
+    settings::save(&s);
+
+    if enabled {
+        // Precisa de um wallpaper já aplicado pra saber o que restaurar.
+        let engine = engine_path().ok_or("binário do engine não encontrado")?;
+        match &s.last_id {
+            Some(id) => {
+                let dir = Path::new(WORKSHOP_DIR).join(id);
+                settings::write_autostart(&engine, &dir).map_err(|e| e.to_string())?;
+            }
+            None => return Err("aplique um wallpaper antes de ligar o autostart".into()),
+        }
+    } else {
+        settings::remove_autostart();
+    }
     Ok(())
 }
 
@@ -104,7 +143,12 @@ fn main() {
 
     tauri::Builder::default()
         .manage(EngineState(Mutex::new(None)))
-        .invoke_handler(tauri::generate_handler![list_wallpapers, apply])
+        .invoke_handler(tauri::generate_handler![
+            list_wallpapers,
+            apply,
+            get_settings,
+            set_autostart
+        ])
         .run(tauri::generate_context!())
         .expect("erro ao rodar o app Tauri");
 }
