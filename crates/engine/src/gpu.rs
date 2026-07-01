@@ -4,17 +4,22 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use we_core::particle::ParticleSystem;
+
+use crate::particles::Particles;
 use crate::video::Video;
 
 // De onde vêm os pixels da textura.
 pub enum Source {
     Video(String), // caminho do arquivo
-    Image {
+    Scene {
         rgba: Vec<u8>,
-        width: u32,        // dims do buffer (pode ter padding)
+        width: u32,      // dims do buffer (pode ter padding)
         height: u32,
-        real_width: u32,   // região de conteúdo
+        real_width: u32, // região de conteúdo
         real_height: u32,
+        particles: Vec<ParticleSystem>,
+        sprite: Option<(Vec<u8>, u32, u32)>, // textura do sprite (rgba, w, h)
     },
 }
 
@@ -52,6 +57,10 @@ pub struct Renderer {
     texture: wgpu::Texture,
     extent: wgpu::Extent3d,
     last_gen: AtomicU64,
+    // Partículas da cena (simulação + render instanciado). None p/ vídeo/imagem.
+    particles: Option<Particles>,
+    particle_count: u32,
+    last_frame: std::time::Instant,
 }
 
 impl Renderer {
@@ -68,17 +77,25 @@ impl Renderer {
 
         let format = first_surface.get_capabilities(&adapter).formats[0];
 
-        // Resolve as dimensões e a fonte (vídeo x imagem).
-        let (buf_w, buf_h, content_w, content_h, initial_rgba, video) = match source {
-            Source::Video(path) => {
-                let v = Video::open(&path);
-                let (w, h) = (v.width, v.height);
-                (w, h, w, h, None, Some(v)) // vídeo: buffer == conteúdo, sem padding
-            }
-            Source::Image { rgba, width, height, real_width, real_height } => {
-                (width, height, real_width, real_height, Some(rgba), None)
-            }
-        };
+        // Resolve as dimensões e a fonte (vídeo x cena).
+        let (buf_w, buf_h, content_w, content_h, initial_rgba, video, part_systems, sprite) =
+            match source {
+                Source::Video(path) => {
+                    let v = Video::open(&path);
+                    let (w, h) = (v.width, v.height);
+                    // vídeo: buffer == conteúdo, sem padding, sem partículas
+                    (w, h, w, h, None, Some(v), Vec::new(), None)
+                }
+                Source::Scene {
+                    rgba,
+                    width,
+                    height,
+                    real_width,
+                    real_height,
+                    particles,
+                    sprite,
+                } => (width, height, real_width, real_height, Some(rgba), None, particles, sprite),
+            };
 
         let extent = wgpu::Extent3d {
             width: buf_w,
@@ -180,6 +197,21 @@ impl Renderer {
             ],
         });
 
+        // Partículas da cena (só se há sistemas e um sprite decodificado).
+        let particles = match sprite {
+            Some((srgba, sw, sh)) if !part_systems.is_empty() => Some(Particles::new(
+                &device,
+                &queue,
+                format,
+                part_systems,
+                &srgba,
+                sw,
+                sh,
+                [content_w as f32, content_h as f32],
+            )),
+            _ => None,
+        };
+
         Self {
             device,
             queue,
@@ -194,6 +226,20 @@ impl Renderer {
             texture,
             extent,
             last_gen: AtomicU64::new(0),
+            particles,
+            particle_count: 0,
+            last_frame: std::time::Instant::now(),
+        }
+    }
+
+    // Avança a simulação de partículas uma vez por frame (dt medido aqui). Chamar
+    // ANTES de renderizar os monitores.
+    pub fn tick(&mut self) {
+        let now = std::time::Instant::now();
+        let dt = (now - self.last_frame).as_secs_f32().min(0.1); // clampa picos
+        self.last_frame = now;
+        if let Some(p) = self.particles.as_mut() {
+            self.particle_count = p.update(dt, &self.queue);
         }
     }
 
@@ -288,9 +334,15 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            // Fundo (imagem/vídeo da cena).
             render_pass.set_pipeline(&self.pipeline);
             render_pass.set_bind_group(0, &self.bind_group, &[]);
             render_pass.draw(0..3, 0..1);
+
+            // Partículas por cima (instanciadas, com alpha blend).
+            if let Some(p) = self.particles.as_ref() {
+                p.draw(&mut render_pass, self.particle_count);
+            }
         }
 
         self.queue.submit(Some(encoder.finish()));
