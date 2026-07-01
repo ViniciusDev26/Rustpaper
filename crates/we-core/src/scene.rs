@@ -5,12 +5,15 @@
 //   material    -> passes[0].textures[0]: "nome-da-textura"
 //   arquivo real: "materials/nome-da-textura.tex"
 
+use crate::particle::ParticleSystem;
 use crate::pkg::Pkg;
 
 #[derive(serde::Deserialize)]
 struct SceneObject {
     #[serde(default)]
     image: Option<String>,
+    #[serde(default)]
+    particle: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -68,6 +71,39 @@ pub fn background_texture(pkg: &Pkg) -> Option<String> {
     let tex_name = first_texture(material)?;
 
     Some(format!("materials/{tex_name}.tex"))
+}
+
+// Um sistema de partículas da cena, já com o nome da textura do sprite resolvido.
+pub struct SceneParticles {
+    pub system: ParticleSystem,
+    pub texture: String, // ex.: "particle/halo" (o engine resolve pro .tex)
+}
+
+// Extrai todos os sistemas de partículas da cena (objetos com "particle").
+pub fn particle_systems(pkg: &Pkg) -> Vec<SceneParticles> {
+    let Some(scene_json) = pkg.read("scene.json").and_then(|b| std::str::from_utf8(b).ok()) else {
+        return Vec::new();
+    };
+    let Ok(scene) = serde_json::from_str::<SceneRaw>(scene_json) else {
+        return Vec::new();
+    };
+
+    let mut out = Vec::new();
+    for obj in scene.objects {
+        let Some(ppath) = obj.particle else { continue };
+        let Some(pjson) = pkg.read(&ppath).and_then(|b| std::str::from_utf8(b).ok()) else {
+            continue;
+        };
+        let Ok(system) = ParticleSystem::parse(pjson) else { continue };
+        // material -> nome da textura do sprite
+        let texture = pkg
+            .read(&system.material)
+            .and_then(|b| std::str::from_utf8(b).ok())
+            .and_then(first_texture)
+            .unwrap_or_default();
+        out.push(SceneParticles { system, texture });
+    }
+    out
 }
 
 #[cfg(test)]
