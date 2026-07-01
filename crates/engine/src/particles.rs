@@ -1,0 +1,292 @@
+// Módulo `particles`: simula na CPU os sistemas de partículas da cena e os
+// renderiza como sprites (quads) via INSTANCING — uma única draw call desenha
+// todas as partículas, cada uma com posição/tamanho/cor próprios (instance buffer).
+
+use bytemuck::{Pod, Zeroable};
+
+use we_core::particle::ParticleSystem;
+
+// PRNG minúsculo (xorshift64*). Sem depender de crate externa; determinístico.
+struct Rng(u64);
+impl Rng {
+    fn new(seed: u64) -> Self {
+        Rng(seed | 1)
+    }
+    fn next_u64(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        self.0 = x;
+        x.wrapping_mul(0x2545F4914F6CDD1D)
+    }
+    fn unit(&mut self) -> f32 {
+        // 0.0..1.0
+        (self.next_u64() >> 40) as f32 / (1u64 << 24) as f32
+    }
+    fn range(&mut self, a: f32, b: f32) -> f32 {
+        a + (b - a) * self.unit()
+    }
+    fn range3(&mut self, a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+        [self.range(a[0], b[0]), self.range(a[1], b[1]), self.range(a[2], b[2])]
+    }
+}
+
+struct Particle {
+    pos: [f32; 3],
+    vel: [f32; 3],
+    age: f32,
+    life: f32,
+    size: f32,
+    color: [f32; 3],
+}
+
+// Simulação de um sistema (parâmetros + partículas vivas + acumulador de spawn).
+struct Sim {
+    sys: ParticleSystem,
+    particles: Vec<Particle>,
+    spawn_accum: f32,
+}
+
+impl Sim {
+    fn new(sys: ParticleSystem) -> Self {
+        Sim { sys, particles: Vec::new(), spawn_accum: 0.0 }
+    }
+
+    fn update(&mut self, dt: f32, rng: &mut Rng) {
+        // Envelhece + move + remove mortas.
+        for p in &mut self.particles {
+            p.age += dt;
+            for i in 0..3 {
+                p.vel[i] += self.sys.gravity[i] * dt;
+                p.pos[i] += p.vel[i] * dt;
+            }
+        }
+        self.particles.retain(|p| p.age < p.life);
+
+        // Spawn por taxa (respeitando maxcount).
+        self.spawn_accum += self.sys.rate * dt;
+        while self.spawn_accum >= 1.0 {
+            self.spawn_accum -= 1.0;
+            if self.particles.len() >= self.sys.max_count as usize {
+                break;
+            }
+            let dist = rng.range(self.sys.distance_min, self.sys.distance_max).max(0.0);
+            // Direção aleatória numa esfera (emitter "sphererandom").
+            let dir = [
+                rng.range(-1.0, 1.0),
+                rng.range(-1.0, 1.0),
+                rng.range(-1.0, 1.0),
+            ];
+            let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-3);
+            let pos = [
+                self.sys.origin[0] + dir[0] / len * dist,
+                self.sys.origin[1] + dir[1] / len * dist,
+                self.sys.origin[2] + dir[2] / len * dist,
+            ];
+            self.particles.push(Particle {
+                pos,
+                vel: rng.range3(self.sys.velocity_min, self.sys.velocity_max),
+                age: 0.0,
+                life: rng.range(self.sys.lifetime.0, self.sys.lifetime.1).max(0.1),
+                size: rng.range(self.sys.size.0, self.sys.size.1),
+                color: rng.range3(self.sys.color_min, self.sys.color_max),
+            });
+        }
+    }
+
+    // Alpha da partícula: fade-in no começo, fade-out no fim da vida.
+    fn alpha(&self, p: &Particle) -> f32 {
+        let fade_in = if self.sys.fade_in_time > 0.0 {
+            (p.age / self.sys.fade_in_time).min(1.0)
+        } else {
+            1.0
+        };
+        let remaining = 1.0 - (p.age / p.life);
+        let fade_out = (remaining / 0.2).min(1.0); // últimos 20% da vida
+        fade_in * fade_out
+    }
+}
+
+// Dados por instância enviados à GPU (32 bytes). Bate com o layout no shader.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct Instance {
+    center: [f32; 2], // posição em clip space (-1..1)
+    half: [f32; 2],   // meio-tamanho em clip space
+    color: [f32; 4],  // rgba
+}
+
+pub struct Particles {
+    sims: Vec<Sim>,
+    scene_size: [f32; 2], // dims do conteúdo da cena (mapeia pos -> clip)
+    pipeline: wgpu::RenderPipeline,
+    bind_group: wgpu::BindGroup,
+    instance_buffer: wgpu::Buffer,
+    capacity: usize,
+    rng: Rng,
+}
+
+impl Particles {
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        systems: Vec<ParticleSystem>,
+        sprite_rgba: &[u8],
+        sprite_w: u32,
+        sprite_h: u32,
+        scene_size: [f32; 2],
+    ) -> Self {
+        let capacity: usize = systems.iter().map(|s| s.max_count as usize).sum::<usize>().max(1);
+
+        // Textura do sprite (compartilhada por todas as partículas).
+        let extent = wgpu::Extent3d { width: sprite_w, height: sprite_h, depth_or_array_layers: 1 };
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("particle sprite"),
+            size: extent,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            sprite_rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * sprite_w),
+                rows_per_image: Some(sprite_h),
+            },
+            extent,
+        );
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("particle sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        let shader = device.create_shader_module(wgpu::include_wgsl!("particle.wgsl"));
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("particle pipeline"),
+            layout: None,
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                // Um buffer de instância: 3 atributos (center, half, color).
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<Instance>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &[
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 16, shader_location: 2 },
+                    ],
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    // Alpha blending (translucent).
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
+        let bind_group_layout = pipeline.get_bind_group_layout(0);
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("particle bind group"),
+            layout: &bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
+            ],
+        });
+
+        let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("particle instances"),
+            size: (capacity * std::mem::size_of::<Instance>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        Particles {
+            sims: systems.into_iter().map(Sim::new).collect(),
+            scene_size,
+            pipeline,
+            bind_group,
+            instance_buffer,
+            capacity,
+            rng: Rng::new(0x9E3779B97F4A7C15),
+        }
+    }
+
+    // Avança a simulação por `dt` e sobe as instâncias vivas pra GPU. Devolve
+    // quantas instâncias desenhar.
+    pub fn update(&mut self, dt: f32, queue: &wgpu::Queue) -> u32 {
+        for sim in &mut self.sims {
+            sim.update(dt, &mut self.rng);
+        }
+
+        // Pra o sprite ficar quadrado na tela: como o clip (-1..1) é esticado pro
+        // aspecto da tela, multiplicamos o meio-tamanho Y pelo aspecto da cena
+        // (que assumimos igual ao da tela — monitores 16:9 = cena 16:9).
+        let scene_aspect = self.scene_size[0] / self.scene_size[1];
+
+        let mut instances: Vec<Instance> = Vec::new();
+        for sim in &self.sims {
+            for p in &sim.particles {
+                if instances.len() >= self.capacity {
+                    break;
+                }
+                let a = sim.alpha(p);
+                if a <= 0.0 {
+                    continue;
+                }
+                let hx = p.size / (self.scene_size[0] * 0.5);
+                instances.push(Instance {
+                    center: [
+                        p.pos[0] / (self.scene_size[0] * 0.5),
+                        p.pos[1] / (self.scene_size[1] * 0.5),
+                    ],
+                    half: [hx, hx * scene_aspect],
+                    color: [p.color[0] / 255.0, p.color[1] / 255.0, p.color[2] / 255.0, a],
+                });
+            }
+        }
+
+        queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instances));
+        instances.len() as u32
+    }
+
+    // Desenha as `count` instâncias no render pass (chamar depois do fundo).
+    pub fn draw(&self, pass: &mut wgpu::RenderPass, count: u32) {
+        if count == 0 {
+            return;
+        }
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
+        pass.draw(0..6, 0..count); // 6 vértices (2 triângulos) por instância
+    }
+}

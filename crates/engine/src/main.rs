@@ -1,4 +1,5 @@
 mod gpu;
+mod particles;
 mod video;
 mod wallpaper;
 

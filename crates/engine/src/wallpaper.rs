@@ -58,22 +58,56 @@ struct Wallpaper {
     source: Option<Source>,
 }
 
-// Resolve a fonte de uma cena: abre o scene.pkg, acha a textura de fundo e a
-// decodifica pra RGBA (fases 1-3 encadeadas). Por ora só a imagem de fundo.
+// Assets base do WE, montados no container (sprites de partícula etc.).
+const ASSETS_DIR: &str = "/home/vscode/we-assets";
+
+// Carrega e decodifica uma textura por nome ("particle/halo"), buscando primeiro
+// no pkg da cena e, se não achar, nos assets base do WE.
+fn load_texture(pkg: &Pkg, name: &str) -> Option<(Vec<u8>, u32, u32)> {
+    if name.is_empty() {
+        return None;
+    }
+    let rel = format!("materials/{name}.tex");
+    let bytes: Vec<u8> = match pkg.read(&rel) {
+        Some(b) => b.to_vec(),
+        None => std::fs::read(Path::new(ASSETS_DIR).join(&rel)).ok()?,
+    };
+    let t = tex::parse(&bytes).ok()?;
+    Some((t.rgba, t.width, t.height))
+}
+
+// Resolve a fonte de uma cena: fundo (imagem) + sistemas de partículas + sprite.
 fn scene_source(dir: &Path) -> Source {
     let pkg = Pkg::open(&dir.join("scene.pkg")).expect("falha ao abrir scene.pkg");
+
+    // Fundo.
     let tex_path = scene::background_texture(&pkg).expect("não achei a textura de fundo da cena");
     let bytes = pkg.read(&tex_path).expect("textura não está no pkg");
     let t = tex::parse(bytes).unwrap_or_else(|e| {
         eprintln!("falha ao decodificar {tex_path}: {e}");
         std::process::exit(1);
     });
-    Source::Image {
+
+    // Partículas: sistemas + o sprite (usa a 1ª textura não-vazia; v1 assume sprite único).
+    let scene_particles = scene::particle_systems(&pkg);
+    let sprite = scene_particles
+        .iter()
+        .map(|s| s.texture.as_str())
+        .find(|tx| !tx.is_empty())
+        .and_then(|tx| load_texture(&pkg, tx));
+    let particles: Vec<_> = scene_particles.into_iter().map(|s| s.system).collect();
+    if !particles.is_empty() {
+        println!("  {} sistema(s) de partícula, sprite: {}", particles.len(), sprite.is_some());
+    }
+
+    Source::Scene {
         rgba: t.rgba,
         width: t.width,
         height: t.height,
         real_width: t.real_width,
         real_height: t.real_height,
+        particles,
+        sprite,
     }
 }
 
@@ -147,7 +181,11 @@ impl Wallpaper {
     }
 
     // Redesenha TODAS as telas (chamado a cada tick do timer).
-    fn render_all(&self) {
+    fn render_all(&mut self) {
+        // Avança a simulação de partículas uma vez por frame (antes de desenhar).
+        if let Some(r) = self.renderer.as_mut() {
+            r.tick();
+        }
         for idx in 0..self.monitors.len() {
             self.render_monitor(idx);
         }
