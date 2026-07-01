@@ -26,4 +26,13 @@ fn main() {
         }
         Err(e) => println!("ERRO: {e}"),
     }
+
+    let particles = scene::particle_systems(&pkg);
+    println!("\n{} sistema(s) de partícula:", particles.len());
+    for p in &particles {
+        println!(
+            "  textura={:?} maxcount={} rate={} origin={:?} lifetime={:?}",
+            p.texture, p.system.max_count, p.system.rate, p.system.origin, p.system.lifetime
+        );
+    }
 }
