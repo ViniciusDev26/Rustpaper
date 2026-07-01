@@ -1,4 +1,8 @@
 mod gpu;
+// Leitor de .pkg (fase 1 das cenas). Ainda não conectado à app; existe com testes
+// e o example dump_pkg. allow(dead_code) evita warnings até ligarmos.
+#[allow(dead_code)]
+mod pkg;
 mod project;
 mod video;
 mod wallpaper;
