@@ -74,7 +74,8 @@ impl Pkg {
         Ok(Pkg { data, base_offset, entries })
     }
 
-    // Nomes dos arquivos contidos no pacote.
+    // Nomes dos arquivos contidos no pacote. (Usado pelo example dump_pkg.)
+    #[allow(dead_code)]
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.entries.iter().map(|e| e.name.as_str())
     }

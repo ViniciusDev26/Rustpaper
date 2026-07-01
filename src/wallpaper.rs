@@ -27,8 +27,10 @@ use wayland_client::{
 
 use std::path::Path;
 
-use crate::gpu::Renderer;
+use crate::gpu::{Renderer, Source};
+use crate::pkg::Pkg;
 use crate::project::{Project, WallpaperKind};
+use crate::{scene, tex};
 
 // Uma tela: sua layer surface, a wl_surface, a surface do wgpu e a config (tamanho).
 struct Monitor {
@@ -52,8 +54,27 @@ struct Wallpaper {
     // redesenho de TODAS as telas. Evita que streams de callback concorrentes se
     // atrapalhem (o que congelava um monitor).
     driver: Option<usize>,
-    // Caminho do vídeo a tocar (resolvido do project.json).
-    video_path: String,
+    // Fonte da textura (vídeo ou imagem da cena); movida pro Renderer no 1º monitor.
+    source: Option<Source>,
+}
+
+// Resolve a fonte de uma cena: abre o scene.pkg, acha a textura de fundo e a
+// decodifica pra RGBA (fases 1-3 encadeadas). Por ora só a imagem de fundo.
+fn scene_source(dir: &Path) -> Source {
+    let pkg = Pkg::open(&dir.join("scene.pkg")).expect("falha ao abrir scene.pkg");
+    let tex_path = scene::background_texture(&pkg).expect("não achei a textura de fundo da cena");
+    let bytes = pkg.read(&tex_path).expect("textura não está no pkg");
+    let t = tex::parse(bytes).unwrap_or_else(|e| {
+        eprintln!("falha ao decodificar {tex_path}: {e}");
+        std::process::exit(1);
+    });
+    Source::Image {
+        rgba: t.rgba,
+        width: t.width,
+        height: t.height,
+        real_width: t.real_width,
+        real_height: t.real_height,
+    }
 }
 
 pub fn run(dir: &Path) {
@@ -61,10 +82,13 @@ pub fn run(dir: &Path) {
     let project = Project::load(dir).expect("falha ao ler project.json da pasta");
     println!("Wallpaper: {:?} (tipo {:?})", project.title, project.kind);
 
-    let video_path = match project.kind {
-        WallpaperKind::Video => project.file_path(dir).to_string_lossy().into_owned(),
+    let source = match project.kind {
+        WallpaperKind::Video => {
+            Source::Video(project.file_path(dir).to_string_lossy().into_owned())
+        }
+        WallpaperKind::Scene => scene_source(dir),
         other => {
-            eprintln!("tipo {other:?} ainda não suportado — por enquanto só 'video'.");
+            eprintln!("tipo {other:?} ainda não suportado.");
             std::process::exit(1);
         }
     };
@@ -86,7 +110,7 @@ pub fn run(dir: &Path) {
         renderer: None,
         monitors: Vec::new(),
         driver: None,
-        video_path,
+        source: Some(source),
     };
 
     // O primeiro dispatch entrega os outputs já existentes -> new_output cria uma
@@ -162,7 +186,8 @@ impl OutputHandler for Wallpaper {
 
         // O Renderer (device/pipeline) é criado uma vez, a partir da 1ª surface.
         if self.renderer.is_none() {
-            self.renderer = Some(Renderer::new(&self.instance, &wgpu_surface, &self.video_path));
+            let source = self.source.take().expect("source já consumida");
+            self.renderer = Some(Renderer::new(&self.instance, &wgpu_surface, source));
         }
 
         self.monitors.push(Monitor {
