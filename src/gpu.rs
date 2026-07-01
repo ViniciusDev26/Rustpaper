@@ -1,9 +1,10 @@
-// Módulo `gpu`: o `Renderer` guarda tudo que é COMPARTILHADO entre todos os
-// monitores (device, queue, pipeline, uniforms) — criado uma vez. As superfícies
-// (uma por monitor) vivem fora daqui e são passadas em configure()/render().
+// Módulo `gpu`: Renderer compartilhado. Agora a textura é DINÂMICA — recebe um
+// novo frame do vídeo a cada quadro (via o módulo `video`).
 
-// Precisa casar com a struct Uniforms do shader (offsets iguais). 32 bytes:
-// resolution@0, image_size@8, time@16, padding até 32 (uniform = múltiplo de 16).
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use crate::video::Video;
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
@@ -16,19 +17,22 @@ struct Uniforms {
 pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    adapter: wgpu::Adapter, // guardado pra consultar as caps de novas surfaces
+    adapter: wgpu::Adapter,
     pipeline: wgpu::RenderPipeline,
     uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
-    format: wgpu::TextureFormat, // formato de cor, escolhido uma vez
+    format: wgpu::TextureFormat,
     start: std::time::Instant,
-    image_size: [f32; 2], // tamanho da textura, pra o cálculo de cover
+    image_size: [f32; 2],
+    // Vídeo + a textura que recebe cada frame + a última geração já enviada.
+    video: Video,
+    texture: wgpu::Texture,
+    extent: wgpu::Extent3d,
+    last_gen: AtomicU64,
 }
 
 impl Renderer {
-    // Criado a partir da PRIMEIRA surface (pra escolher a GPU e o formato). O
-    // device/pipeline resultante serve pra todas as outras surfaces (mesma GPU).
-    pub fn new(instance: &wgpu::Instance, first_surface: &wgpu::Surface) -> Self {
+    pub fn new(instance: &wgpu::Instance, first_surface: &wgpu::Surface, video_path: &str) -> Self {
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             force_fallback_adapter: false,
@@ -41,6 +45,14 @@ impl Renderer {
 
         let format = first_surface.get_capabilities(&adapter).formats[0];
 
+        // Abre o vídeo (inicia o ffmpeg + thread de decodificação).
+        let video = Video::open(video_path);
+        let extent = wgpu::Extent3d {
+            width: video.width,
+            height: video.height,
+            depth_or_array_layers: 1,
+        };
+
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("uniforms"),
             size: std::mem::size_of::<Uniforms>() as u64,
@@ -48,56 +60,24 @@ impl Renderer {
             mapped_at_creation: false,
         });
 
-        // --- Textura: decodifica a imagem e sobe pra GPU ---
-        // include_bytes! embute o arquivo no binário (caminho relativo a este .rs).
-        // to_rgba8() garante 4 bytes/pixel (RGBA), o layout que a GPU espera.
-        let img = image::load_from_memory(include_bytes!("../assets/test.jpg"))
-            .expect("falha ao decodificar a imagem")
-            .to_rgba8();
-        let (img_w, img_h) = img.dimensions();
-        let extent = wgpu::Extent3d {
-            width: img_w,
-            height: img_h,
-            depth_or_array_layers: 1,
-        };
-
+        // Textura do tamanho do vídeo; COPY_DST porque vamos reescrever todo frame.
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("wallpaper texture"),
+            label: Some("video texture"),
             size: extent,
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            // Srgb: os bytes da imagem estão em espaço sRGB; a GPU converte pra
-            // linear ao amostrar (cores corretas).
             format: wgpu::TextureFormat::Rgba8UnormSrgb,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
-
-        // Copia os pixels da CPU pra textura na GPU.
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &img,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * img_w), // 4 bytes (RGBA) por pixel
-                rows_per_image: Some(img_h),
-            },
-            extent,
-        );
-
         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge, // borda: repete o pixel da ponta
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear, // suaviza ao ampliar
+            mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
@@ -160,11 +140,14 @@ impl Renderer {
             bind_group,
             format,
             start: std::time::Instant::now(),
-            image_size: [img_w as f32, img_h as f32],
+            image_size: [video.width as f32, video.height as f32],
+            video,
+            texture,
+            extent,
+            last_gen: AtomicU64::new(0),
         }
     }
 
-    // Configura (ou reconfigura) uma surface pro tamanho dado e devolve a config.
     pub fn configure(
         &self,
         surface: &wgpu::Surface,
@@ -186,10 +169,35 @@ impl Renderer {
         config
     }
 
-    // Desenha um frame NA surface dada. Toma &self (tudo compartilhado é só leitura;
-    // o uniform_buffer é reescrito por frame, o que é seguro pois os submits são
-    // ordenados). A resolução vem da config daquela tela específica.
+    // Sobe o frame de vídeo mais recente pra textura, se houver um novo.
+    fn update_video_texture(&self) {
+        let last = self.last_gen.load(Ordering::Relaxed);
+        let new_gen = self.video.upload_if_newer(last, |data| {
+            self.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                data,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4 * self.extent.width),
+                    rows_per_image: Some(self.extent.height),
+                },
+                self.extent,
+            );
+        });
+        if let Some(generation) = new_gen {
+            self.last_gen.store(generation, Ordering::Relaxed);
+        }
+    }
+
     pub fn render(&self, surface: &wgpu::Surface, config: &wgpu::SurfaceConfiguration) {
+        // Atualiza a textura com o frame de vídeo mais recente (se houver).
+        self.update_video_texture();
+
         let frame = match surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
