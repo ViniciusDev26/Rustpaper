@@ -380,8 +380,10 @@ impl Particles {
                 None => [p.color[0] / 255.0, p.color[1] / 255.0, p.color[2] / 255.0],
             };
             let hx = p.size / (scene[0] * 0.5);
+            // Posição da cena (0..scene, y pra baixo) -> clip space [-1,1] com Y
+            // invertido. Sem o -1/flip as partículas ficavam presas num quadrado.
             out.push(Instance {
-                center: [px / (scene[0] * 0.5), py / (scene[1] * 0.5)],
+                center: [px / (scene[0] * 0.5) - 1.0, 1.0 - py / (scene[1] * 0.5)],
                 half: [hx, hx * scene_aspect],
                 color: [rgb[0], rgb[1], rgb[2], a],
             });
