@@ -79,9 +79,11 @@ puxe de `/proc/<plasmashell>/environ`):
 - **.tex** (`TEXV0005`/`TEXI0001`): header com `format` (0=ARGB8888, 4=DXT5,
   6=DXT3, 7=DXT1, ...), flags, dims. Container `TEXB0001..0004` (LZ4 quando
   `compression==1`; TEXB0003/4 podem ter imagem **free-image** JPEG/PNG embutida).
-  **Suportamos ARGB8888 e free-image; DXT NÃO.** ARGB8888 (apesar do nome) já vem
-  em ordem **RGBA** — NÃO trocar canais (o WE faz upload como GL_RGBA; trocar R↔B
-  faz vermelho virar azul, invisível em grayscale). Strings do .tex
+  **Suportamos ARGB8888, RG88, R8 e free-image; DXT NÃO.** ARGB8888 (apesar do
+  nome) já vem em ordem **RGBA** — NÃO trocar canais (o WE faz upload como
+  GL_RGBA; trocar R↔B faz vermelho virar azul, invisível em grayscale). RG88 =
+  luminância(R)+alpha(G) → expandido pra (R,R,R,G); R8 = máscara (R,R,R,R).
+  Strings do .tex
   são null-terminated (diferente do .pkg, que é length-prefixed).
 - **Cadeia da cena**: `scene.json` → objeto com `image` → `models/x.json`
   (`material`) → `materials/x.json` (`passes[0].textures[0]` = nome) →
@@ -119,10 +121,11 @@ puxe de `/proc/<plasmashell>/environ`):
 
 - **DXT não é decodificado** — cenas cujo fundo/texturas são DXT falham
   ("formato N não suportado"). Maior ganho de cobertura futuro seria implementar DXT.
-- **Sprite ÚNICO por cena** — usamos a 1ª textura de partícula pra TODOS os
-  sistemas. Cenas com sprites diferentes (ex.: `drop` + `light_shafts` +
-  `chromaticdot`) renderizam todos com o mesmo sprite (forma errada, mas o blend
-  fica certo). Fidelidade total exigiria uma textura por sistema.
+- **Sprite POR sistema** (implementado): cada sistema carrega sua própria textura
+  (ex.: `drop` 32x128, `light_shafts` 256x512 RG88, `chromaticdot` 64x64),
+  recortada pro conteúdo. Cada sistema é um range no buffer de instâncias,
+  desenhado com seu bind group + pipeline de blend. Sistema cujo sprite não
+  decodifica (ex.: DXT) é pulado.
 - **Blend por sistema** já é respeitado: `additive` (luz, soma ao fundo) vs
   `translucent` (alpha). Sem isso, sistemas additive (comuns pra brilhos/feixes)
   viram bolhões opacos. Cor de partícula: `colorrandom` é 0-255 e interpola numa
