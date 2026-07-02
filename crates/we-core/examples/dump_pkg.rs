@@ -14,6 +14,15 @@ fn main() {
         println!("  {n}");
     }
 
+    // Segundo arg opcional: imprime o conteúdo completo daquele arquivo do pkg.
+    if let Some(entry) = std::env::args().nth(2) {
+        match pkg.read(&entry) {
+            Some(data) => println!("\n=== {entry} ({} bytes) ===\n{}", data.len(), String::from_utf8_lossy(data)),
+            None => println!("\n(entrada {entry:?} não encontrada)"),
+        }
+        return;
+    }
+
     if let Some(data) = pkg.read("scene.json") {
         let preview = String::from_utf8_lossy(&data[..data.len().min(200)]);
         println!("\nscene.json ({} bytes), início:\n{preview}", data.len());
