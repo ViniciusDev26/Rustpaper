@@ -77,9 +77,17 @@ impl Sim {
         for p in &mut self.particles {
             p.age += dt;
             for i in 0..3 {
-                p.vel[i] += self.sys.gravity[i] * dt;
+                // gravidade escalada pelo objeto: senão (gravity 100) ela domina e
+                // "estica" as bolhas numa coluna vertical em vez de espalhar.
+                p.vel[i] += self.sys.gravity[i] * self.scale * dt;
                 p.vel[i] -= p.vel[i] * self.sys.drag * dt;
                 p.pos[i] += p.vel[i] * dt;
+            }
+            // turbulência contínua: empurrão lateral aleatório pra as bolhas vaguearem
+            // e se espalharem (aproxima o campo de turbulência do WE).
+            if let Some((_, smax)) = self.sys.turbulent_speed {
+                p.vel[0] += rng.range(-smax, smax) * dt;
+                p.vel[1] += rng.range(-smax, smax) * dt;
             }
         }
         self.particles.retain(|p| p.age < p.life);
