@@ -231,7 +231,7 @@ impl Compositor {
                 let sheet = resolve(&pkg, &format!("materials/{}.tex-json", sp.texture))
                     .and_then(|b| String::from_utf8(b).ok())
                     .and_then(|j| we_core::tex::parse_spritesheet(&j, sw, sh));
-                inits.push(ParticleInit { system: sp.system, additive: sp.additive, sprite_rgba: rgba, sprite_w: sw, sprite_h: sh, origin: sp.origin, sheet });
+                inits.push(ParticleInit { system: sp.system, additive: sp.additive, sprite_rgba: rgba, sprite_w: sw, sprite_h: sh, origin: sp.origin, scale: sp.scale, sheet });
             }
             (!inits.is_empty()).then(|| Particles::new(device, queue, FORMAT, inits, [lay.width, lay.height]))
         } else {

@@ -17,6 +17,9 @@ struct SceneObject {
     // posição do objeto na cena ("x y z"); o emitter da partícula é LOCAL a ela.
     #[serde(default)]
     origin: Option<String>,
+    // escala do objeto ("x y z"); escala o sistema de partículas (tamanho/velocidade).
+    #[serde(default)]
+    scale: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -150,6 +153,7 @@ pub struct SceneParticles {
     pub texture: String,    // ex.: "particle/halo" (o engine resolve pro .tex)
     pub additive: bool,     // blend do material: additive (luz) vs translucent
     pub origin: [f32; 3],   // posição do objeto na cena (soma-se ao emitter local)
+    pub scale: f32,         // escala do objeto (multiplica tamanho/velocidade/distância)
 }
 
 // Extrai todos os sistemas de partículas da cena (objetos com "particle").
@@ -181,7 +185,14 @@ pub fn particle_systems(pkg: &Pkg) -> Vec<SceneParticles> {
                 [*f.first().unwrap_or(&0.0), *f.get(1).unwrap_or(&0.0), *f.get(2).unwrap_or(&0.0)]
             })
             .unwrap_or([0.0; 3]);
-        out.push(SceneParticles { system, texture, additive, origin });
+        // escala do objeto (usa o X; a maioria é uniforme).
+        let scale = obj
+            .scale
+            .as_deref()
+            .and_then(|s| s.split_whitespace().next().and_then(|t| t.parse::<f32>().ok()))
+            .filter(|s| *s > 0.0)
+            .unwrap_or(1.0);
+        out.push(SceneParticles { system, texture, additive, origin, scale });
     }
     out
 }
