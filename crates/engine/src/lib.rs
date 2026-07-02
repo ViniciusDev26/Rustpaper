@@ -2,6 +2,7 @@
 // (main.rs) e pelos examples/testes (ex.: render offscreen de cenas).
 pub mod gpu;
 pub mod particles;
+pub mod postprocess;
 pub mod shader_compile;
 pub mod video;
 pub mod wallpaper;
