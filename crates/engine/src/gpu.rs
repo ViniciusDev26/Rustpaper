@@ -2,8 +2,10 @@
 // (atualizada a cada frame) ou uma IMAGEM estática (subida uma vez) — o caso da
 // cena. O recorte de conteúdo (`content`) ignora o padding do buffer da textura.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::compositor::Compositor;
 use crate::particles::{ParticleInit, Particles};
 use crate::video::Video;
 
@@ -18,6 +20,10 @@ pub enum Source {
         real_height: u32,
         particles: Vec<ParticleInit>, // cada sistema traz seu próprio sprite
     },
+    // Cena renderizada pelo COMPOSITOR multi-camada (todas as camadas + efeitos).
+    // A cada frame o compositor desenha na textura de conteúdo; o resto do pipeline
+    // (cover-scale por monitor) segue igual.
+    SceneComposite(PathBuf),
 }
 
 // 16 bytes: scale@0 (vec2), content@8 (vec2). Casa com o WGSL.
@@ -57,6 +63,9 @@ pub struct Renderer {
     // Partículas da cena (simulação + render instanciado). None p/ vídeo/imagem.
     particles: Option<Particles>,
     last_frame: std::time::Instant,
+    // Compositor multi-camada (cenas). Redesenha a textura de conteúdo a cada frame.
+    compositor: Option<Compositor>,
+    start: std::time::Instant,
 }
 
 impl Renderer {
@@ -73,16 +82,24 @@ impl Renderer {
 
         let format = first_surface.get_capabilities(&adapter).formats[0];
 
-        // Resolve as dimensões e a fonte (vídeo x cena).
-        let (buf_w, buf_h, content_w, content_h, initial_rgba, video, part_inits) = match source {
+        // Resolve as dimensões e a fonte (vídeo x cena x compositor).
+        let (buf_w, buf_h, content_w, content_h, initial_rgba, video, part_inits, compositor) = match source {
             Source::Video(path) => {
                 let v = Video::open(&path);
                 let (w, h) = (v.width, v.height);
                 // vídeo: buffer == conteúdo, sem padding, sem partículas
-                (w, h, w, h, None, Some(v), Vec::new())
+                (w, h, w, h, None, Some(v), Vec::new(), None)
             }
             Source::Scene { rgba, width, height, real_width, real_height, particles } => {
-                (width, height, real_width, real_height, Some(rgba), None, particles)
+                (width, height, real_width, real_height, Some(rgba), None, particles, None)
+            }
+            Source::SceneComposite(dir) => {
+                let comp = Compositor::new(&device, &queue, &dir)
+                    .expect("falha ao montar o compositor da cena");
+                let (w, h) = (comp.width, comp.height);
+                // buffer == conteúdo (sem padding); sem vídeo/partículas; o compositor
+                // preenche a textura de conteúdo a cada frame.
+                (w, h, w, h, None, None, Vec::new(), Some(comp))
             }
         };
 
@@ -106,9 +123,17 @@ impl Renderer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::RENDER_ATTACHMENT, // compositor desenha aqui
             view_formats: &[],
         });
+
+        // Compositor: renderiza o primeiro frame já, pra não piscar preto.
+        if let Some(comp) = &compositor {
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            comp.render(&device, &queue, 0.0, &view);
+        }
 
         // Imagem estática: sobe os pixels uma vez agora.
         if let Some(rgba) = initial_rgba {
@@ -215,6 +240,8 @@ impl Renderer {
             last_gen: AtomicU64::new(0),
             particles,
             last_frame: std::time::Instant::now(),
+            compositor,
+            start: std::time::Instant::now(),
         }
     }
 
@@ -224,6 +251,12 @@ impl Renderer {
         let now = std::time::Instant::now();
         let dt = (now - self.last_frame).as_secs_f32().min(0.1); // clampa picos
         self.last_frame = now;
+        // Compositor: redesenha a cena inteira na textura de conteúdo (g_Time avança).
+        if let Some(c) = self.compositor.as_ref() {
+            let t = self.start.elapsed().as_secs_f32();
+            let view = self.texture.create_view(&wgpu::TextureViewDescriptor::default());
+            c.render(&self.device, &self.queue, t, &view);
+        }
         if let Some(p) = self.particles.as_mut() {
             p.update(dt, &self.queue);
         }

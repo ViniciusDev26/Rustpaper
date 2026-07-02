@@ -103,6 +103,8 @@ fn load_texture(pkg: &Pkg, name: &str) -> Option<(Vec<u8>, u32, u32)> {
 }
 
 // Resolve a fonte de uma cena: fundo (imagem) + sistemas de partículas + sprite.
+// (mantido pro caminho antigo/partículas; o padrão agora é o compositor.)
+#[allow(dead_code)]
 fn scene_source(dir: &Path) -> Source {
     let pkg = Pkg::open(&dir.join("scene.pkg")).expect("falha ao abrir scene.pkg");
 
@@ -163,7 +165,9 @@ pub fn run(dir: &Path) {
         WallpaperKind::Video => {
             Source::Video(project.file_path(dir).to_string_lossy().into_owned())
         }
-        WallpaperKind::Scene => scene_source(dir),
+        // Cena: usa o COMPOSITOR multi-camada (todas as camadas + efeitos por camada),
+        // em vez do antigo caminho de uma textura só (scene_source).
+        WallpaperKind::Scene => Source::SceneComposite(dir.to_path_buf()),
         other => {
             eprintln!("tipo {other:?} ainda não suportado.");
             std::process::exit(1);
