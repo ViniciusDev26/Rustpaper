@@ -80,6 +80,23 @@ fn to_override(r: RawPassOverride) -> PassOverride {
     }
 }
 
+/// Constrói as instâncias de efeito a partir do valor JSON do campo `effects` de um
+/// objeto (um array). Usado pelo compositor pra pegar os efeitos de CADA camada.
+pub fn effects_from_json(effects_array: &Value) -> Vec<EffectInstance> {
+    serde_json::from_value::<Vec<RawEffect>>(effects_array.clone())
+        .ok()
+        .map(|es| {
+            es.into_iter()
+                .map(|e| EffectInstance {
+                    file: e.file,
+                    visible: e.visible,
+                    passes: e.passes.into_iter().map(to_override).collect(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Efeitos aplicados ao PRIMEIRO objeto-imagem (o fundo). Vazio se não houver.
 pub fn background_effects(scene_json: &str) -> Vec<EffectInstance> {
     let Ok(scene) = serde_json::from_str::<RawScene>(scene_json) else {
