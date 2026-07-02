@@ -129,6 +129,36 @@ pub struct Reflection {
     pub sampler_bindings: Vec<u32>,
 }
 
+/// Uma entrada (attribute) do vertex: local (location) e nº de componentes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VertexInput {
+    pub location: u32,
+    pub components: u32,
+}
+
+/// Reflete os attributes de entrada do vertex (a_Position, a_TexCoord, ...) — local
+/// e dimensão de cada um. Usado pra montar o layout do vertex buffer casando as
+/// locations que o glslang atribuiu.
+pub fn reflect_vertex_inputs(spirv: &[u32]) -> Result<Vec<VertexInput>, String> {
+    let module = naga::front::spv::Frontend::new(spirv.iter().copied(), &Default::default())
+        .parse()
+        .map_err(|e| format!("naga spv-in: {e:?}"))?;
+    let ep = module.entry_points.first().ok_or("sem entry point")?;
+    let mut out = Vec::new();
+    for arg in &ep.function.arguments {
+        if let Some(naga::Binding::Location { location, .. }) = arg.binding {
+            let components = match module.types[arg.ty].inner {
+                naga::TypeInner::Scalar(_) => 1,
+                naga::TypeInner::Vector { size, .. } => size as u32,
+                _ => continue,
+            };
+            out.push(VertexInput { location, components });
+        }
+    }
+    out.sort_by_key(|v| v.location);
+    Ok(out)
+}
+
 /// Reflete o SPIR-V usando o naga (o mesmo parser que o wgpu usa).
 pub fn reflect(spirv: &[u32]) -> Result<Reflection, String> {
     let module = naga::front::spv::Frontend::new(spirv.iter().copied(), &Default::default())

@@ -15,6 +15,7 @@ we-core = { path = "../we-core" }
 wgpu = { version = "29.0.3", features = ["spirv"] }
 # reflexão do SPIR-V (layout do bloco de uniforms + bindings) — mesma versão do wgpu.
 naga = { version = "29.0.3", features = ["spv-in"] }
+serde_json = "1.0.150"
 pollster = "0.4.0"
 bytemuck = { version = "1.25.0", features = ["derive"] }
 raw-window-handle = "0.6"

@@ -63,6 +63,11 @@ pub struct MaterialInfo {
     pub constants: Vec<(String, serde_json::Value)>,
 }
 
+/// Converte o primeiro pass de um material json (string) em MaterialInfo.
+pub fn material_info_str(material_json: &str) -> Option<MaterialInfo> {
+    material_info(material_json)
+}
+
 // Converte o primeiro pass de um material json em MaterialInfo.
 fn material_info(material_json: &str) -> Option<MaterialInfo> {
     let mat: MaterialRaw = serde_json::from_str(material_json).ok()?;
