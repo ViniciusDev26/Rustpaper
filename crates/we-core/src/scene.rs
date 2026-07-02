@@ -14,6 +14,9 @@ struct SceneObject {
     image: Option<String>,
     #[serde(default)]
     particle: Option<String>,
+    // posição do objeto na cena ("x y z"); o emitter da partícula é LOCAL a ela.
+    #[serde(default)]
+    origin: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -146,6 +149,7 @@ pub struct SceneParticles {
     pub system: ParticleSystem,
     pub texture: String,    // ex.: "particle/halo" (o engine resolve pro .tex)
     pub additive: bool,     // blend do material: additive (luz) vs translucent
+    pub origin: [f32; 3],   // posição do objeto na cena (soma-se ao emitter local)
 }
 
 // Extrai todos os sistemas de partículas da cena (objetos com "particle").
@@ -168,7 +172,16 @@ pub fn particle_systems(pkg: &Pkg) -> Vec<SceneParticles> {
         let material_json = pkg.read(&system.material).and_then(|b| std::str::from_utf8(b).ok());
         let texture = material_json.and_then(first_texture).unwrap_or_default();
         let additive = material_json.map(first_blending).as_deref() == Some("additive");
-        out.push(SceneParticles { system, texture, additive });
+        // origin do OBJETO (o emitter da partícula é local a ele).
+        let origin = obj
+            .origin
+            .as_deref()
+            .map(|s| {
+                let f: Vec<f32> = s.split_whitespace().filter_map(|t| t.parse().ok()).collect();
+                [*f.first().unwrap_or(&0.0), *f.get(1).unwrap_or(&0.0), *f.get(2).unwrap_or(&0.0)]
+            })
+            .unwrap_or([0.0; 3]);
+        out.push(SceneParticles { system, texture, additive, origin });
     }
     out
 }

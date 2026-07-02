@@ -135,6 +135,7 @@ fn scene_source(dir: &Path) -> Source {
             sprite_rgba,
             sprite_w,
             sprite_h,
+            origin: sp.origin,
         });
     }
     if total > 0 {

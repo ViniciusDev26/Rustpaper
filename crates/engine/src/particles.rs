@@ -15,6 +15,7 @@ pub struct ParticleInit {
     pub sprite_rgba: Vec<u8>, // conteúdo já recortado (sem padding)
     pub sprite_w: u32,
     pub sprite_h: u32,
+    pub origin: [f32; 3], // posição do objeto na cena (emitter é local a ela)
 }
 
 // PRNG minúsculo (xorshift64*), determinístico, sem crate externa.
@@ -58,13 +59,14 @@ struct Particle {
 struct Sim {
     sys: ParticleSystem,
     additive: bool,
+    origin: [f32; 3], // posição do objeto na cena (somada ao emitter local)
     particles: Vec<Particle>,
     spawn_accum: f32,
 }
 
 impl Sim {
-    fn new(sys: ParticleSystem, additive: bool) -> Self {
-        Sim { sys, additive, particles: Vec::new(), spawn_accum: 0.0 }
+    fn new(sys: ParticleSystem, additive: bool, origin: [f32; 3]) -> Self {
+        Sim { sys, additive, origin, particles: Vec::new(), spawn_accum: 0.0 }
     }
 
     fn update(&mut self, dt: f32, rng: &mut Rng) {
@@ -88,9 +90,9 @@ impl Sim {
             let dir = [rng.range(-1.0, 1.0), rng.range(-1.0, 1.0), rng.range(-1.0, 1.0)];
             let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-3);
             let pos = [
-                self.sys.origin[0] + dir[0] / len * dist,
-                self.sys.origin[1] + dir[1] / len * dist,
-                self.sys.origin[2] + dir[2] / len * dist,
+                self.origin[0] + self.sys.origin[0] + dir[0] / len * dist,
+                self.origin[1] + self.sys.origin[1] + dir[1] / len * dist,
+                self.origin[2] + self.sys.origin[2] + dir[2] / len * dist,
             ];
             let ct = rng.unit();
             let color = [
@@ -308,7 +310,7 @@ impl Particles {
                 ],
             });
             systems.push(SystemGpu {
-                sim: Sim::new(init.system, init.additive),
+                sim: Sim::new(init.system, init.additive, init.origin),
                 bind_group,
                 range: 0..0,
             });
