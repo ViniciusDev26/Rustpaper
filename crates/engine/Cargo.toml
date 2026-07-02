@@ -11,7 +11,8 @@ path = "src/main.rs"
 
 [dependencies]
 we-core = { path = "../we-core" }
-wgpu = "29.0.3"
+# feature `spirv`: aceitar ShaderSource::SpirV (shaders do WE compilados via glslang).
+wgpu = { version = "29.0.3", features = ["spirv"] }
 pollster = "0.4.0"
 bytemuck = { version = "1.25.0", features = ["derive"] }
 raw-window-handle = "0.6"
@@ -20,3 +21,7 @@ wayland-client = "0.31"
 wayland-backend = { version = "0.3", features = ["client_system"] }
 calloop = "0.14"
 calloop-wayland-source = "0.4"
+
+# Só pros examples (ex.: render_material grava PNG pra inspeção offscreen).
+[dev-dependencies]
+image = { version = "0.25.10", default-features = false, features = ["png"] }
