@@ -20,6 +20,9 @@ use crate::program::{ortho, Blend, Program};
 
 const BASE: &str = "/home/vscode/we-assets";
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+// Partículas ligadas? Desligadas até o simulador reproduzir os sistemas do WE com
+// fidelidade (hoje saem como "quadrados de bolhas"). Ver nota em Compositor::new.
+const PARTICLES_ENABLED: bool = false;
 
 fn resolve(pkg: &Pkg, path: &str) -> Option<Vec<u8>> {
     pkg.read(path).map(|b| b.to_vec()).or_else(|| std::fs::read(PathBuf::from(BASE).join(path)).ok())
@@ -213,18 +216,22 @@ impl Compositor {
 
         // partículas da cena (em espaço de cena — usa a projeção, não a textura de
         // fundo; era esse o bug do "quadrado no meio").
-        let mut inits: Vec<ParticleInit> = Vec::new();
-        for sp in we_core::scene::particle_systems(&pkg) {
-            if !particle_supported(&sp.system) {
-                continue;
+        // DESLIGADO por ora (ver PARTICLES_ENABLED): nosso simulador é simples demais
+        // pros sistemas do WE (múltiplos emissores, operadores, alpha/blend) e o
+        // resultado vira "quadrados de bolhas" — pior que sem partícula. Religar quando
+        // o sistema estiver fiel. O código fica gated pra reativar fácil.
+        let particles = if PARTICLES_ENABLED {
+            let mut inits: Vec<ParticleInit> = Vec::new();
+            for sp in we_core::scene::particle_systems(&pkg) {
+                if !particle_supported(&sp.system) {
+                    continue;
+                }
+                let Some((rgba, sw, sh)) = load_sprite(&pkg, &sp.texture) else { continue };
+                inits.push(ParticleInit { system: sp.system, additive: sp.additive, sprite_rgba: rgba, sprite_w: sw, sprite_h: sh, origin: sp.origin });
             }
-            let Some((rgba, sw, sh)) = load_sprite(&pkg, &sp.texture) else { continue };
-            inits.push(ParticleInit { system: sp.system, additive: sp.additive, sprite_rgba: rgba, sprite_w: sw, sprite_h: sh, origin: sp.origin });
-        }
-        let particles = if inits.is_empty() {
-            None
+            (!inits.is_empty()).then(|| Particles::new(device, queue, FORMAT, inits, [lay.width, lay.height]))
         } else {
-            Some(Particles::new(device, queue, FORMAT, inits, [lay.width, lay.height]))
+            None
         };
 
         Some(Compositor {
