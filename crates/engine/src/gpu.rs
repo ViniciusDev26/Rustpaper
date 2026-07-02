@@ -4,9 +4,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use we_core::particle::ParticleSystem;
-
-use crate::particles::Particles;
+use crate::particles::{ParticleInit, Particles};
 use crate::video::Video;
 
 // De onde vêm os pixels da textura.
@@ -18,8 +16,7 @@ pub enum Source {
         height: u32,
         real_width: u32, // região de conteúdo
         real_height: u32,
-        particles: Vec<(ParticleSystem, bool)>, // (sistema, additive)
-        sprite: Option<(Vec<u8>, u32, u32)>,    // textura do sprite (rgba, w, h)
+        particles: Vec<ParticleInit>, // cada sistema traz seu próprio sprite
     },
 }
 
@@ -77,24 +74,17 @@ impl Renderer {
         let format = first_surface.get_capabilities(&adapter).formats[0];
 
         // Resolve as dimensões e a fonte (vídeo x cena).
-        let (buf_w, buf_h, content_w, content_h, initial_rgba, video, part_systems, sprite) =
-            match source {
-                Source::Video(path) => {
-                    let v = Video::open(&path);
-                    let (w, h) = (v.width, v.height);
-                    // vídeo: buffer == conteúdo, sem padding, sem partículas
-                    (w, h, w, h, None, Some(v), Vec::new(), None)
-                }
-                Source::Scene {
-                    rgba,
-                    width,
-                    height,
-                    real_width,
-                    real_height,
-                    particles,
-                    sprite,
-                } => (width, height, real_width, real_height, Some(rgba), None, particles, sprite),
-            };
+        let (buf_w, buf_h, content_w, content_h, initial_rgba, video, part_inits) = match source {
+            Source::Video(path) => {
+                let v = Video::open(&path);
+                let (w, h) = (v.width, v.height);
+                // vídeo: buffer == conteúdo, sem padding, sem partículas
+                (w, h, w, h, None, Some(v), Vec::new())
+            }
+            Source::Scene { rgba, width, height, real_width, real_height, particles } => {
+                (width, height, real_width, real_height, Some(rgba), None, particles)
+            }
+        };
 
         let extent = wgpu::Extent3d {
             width: buf_w,
@@ -196,19 +186,17 @@ impl Renderer {
             ],
         });
 
-        // Partículas da cena (só se há sistemas e um sprite decodificado).
-        let particles = match sprite {
-            Some((srgba, sw, sh)) if !part_systems.is_empty() => Some(Particles::new(
+        // Partículas da cena (cada sistema com seu sprite).
+        let particles = if part_inits.is_empty() {
+            None
+        } else {
+            Some(Particles::new(
                 &device,
                 &queue,
                 format,
-                part_systems,
-                &srgba,
-                sw,
-                sh,
+                part_inits,
                 [content_w as f32, content_h as f32],
-            )),
-            _ => None,
+            ))
         };
 
         Self {

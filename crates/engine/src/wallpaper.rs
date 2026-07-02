@@ -32,6 +32,7 @@ use wayland_client::{
 use std::path::Path;
 
 use crate::gpu::{Renderer, Source};
+use crate::particles::ParticleInit;
 use we_core::particle::ParticleSystem;
 use we_core::pkg::Pkg;
 use we_core::project::{Project, WallpaperKind};
@@ -71,7 +72,8 @@ struct Wallpaper {
 const ASSETS_DIR: &str = "/home/vscode/we-assets";
 
 // Carrega e decodifica uma textura por nome ("particle/halo"), buscando primeiro
-// no pkg da cena e, se não achar, nos assets base do WE.
+// no pkg da cena e, se não achar, nos assets base do WE. Devolve o CONTEÚDO
+// recortado (sem o padding pra potência de 2) + suas dimensões.
 fn load_texture(pkg: &Pkg, name: &str) -> Option<(Vec<u8>, u32, u32)> {
     if name.is_empty() {
         return None;
@@ -82,7 +84,18 @@ fn load_texture(pkg: &Pkg, name: &str) -> Option<(Vec<u8>, u32, u32)> {
         None => std::fs::read(Path::new(ASSETS_DIR).join(&rel)).ok()?,
     };
     let t = tex::parse(&bytes).ok()?;
-    Some((t.rgba, t.width, t.height))
+
+    // Recorta pro conteúdo real (o buffer pode ter padding à direita/embaixo).
+    if t.width == t.real_width && t.height == t.real_height {
+        return Some((t.rgba, t.width, t.height));
+    }
+    let (bw, rw, rh) = (t.width as usize, t.real_width as usize, t.real_height as usize);
+    let mut out = Vec::with_capacity(rw * rh * 4);
+    for y in 0..rh {
+        let row = &t.rgba[y * bw * 4..y * bw * 4 + rw * 4];
+        out.extend_from_slice(row);
+    }
+    Some((out, t.real_width, t.real_height))
 }
 
 // Resolve a fonte de uma cena: fundo (imagem) + sistemas de partículas + sprite.
@@ -97,26 +110,30 @@ fn scene_source(dir: &Path) -> Source {
         std::process::exit(1);
     });
 
-    // Partículas: só renderizamos os sistemas que sabemos fazer FIELMENTE —
-    // renderer "sprite" + operadores conhecidos (movement/alphafade). Os demais
-    // (spritetrail, controlpointattract, turbulence...) ficariam errados, então
-    // pulamos em vez de desenhar um caos (degradação graciosa).
+    // Partículas: só renderizamos sistemas com renderer "sprite" (os spritetrail
+    // etc. ficariam errados). CADA sistema carrega o SEU próprio sprite; se o
+    // sprite não carregar/decodificar, o sistema é pulado.
     let scene_particles = scene::particle_systems(&pkg);
     let total = scene_particles.len();
-    let supported: Vec<_> = scene_particles
-        .into_iter()
-        .filter(|s| is_supported(&s.system))
-        .collect();
-    let sprite = supported
-        .iter()
-        .map(|s| s.texture.as_str())
-        .find(|tx| !tx.is_empty())
-        .and_then(|tx| load_texture(&pkg, tx));
-    let particles: Vec<(_, bool)> =
-        supported.into_iter().map(|s| (s.system, s.additive)).collect();
+    let mut particles: Vec<ParticleInit> = Vec::new();
+    for sp in scene_particles {
+        if !is_supported(&sp.system) {
+            continue;
+        }
+        let Some((sprite_rgba, sprite_w, sprite_h)) = load_texture(&pkg, &sp.texture) else {
+            continue;
+        };
+        particles.push(ParticleInit {
+            system: sp.system,
+            additive: sp.additive,
+            sprite_rgba,
+            sprite_w,
+            sprite_h,
+        });
+    }
     if total > 0 {
         println!(
-            "  partículas: {} renderizado(s) de {} ({} pulado(s): renderer não suportado)",
+            "  partículas: {} renderizado(s) de {} ({} pulado(s))",
             particles.len(),
             total,
             total - particles.len()
@@ -130,7 +147,6 @@ fn scene_source(dir: &Path) -> Source {
         real_width: t.real_width,
         real_height: t.real_height,
         particles,
-        sprite,
     }
 }
 

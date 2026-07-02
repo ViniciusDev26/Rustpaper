@@ -8,8 +8,10 @@
 //   dados podem ser LZ4 (compression==1). Formato final vem de `format` ou, nos
 //   TEXB0003/0004, de uma imagem embutida (JPEG/PNG) decodificada pela crate image.
 
-// Só os que sabemos converter por ora; DXT e cia. dão erro claro.
+// Formatos que sabemos converter; DXT e cia. dão erro claro.
 const FORMAT_ARGB8888: u32 = 0;
+const FORMAT_RG88: u32 = 8; // 2 canais (R,G) — sprites com alpha no canal G
+const FORMAT_R8: u32 = 9; // 1 canal — máscara (luminância = alpha)
 const FIF_UNKNOWN: u32 = 0xFFFF_FFFF; // FreeImage: sem formato = -1
 
 pub struct DecodedTexture {
@@ -136,18 +138,33 @@ pub fn parse(data: &[u8]) -> Result<DecodedTexture, String> {
         });
     }
 
-    // Caso raw: por ora só ARGB8888. Apesar do nome, os bytes já estão em ordem
-    // RGBA (o WE faz upload como GL_RGBA, não GL_BGRA) — então NÃO trocamos canais.
-    // (Trocar R↔B fazia vermelho virar azul; invisível em texturas grayscale.)
-    if format == FORMAT_ARGB8888 {
-        return Ok(DecodedTexture {
-            width: mip_w,
-            height: mip_h,
-            real_width: width,
-            real_height: height,
-            rgba: raw,
-        });
-    }
+    let make = |rgba: Vec<u8>| {
+        Ok(DecodedTexture { width: mip_w, height: mip_h, real_width: width, real_height: height, rgba })
+    };
 
-    Err(format!("formato de textura {format} ainda não suportado (só ARGB8888/free-image por ora)"))
+    match format {
+        // ARGB8888: apesar do nome, os bytes já estão em RGBA (o WE faz upload como
+        // GL_RGBA, não GL_BGRA) — sem troca de canais.
+        FORMAT_ARGB8888 => make(raw),
+        // RG88: 2 bytes/pixel. WE guarda a luminância em R e o alpha em G. Expande
+        // pra rgb = R (cinza, a cor vem do tint da partícula) e a = G.
+        FORMAT_RG88 => {
+            let mut rgba = Vec::with_capacity(raw.len() * 2);
+            for px in raw.chunks_exact(2) {
+                rgba.extend_from_slice(&[px[0], px[0], px[0], px[1]]);
+            }
+            make(rgba)
+        }
+        // R8: 1 byte/pixel, usado como máscara (luminância = alpha).
+        FORMAT_R8 => {
+            let mut rgba = Vec::with_capacity(raw.len() * 4);
+            for &r in &raw {
+                rgba.extend_from_slice(&[r, r, r, r]);
+            }
+            make(rgba)
+        }
+        other => Err(format!(
+            "formato de textura {other} ainda não suportado (só ARGB8888/RG88/R8/free-image)"
+        )),
+    }
 }
