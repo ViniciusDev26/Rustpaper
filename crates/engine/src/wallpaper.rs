@@ -38,12 +38,16 @@ use we_core::pkg::Pkg;
 use we_core::project::{Project, WallpaperKind};
 use we_core::{scene, tex};
 
-// Renderizamos sistemas com o renderer "sprite" (partículas simples). Os que usam
-// "spritetrail" (trilhas) e afins ficariam errados no nosso render, então pulamos.
-// Operadores que não implementamos (oscillateposition, turbulence...) são só
-// ignorados — a partícula ainda fica aceitável (ex.: neve cai reto, sem balanço).
+// Renderizamos sistemas com o renderer "sprite" e tamanho moderado. Pulamos:
+// - "spritetrail" (trilhas) e afins: ficariam errados no nosso render.
+// - sprites GIGANTES (fog/feixes/raios de 800-2200px): são efeitos atmosféricos
+//   additive que, sem o pipeline HDR/tonemap/bloom do WE, apenas SOMAM luz e
+//   lavam a tela em branco, cobrindo o fundo. Melhor pular do que estourar tudo.
+// Assim as cenas ficam com o fundo visível + partículas pequenas (poeira, brasas,
+// bolhas). Operadores não implementados (turbulence...) são só ignorados.
+const MAX_PARTICLE_SIZE: f32 = 400.0;
 fn is_supported(sys: &ParticleSystem) -> bool {
-    sys.renderer == "sprite"
+    sys.renderer == "sprite" && sys.size.1 <= MAX_PARTICLE_SIZE
 }
 
 // Uma tela: sua layer surface, a wl_surface, a surface do wgpu e a config (tamanho).
