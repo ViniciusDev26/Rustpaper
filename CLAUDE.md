@@ -119,6 +119,14 @@ puxe de `/proc/<plasmashell>/environ`):
 
 - **DXT não é decodificado** — cenas cujo fundo/texturas são DXT falham
   ("formato N não suportado"). Maior ganho de cobertura futuro seria implementar DXT.
+- **Sprite ÚNICO por cena** — usamos a 1ª textura de partícula pra TODOS os
+  sistemas. Cenas com sprites diferentes (ex.: `drop` + `light_shafts` +
+  `chromaticdot`) renderizam todos com o mesmo sprite (forma errada, mas o blend
+  fica certo). Fidelidade total exigiria uma textura por sistema.
+- **Blend por sistema** já é respeitado: `additive` (luz, soma ao fundo) vs
+  `translucent` (alpha). Sem isso, sistemas additive (comuns pra brilhos/feixes)
+  viram bolhões opacos. Cor de partícula: `colorrandom` é 0-255 e interpola numa
+  LINHA (um t); `colorchange` é 0-1.
 - **Só renderizamos partículas com `renderer == "sprite"`** (degradação graciosa).
   `spritetrail` e afins são pulados (log informa quantos). Os sistemas densos de
   algumas cenas (ex.: Zoro) são **efeitos interativos de MOUSE**
