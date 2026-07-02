@@ -79,6 +79,9 @@ pub fn translate(
     let mut seen = HashSet::new();
     let with_includes = resolve_includes(source, shaders_dir, &mut seen)?;
 
+    // 1b) resolve `#require` (módulos gerados pelo WE, ex.: LightingV1).
+    let with_includes = resolve_requires(&with_includes);
+
     // 2) gl_FragColor -> out_FragColor (destino declarado no prelúdio do fragment).
     let body = with_includes.replace("gl_FragColor", "out_FragColor");
 
@@ -127,6 +130,34 @@ fn resolve_includes(
         }
     }
     Ok(out)
+}
+
+// Stub do módulo LightingV1: no WE, `PerformLighting_V1` é gerado dinamicamente a
+// partir das luzes da cena. Como (assim como o linux-wallpaperengine) ainda não há
+// suporte a objetos de luz, geramos um stub que não contribui luz dinâmica. Sem
+// isso os shaders que dão `#require LightingV1` (ex.: genericimage4) não compilam.
+const LIGHTING_V1_STUB: &str = "// generated module LightingV1\n\
+    vec3 PerformLighting_V1(vec3 worldPos, vec3 albedo, vec3 normal, vec3 viewDir,\n\
+    vec3 specularTint, vec3 baseReflectance, float roughness, float metallic) {\n\
+    return vec3(0.0);\n\
+    }\n";
+
+// Substitui diretivas `#require <módulo>` pelo código do módulo. Só conhecemos
+// LightingV1; outras viram comentário (com aviso inline) pra não quebrar o parse.
+fn resolve_requires(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    for line in source.lines() {
+        if let Some(module) = line.trim_start().strip_prefix("#require") {
+            match module.trim() {
+                "LightingV1" => out.push_str(LIGHTING_V1_STUB),
+                other => out.push_str(&format!("// #require {other} (módulo não suportado)\n")),
+            }
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
 }
 
 /// Binding do bloco de uniforms livres (WeGlobals) no descriptor set 0.
@@ -244,6 +275,16 @@ mod tests {
         // g_Texture1 -> texture binding 3, sampler binding 4
         assert!(out.contains("layout(binding = 3) uniform texture2D g_Texture1;"));
         assert!(out.contains("layout(binding = 4) uniform sampler _smp_g_Texture1;"));
+    }
+
+    #[test]
+    fn resolve_requires_gera_stub_lighting() {
+        let out = resolve_requires("a\n#require LightingV1\nb\n");
+        assert!(out.contains("vec3 PerformLighting_V1("));
+        assert!(!out.contains("#require LightingV1"));
+        // módulo desconhecido vira comentário, não some nem quebra
+        let unk = resolve_requires("#require Foo\n");
+        assert!(unk.contains("// #require Foo"));
     }
 
     #[test]
