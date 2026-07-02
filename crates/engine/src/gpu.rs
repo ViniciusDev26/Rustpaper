@@ -83,7 +83,7 @@ impl Renderer {
         let format = first_surface.get_capabilities(&adapter).formats[0];
 
         // Resolve as dimensões e a fonte (vídeo x cena x compositor).
-        let (buf_w, buf_h, content_w, content_h, initial_rgba, video, part_inits, compositor) = match source {
+        let (buf_w, buf_h, content_w, content_h, initial_rgba, video, part_inits, mut compositor) = match source {
             Source::Video(path) => {
                 let v = Video::open(&path);
                 let (w, h) = (v.width, v.height);
@@ -130,9 +130,9 @@ impl Renderer {
         });
 
         // Compositor: renderiza o primeiro frame já, pra não piscar preto.
-        if let Some(comp) = &compositor {
+        if let Some(comp) = &mut compositor {
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-            comp.render(&device, &queue, 0.0, &view);
+            comp.render(&device, &queue, 0.0, 0.0, &view);
         }
 
         // Imagem estática: sobe os pixels uma vez agora.
@@ -251,11 +251,13 @@ impl Renderer {
         let now = std::time::Instant::now();
         let dt = (now - self.last_frame).as_secs_f32().min(0.1); // clampa picos
         self.last_frame = now;
-        // Compositor: redesenha a cena inteira na textura de conteúdo (g_Time avança).
-        if let Some(c) = self.compositor.as_ref() {
-            let t = self.start.elapsed().as_secs_f32();
-            let view = self.texture.create_view(&wgpu::TextureViewDescriptor::default());
-            c.render(&self.device, &self.queue, t, &view);
+        // Compositor: redesenha a cena inteira na textura de conteúdo (g_Time avança;
+        // dt anima as partículas).
+        let t = self.start.elapsed().as_secs_f32();
+        let view = self.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let (dev, q) = (&self.device, &self.queue);
+        if let Some(c) = self.compositor.as_mut() {
+            c.render(dev, q, t, dt, &view);
         }
         if let Some(p) = self.particles.as_mut() {
             p.update(dt, &self.queue);

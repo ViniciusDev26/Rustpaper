@@ -11,9 +11,11 @@ use std::path::{Path, PathBuf};
 
 use we_core::effects::{self, EffectInstance};
 use we_core::layout::{self, Layer};
+use we_core::particle::ParticleSystem;
 use we_core::pkg::Pkg;
 use we_core::tex;
 
+use crate::particles::{ParticleInit, Particles};
 use crate::program::{ortho, Blend, Program};
 
 const BASE: &str = "/home/vscode/we-assets";
@@ -101,6 +103,32 @@ pub struct Compositor {
     // ping-pong pros efeitos (tamanho da cena)
     scratch_a: wgpu::Texture,
     scratch_b: wgpu::Texture,
+    // partículas da cena (simulação + render instanciado), em espaço de cena.
+    particles: Option<Particles>,
+}
+
+// Sprite de partícula suportado: renderer "sprite" e tamanho moderado (os gigantes
+// additive lavam a tela sem HDR — ver nota no wallpaper.rs).
+fn particle_supported(sys: &ParticleSystem) -> bool {
+    sys.renderer == "sprite" && sys.size.1 <= 400.0
+}
+
+// carrega o sprite de uma partícula (rgba recortado) do pkg/base.
+fn load_sprite(pkg: &Pkg, name: &str) -> Option<(Vec<u8>, u32, u32)> {
+    if name.is_empty() {
+        return None;
+    }
+    let bytes = resolve(pkg, &format!("materials/{name}.tex"))?;
+    let t = tex::parse(&bytes).ok()?;
+    if t.width == t.real_width && t.height == t.real_height {
+        return Some((t.rgba, t.width, t.height));
+    }
+    let (bw, rw, rh) = (t.width as usize, t.real_width as usize, t.real_height as usize);
+    let mut out = Vec::with_capacity(rw * rh * 4);
+    for y in 0..rh {
+        out.extend_from_slice(&t.rgba[y * bw * 4..y * bw * 4 + rw * 4]);
+    }
+    Some((out, t.real_width, t.real_height))
 }
 
 impl Compositor {
@@ -180,16 +208,33 @@ impl Compositor {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC, view_formats: &[],
         });
 
+        // partículas da cena (em espaço de cena — usa a projeção, não a textura de
+        // fundo; era esse o bug do "quadrado no meio").
+        let mut inits: Vec<ParticleInit> = Vec::new();
+        for sp in we_core::scene::particle_systems(&pkg) {
+            if !particle_supported(&sp.system) {
+                continue;
+            }
+            let Some((rgba, sw, sh)) = load_sprite(&pkg, &sp.texture) else { continue };
+            inits.push(ParticleInit { system: sp.system, additive: sp.additive, sprite_rgba: rgba, sprite_w: sw, sprite_h: sh });
+        }
+        let particles = if inits.is_empty() {
+            None
+        } else {
+            Some(Particles::new(device, queue, FORMAT, inits, [lay.width, lay.height]))
+        };
+
         Some(Compositor {
             width: w, height: h, clear: lay.clear_color, mvp: ortho(lay.width, lay.height),
             programs, layers, ibuf, clamp, repeat,
             scratch_a: mk_scratch("scratch_a"), scratch_b: mk_scratch("scratch_b"),
+            particles,
         })
     }
 
     /// Renderiza a cena inteira na textura `target` (deve ter o tamanho da cena e
-    /// usage RENDER_ATTACHMENT). `time` alimenta g_Time (animação).
-    pub fn render(&self, device: &wgpu::Device, queue: &wgpu::Queue, time: f32, target: &wgpu::TextureView) {
+    /// usage RENDER_ATTACHMENT). `time` alimenta g_Time; `dt` avança as partículas.
+    pub fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, time: f32, dt: f32, target: &wgpu::TextureView) {
         let (w, h) = (self.width, self.height);
         let mut first = true;
         for layer in &self.layers {
@@ -219,6 +264,23 @@ impl Compositor {
                 self.composite(device, queue, &result.create_view(&Default::default()), target, first, layer.blend);
             }
             first = false;
+        }
+
+        // partículas por cima, em espaço de cena (avança a simulação com dt)
+        if let Some(p) = self.particles.as_mut() {
+            p.update(dt, queue);
+        }
+        if let Some(p) = self.particles.as_ref() {
+            let mut enc = device.create_command_encoder(&Default::default());
+            {
+                let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("particles"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: target, resolve_target: None, depth_slice: None, ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store } })],
+                    depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
+                });
+                p.draw(&mut rp);
+            }
+            queue.submit(Some(enc.finish()));
         }
     }
 

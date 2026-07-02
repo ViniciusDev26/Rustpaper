@@ -98,6 +98,10 @@ impl Program {
         let mut sampler_defaults = shader::parse_sampler_defaults(vert_src);
         sampler_defaults.extend(shader::parse_sampler_defaults(frag_src));
 
+        // Captura erros de validação (ex.: interface vertex/fragment incompatível em
+        // alguns shaders do WE) em vez de deixar o wgpu dar panic e derrubar tudo.
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+
         let vs = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("we-vert"),
             source: wgpu::ShaderSource::SpirV(v_spv.into()),
@@ -164,6 +168,10 @@ impl Program {
             multiview_mask: None,
             cache: None,
         });
+
+        if let Some(err) = pollster::block_on(scope.pop()) {
+            return Err(format!("pipeline inválido: {err}"));
+        }
 
         Ok(Program {
             pipeline,
