@@ -13,6 +13,8 @@ path = "src/main.rs"
 we-core = { path = "../we-core" }
 # feature `spirv`: aceitar ShaderSource::SpirV (shaders do WE compilados via glslang).
 wgpu = { version = "29.0.3", features = ["spirv"] }
+# reflexão do SPIR-V (layout do bloco de uniforms + bindings) — mesma versão do wgpu.
+naga = { version = "29.0.3", features = ["spv-in"] }
 pollster = "0.4.0"
 bytemuck = { version = "1.25.0", features = ["derive"] }
 raw-window-handle = "0.6"

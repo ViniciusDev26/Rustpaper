@@ -1,8 +1,4 @@
-mod gpu;
-mod particles;
-mod video;
-mod wallpaper;
-
+use engine::wallpaper;
 use std::path::PathBuf;
 
 fn main() {

@@ -1,0 +1,121 @@
+// Módulo `shader_compile`: pega um shader do WE, traduz pra GLSL (via we-core),
+// compila pra SPIR-V Vulkan chamando o glslangValidator, e reflete o layout
+// (bloco de uniforms + bindings de textura) do módulo resultante.
+//
+// Por que glslang como subprocesso: o frontend GLSL do naga é fraco demais pros
+// shaders do WE (ver docs/SHADER_TRANSLATION.md). O glslang já vem no container.
+
+use std::collections::HashMap;
+use std::path::Path;
+use std::process::Command;
+
+use we_core::shader::{translate, Stage};
+
+// Acha o glslangValidator (não costuma estar no PATH do processo).
+fn glslang_bin() -> &'static str {
+    use std::sync::OnceLock;
+    static BIN: OnceLock<String> = OnceLock::new();
+    BIN.get_or_init(|| {
+        for c in ["glslangValidator", "/usr/sbin/glslangValidator", "/usr/bin/glslangValidator"] {
+            if Command::new(c).arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+                return c.to_string();
+            }
+        }
+        panic!("glslangValidator não encontrado (instale glslang no container)");
+    })
+}
+
+/// Compila GLSL (já traduzido) pra SPIR-V Vulkan. `stage` = "vert" | "frag".
+pub fn glsl_to_spirv(stage: &str, glsl: &str) -> Result<Vec<u32>, String> {
+    let dir = std::env::temp_dir();
+    // nome único por processo+estágio pra não colidir entre chamadas concorrentes
+    let base = format!("we_{}_{stage}", std::process::id());
+    let inp = dir.join(format!("{base}.{stage}"));
+    let outp = dir.join(format!("{base}.{stage}.spv"));
+    std::fs::write(&inp, glsl).map_err(|e| e.to_string())?;
+
+    let out = Command::new(glslang_bin())
+        .args(["-V", "-R", "--amb", "--aml", "--sdub", "WeGlobals", "0", "0", "-S", stage])
+        .arg(&inp)
+        .arg("-o")
+        .arg(&outp)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(format!(
+            "glslang falhou ({stage}):\n{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    let bytes = std::fs::read(&outp).map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_file(&inp);
+    let _ = std::fs::remove_file(&outp);
+    Ok(bytes.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect())
+}
+
+/// Traduz um shader do WE e compila pra SPIR-V.
+pub fn compile(
+    stage: Stage,
+    source: &str,
+    combos: &[(String, i64)],
+    shaders_dir: &Path,
+) -> Result<Vec<u32>, String> {
+    let glsl = translate(stage, source, combos, shaders_dir)?;
+    let sflag = match stage {
+        Stage::Vertex => "vert",
+        Stage::Fragment => "frag",
+    };
+    glsl_to_spirv(sflag, &glsl)
+}
+
+/// Layout refletido de um shader compilado: o bloco de uniforms (WeGlobals) e os
+/// bindings de textura/sampler. Serve pra montar o UBO e o bind group corretos.
+#[derive(Debug, Default, Clone)]
+pub struct Reflection {
+    /// Tamanho (bytes) do bloco de uniforms WeGlobals (0 se não houver).
+    pub uniform_size: u32,
+    /// Offset de cada membro do bloco, por nome (ex.: "g_Brightness" -> 0).
+    pub uniform_offsets: HashMap<String, u32>,
+    /// Bindings das texturas (globais `Handle` do tipo imagem).
+    pub texture_bindings: Vec<u32>,
+    /// Bindings dos samplers (globais `Handle` do tipo sampler).
+    pub sampler_bindings: Vec<u32>,
+}
+
+/// Reflete o SPIR-V usando o naga (o mesmo parser que o wgpu usa).
+pub fn reflect(spirv: &[u32]) -> Result<Reflection, String> {
+    let module = naga::front::spv::Frontend::new(spirv.iter().copied(), &Default::default())
+        .parse()
+        .map_err(|e| format!("naga spv-in: {e:?}"))?;
+
+    let mut r = Reflection::default();
+    for (_, gv) in module.global_variables.iter() {
+        match gv.space {
+            naga::AddressSpace::Uniform => {
+                if let naga::TypeInner::Struct { members, span } = &module.types[gv.ty].inner {
+                    r.uniform_size = *span;
+                    for m in members {
+                        if let Some(name) = &m.name {
+                            r.uniform_offsets.insert(name.clone(), m.offset);
+                        }
+                    }
+                }
+            }
+            naga::AddressSpace::Handle => {
+                let binding = gv.binding.as_ref().map(|b| b.binding);
+                if let Some(b) = binding {
+                    match module.types[gv.ty].inner {
+                        naga::TypeInner::Image { .. } => r.texture_bindings.push(b),
+                        naga::TypeInner::Sampler { .. } => r.sampler_bindings.push(b),
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    r.texture_bindings.sort_unstable();
+    r.sampler_bindings.sort_unstable();
+    Ok(r)
+}
