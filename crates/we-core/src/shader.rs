@@ -222,6 +222,42 @@ pub fn parse_params(source: &str) -> Vec<UniformParam> {
     out
 }
 
+/// Defaults dos combos declarados via `// [COMBO] {"combo":"NAME","default":N}` no
+/// shader. O WE usa esses defaults quando o material/cena não sobrescreve o combo.
+/// Sem isso, shaders com `#if BLENDMODE` etc. não compilam (identificador indefinido).
+pub fn parse_combo_defaults(source: &str) -> Vec<(String, i64)> {
+    let mut out = Vec::new();
+    for line in source.lines() {
+        let t = line.trim_start();
+        let Some(rest) = t.strip_prefix("// [COMBO]") else { continue };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(rest.trim()) else { continue };
+        let (Some(name), Some(def)) = (
+            json.get("combo").and_then(|c| c.as_str()),
+            json.get("default").and_then(|d| d.as_i64()),
+        ) else {
+            continue;
+        };
+        out.push((name.to_string(), def));
+    }
+    out
+}
+
+/// Textura default de cada sampler anotado: `uniform sampler2D g_Texture1;
+/// // {"default":"util/noise"}` -> ("g_Texture1", "util/noise"). Serve pra saber que
+/// textura carregar num slot que o material não preenche (ex.: ruído do filmgrain).
+pub fn parse_sampler_defaults(source: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for line in source.lines() {
+        let Some((name, comment)) = parse_sampler_decl(line) else { continue };
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(comment.trim()) {
+            if let Some(def) = json.get("default").and_then(|d| d.as_str()) {
+                out.push((name, def.to_string()));
+            }
+        }
+    }
+    out
+}
+
 /// Binding do bloco de uniforms livres (WeGlobals) no descriptor set 0.
 pub const UNIFORM_BLOCK_BINDING: u32 = 0;
 
