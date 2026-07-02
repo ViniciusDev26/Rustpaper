@@ -54,6 +54,52 @@ pub fn glsl_to_spirv(stage: &str, glsl: &str) -> Result<Vec<u32>, String> {
     Ok(bytes.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect())
 }
 
+/// Compila vertex + fragment JUNTOS (linkados) pra SPIR-V. Isso faz o glslang
+/// UNIFICAR o bloco default de uniforms (WeGlobals) entre os dois estágios: os dois
+/// SPIR-V resultantes têm o MESMO struct, com os mesmos offsets. É o que permite usar
+/// o vertex do WE (que a maioria dos efeitos precisa, pra coords animadas) junto do
+/// fragment, compartilhando um único UBO no binding 0. Retorna (vert_spirv, frag_spirv).
+pub fn glsl_to_spirv_linked(vert_glsl: &str, frag_glsl: &str) -> Result<(Vec<u32>, Vec<u32>), String> {
+    // subdiretório único: o glslang com -l escreve vert.spv/frag.spv no CWD.
+    let dir = std::env::temp_dir().join(format!("we_link_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join("s.vert"), vert_glsl).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join("s.frag"), frag_glsl).map_err(|e| e.to_string())?;
+
+    let out = Command::new(glslang_bin())
+        .current_dir(&dir)
+        .args(["-V", "-R", "--amb", "--aml", "--sdub", "WeGlobals", "0", "0", "-l", "s.vert", "s.frag"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(format!(
+            "glslang -l falhou:\n{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    let read = |name: &str| -> Result<Vec<u32>, String> {
+        let bytes = std::fs::read(dir.join(name)).map_err(|e| format!("{name}: {e}"))?;
+        Ok(bytes.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect())
+    };
+    let vert = read("vert.spv")?;
+    let frag = read("frag.spv")?;
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok((vert, frag))
+}
+
+/// Traduz vertex + fragment do WE e compila linkados (UBO unificado).
+pub fn compile_linked(
+    vert_src: &str,
+    frag_src: &str,
+    combos: &[(String, i64)],
+    shaders_dir: &Path,
+) -> Result<(Vec<u32>, Vec<u32>), String> {
+    let v = translate(Stage::Vertex, vert_src, combos, shaders_dir)?;
+    let f = translate(Stage::Fragment, frag_src, combos, shaders_dir)?;
+    glsl_to_spirv_linked(&v, &f)
+}
+
 /// Traduz um shader do WE e compila pra SPIR-V.
 pub fn compile(
     stage: Stage,

@@ -58,6 +58,36 @@ binding `2N+1`; sampler `_smp_g_TextureN` = binding `2N+2`.
 
 Provado por `crates/we-core/tests/naga_compile.rs` (genericimage2 vert+frag).
 
+## Estado do render (offscreen, verificado por PNG)
+
+- **Fundo real** renderiza pelo shader real do WE (`render_scene` example, cena Zoro).
+- **Cadeia de efeitos** funciona (`render_effect`): fundo → efeito `tint` amostrando
+  o quadro anterior. `postprocess::Pass` é a primitiva de passe reutilizável.
+- **Reflexão** (`shader_compile::reflect`): lê do SPIR-V o layout do bloco de
+  uniforms (offsets por nome) e os bindings de textura/sampler via naga.
+- **Parsers** (we-core): `scene::MaterialInfo` (shader/combos/constants),
+  `effects` (grafo de efeitos: objeto→effect.json→passes/fbos/binds + overrides),
+  `shader::parse_params` (anotações `// {json}`: uniform↔material + defaults).
+
+### UBO unificado entre estágios (o último bloqueio, resolvido)
+
+A maioria dos efeitos precisa do VERTEX do WE (ex.: filmgrain calcula
+`v_TexCoordNoise` a partir de `g_Time` no vertex). Mas vertex e fragment declaram
+membros DIFERENTES no bloco `WeGlobals` — compilados separados, colidiriam no
+binding 0. Solução: compilar vertex+fragment LINKADOS (`glslang -l`), que UNIFICA o
+bloco default — os dois SPIR-V saem com o MESMO struct e os MESMOS offsets. Ver
+`shader_compile::compile_linked` e o teste `engine/tests/linked_compile.rs`
+(genericimage2: UBO unificado de 96 bytes, `g_ModelViewProjectionMatrix@0` +
+`g_Brightness@88` visíveis nos dois estágios).
+
+### O que falta pro render fiel de efeitos animados
+
+Orquestração (sem incógnitas): usar `compile_linked` (vert+frag do WE) por passe,
+montar o UBO unificado com `parse_params` (defaults) + constants (material/cena) +
+builtins (`g_Time`, resoluções), resolver texturas de entrada do efeito (framebuffer
+anterior via `bind`, mais texturas base tipo `util/noise`), e orquestrar
+multi-passe/multi-FBO (blur, godrays). Integração ao vivo no `wallpaper.rs` por fim.
+
 ### Fases (para uma sessão futura, com contexto fresco)
 
 1. **Resolver includes** — módulo que lê um shader do WE e expande `#include "x.h"`
