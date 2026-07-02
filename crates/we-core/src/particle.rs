@@ -18,6 +18,9 @@ pub struct ParticleSystem {
     pub size: (f32, f32),
     pub velocity_min: [f32; 3],
     pub velocity_max: [f32; 3],
+    // turbulentvelocityrandom: velocidade inicial de MÓDULO aleatório numa DIREÇÃO
+    // aleatória (comum em bolhas/poeira). (speed_min, speed_max) — None se ausente.
+    pub turbulent_speed: Option<(f32, f32)>,
     pub color_min: [f32; 3],
     pub color_max: [f32; 3],
     // Operadores
@@ -101,6 +104,11 @@ impl ParticleSystem {
         let (sz_min, sz_max) = min_max_scalar(find_named(init, "sizerandom"));
         let (vel_min, vel_max) = min_max_vec3(find_named(init, "velocityrandom"));
         let (col_min, col_max) = min_max_vec3(find_named(init, "colorrandom"));
+        let turbulent_speed = find_named(init, "turbulentvelocityrandom").map(|t| {
+            let smin = t.get("speedmin").map(f32_of).unwrap_or(0.0);
+            let smax = t.get("speedmax").map(f32_of).unwrap_or(smin);
+            (smin, smax)
+        });
 
         // Operators.
         let op = root.get("operator");
@@ -164,6 +172,7 @@ impl ParticleSystem {
             size: (sz_min, sz_max),
             velocity_min: vel_min,
             velocity_max: vel_max,
+            turbulent_speed,
             color_min: col_min,
             color_max: col_max,
             gravity,

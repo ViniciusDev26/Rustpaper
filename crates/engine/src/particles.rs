@@ -108,9 +108,20 @@ impl Sim {
                 ),
                 None => (0.0, 0.0, 0.0),
             };
+            // velocidade inicial: turbulenta (direção aleatória * módulo) se o sistema
+            // usar turbulentvelocityrandom; senão a faixa velocityrandom.
+            let vel = match self.sys.turbulent_speed {
+                Some((smin, smax)) => {
+                    let d = [rng.range(-1.0, 1.0), rng.range(-1.0, 1.0), rng.range(-1.0, 1.0)];
+                    let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-3);
+                    let sp = rng.range(smin, smax);
+                    [d[0] / l * sp, d[1] / l * sp, d[2] / l * sp]
+                }
+                None => rng.range3(self.sys.velocity_min, self.sys.velocity_max),
+            };
             self.particles.push(Particle {
                 pos,
-                vel: rng.range3(self.sys.velocity_min, self.sys.velocity_max),
+                vel,
                 age: 0.0,
                 life: rng.range(self.sys.lifetime.0, self.sys.lifetime.1).max(0.1),
                 size: rng.range(self.sys.size.0, self.sys.size.1),
