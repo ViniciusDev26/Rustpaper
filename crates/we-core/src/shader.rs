@@ -160,6 +160,68 @@ fn resolve_requires(source: &str) -> String {
     out
 }
 
+/// Um parâmetro de material declarado no shader: o uniform, o nome do parâmetro no
+/// material (`"material"` na anotação), o valor default e quantos componentes tem.
+/// Ex.: `uniform vec3 g_TintColor; // {"material":"color","default":"1 0 0"}`
+/// vira `{ uniform:"g_TintColor", material:Some("color"), default:[1,0,0], components:3 }`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UniformParam {
+    pub uniform: String,
+    pub material: Option<String>,
+    pub default: Vec<f32>,
+    pub components: usize,
+}
+
+// Nº de componentes de um tipo GLSL escalar/vetor (o que cabe no UBO como floats).
+fn type_components(ty: &str) -> Option<usize> {
+    match ty {
+        "float" | "int" => Some(1),
+        "vec2" => Some(2),
+        "vec3" => Some(3),
+        "vec4" => Some(4),
+        _ => None,
+    }
+}
+
+// Lê um default da anotação: número -> [n]; string "1 0 0" -> [1,0,0].
+fn parse_default(v: &serde_json::Value, components: usize) -> Vec<f32> {
+    let mut out = match v {
+        serde_json::Value::Number(n) => vec![n.as_f64().unwrap_or(0.0) as f32],
+        serde_json::Value::String(s) => {
+            s.split_whitespace().filter_map(|t| t.parse::<f32>().ok()).collect()
+        }
+        _ => Vec::new(),
+    };
+    out.resize(components, 0.0);
+    out
+}
+
+/// Extrai os parâmetros de material anotados num shader (linhas
+/// `uniform <tipo> <nome>; // {json}`). Ignora samplers e uniforms sem anotação
+/// JSON válida. Usado pra montar o UBO com defaults + overrides do material.
+pub fn parse_params(source: &str) -> Vec<UniformParam> {
+    let mut out = Vec::new();
+    for line in source.lines() {
+        let t = line.trim();
+        let Some(rest) = t.strip_prefix("uniform ") else { continue };
+        let Some((decl, comment)) = rest.split_once("//") else { continue };
+        // decl = "<tipo> <nome> ;" (com ; no fim)
+        let decl = decl.trim().trim_end_matches(';').trim();
+        let mut it = decl.split_whitespace();
+        let (Some(ty), Some(name)) = (it.next(), it.next()) else { continue };
+        // nome pode ter [N] (array) — ignoramos arrays por ora
+        if name.contains('[') {
+            continue;
+        }
+        let Some(components) = type_components(ty) else { continue };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(comment.trim()) else { continue };
+        let material = json.get("material").and_then(|m| m.as_str()).map(String::from);
+        let default = json.get("default").map(|d| parse_default(d, components)).unwrap_or_else(|| vec![0.0; components]);
+        out.push(UniformParam { uniform: name.to_string(), material, default, components });
+    }
+    out
+}
+
 /// Binding do bloco de uniforms livres (WeGlobals) no descriptor set 0.
 pub const UNIFORM_BLOCK_BINDING: u32 = 0;
 
@@ -275,6 +337,18 @@ mod tests {
         // g_Texture1 -> texture binding 3, sampler binding 4
         assert!(out.contains("layout(binding = 3) uniform texture2D g_Texture1;"));
         assert!(out.contains("layout(binding = 4) uniform sampler _smp_g_Texture1;"));
+    }
+
+    #[test]
+    fn parse_params_le_material_e_defaults() {
+        let src = "uniform float g_Brightness; // {\"material\":\"Brightness\",\"default\":1}\n\
+                   uniform vec3 g_TintColor; // {\"material\":\"color\",\"default\":\"1 0 0\"}\n\
+                   uniform sampler2D g_Texture0; // {\"label\":\"x\"}\n\
+                   uniform float g_NoAnno;\n";
+        let ps = parse_params(src);
+        assert_eq!(ps.len(), 2); // sampler e sem-anotação ignorados
+        assert_eq!(ps[0], UniformParam { uniform: "g_Brightness".into(), material: Some("Brightness".into()), default: vec![1.0], components: 1 });
+        assert_eq!(ps[1], UniformParam { uniform: "g_TintColor".into(), material: Some("color".into()), default: vec![1.0, 0.0, 0.0], components: 3 });
     }
 
     #[test]
