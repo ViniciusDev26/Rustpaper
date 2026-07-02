@@ -112,10 +112,11 @@ fn scene_source(dir: &Path) -> Source {
         .map(|s| s.texture.as_str())
         .find(|tx| !tx.is_empty())
         .and_then(|tx| load_texture(&pkg, tx));
-    let particles: Vec<_> = supported.into_iter().map(|s| s.system).collect();
+    let particles: Vec<(_, bool)> =
+        supported.into_iter().map(|s| (s.system, s.additive)).collect();
     if total > 0 {
         println!(
-            "  partículas: {} renderizado(s) de {} ({} pulado(s): renderer/operador não suportado)",
+            "  partículas: {} renderizado(s) de {} ({} pulado(s): renderer não suportado)",
             particles.len(),
             total,
             total - particles.len()

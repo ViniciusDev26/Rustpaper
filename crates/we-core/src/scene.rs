@@ -33,6 +33,8 @@ struct MaterialPass {
     // texturas podem ter nulos no array (slots vazios) -> Option.
     #[serde(default)]
     textures: Vec<Option<String>>,
+    #[serde(default)]
+    blending: Option<String>, // "translucent" | "additive" | ...
 }
 
 #[derive(serde::Deserialize)]
@@ -59,6 +61,15 @@ fn first_texture(material_json: &str) -> Option<String> {
     mat.passes.into_iter().find_map(|p| p.textures.into_iter().flatten().next())
 }
 
+// O modo de blending do primeiro pass (default "translucent").
+fn first_blending(material_json: &str) -> String {
+    serde_json::from_str::<MaterialRaw>(material_json)
+        .ok()
+        .and_then(|m| m.passes.into_iter().next())
+        .and_then(|p| p.blending)
+        .unwrap_or_else(|| "translucent".to_string())
+}
+
 // Integra tudo: dado um pkg de cena, resolve o caminho do .tex de fundo.
 pub fn background_texture(pkg: &Pkg) -> Option<String> {
     let scene = std::str::from_utf8(pkg.read("scene.json")?).ok()?;
@@ -76,7 +87,8 @@ pub fn background_texture(pkg: &Pkg) -> Option<String> {
 // Um sistema de partículas da cena, já com o nome da textura do sprite resolvido.
 pub struct SceneParticles {
     pub system: ParticleSystem,
-    pub texture: String, // ex.: "particle/halo" (o engine resolve pro .tex)
+    pub texture: String,    // ex.: "particle/halo" (o engine resolve pro .tex)
+    pub additive: bool,     // blend do material: additive (luz) vs translucent
 }
 
 // Extrai todos os sistemas de partículas da cena (objetos com "particle").
@@ -95,13 +107,11 @@ pub fn particle_systems(pkg: &Pkg) -> Vec<SceneParticles> {
             continue;
         };
         let Ok(system) = ParticleSystem::parse(pjson) else { continue };
-        // material -> nome da textura do sprite
-        let texture = pkg
-            .read(&system.material)
-            .and_then(|b| std::str::from_utf8(b).ok())
-            .and_then(first_texture)
-            .unwrap_or_default();
-        out.push(SceneParticles { system, texture });
+        // material -> nome da textura do sprite + modo de blend
+        let material_json = pkg.read(&system.material).and_then(|b| std::str::from_utf8(b).ok());
+        let texture = material_json.and_then(first_texture).unwrap_or_default();
+        let additive = material_json.map(first_blending).as_deref() == Some("additive");
+        out.push(SceneParticles { system, texture, additive });
     }
     out
 }
