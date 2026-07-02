@@ -8,8 +8,11 @@
 //   dados podem ser LZ4 (compression==1). Formato final vem de `format` ou, nos
 //   TEXB0003/0004, de uma imagem embutida (JPEG/PNG) decodificada pela crate image.
 
-// Formatos que sabemos converter; DXT e cia. dão erro claro.
+// Formatos que sabemos converter; o resto dá erro claro.
 const FORMAT_ARGB8888: u32 = 0;
+const FORMAT_DXT5: u32 = 4; // BC3
+const FORMAT_DXT3: u32 = 6; // BC2
+const FORMAT_DXT1: u32 = 7; // BC1
 const FORMAT_RG88: u32 = 8; // 2 canais (R,G) — sprites com alpha no canal G
 const FORMAT_R8: u32 = 9; // 1 canal — máscara (luminância = alpha)
 const FIF_UNKNOWN: u32 = 0xFFFF_FFFF; // FreeImage: sem formato = -1
@@ -163,8 +166,19 @@ pub fn parse(data: &[u8]) -> Result<DecodedTexture, String> {
             }
             make(rgba)
         }
+        // DXT/BC (S3TC): blocos 4x4 comprimidos -> RGBA via texpresso.
+        FORMAT_DXT1 | FORMAT_DXT3 | FORMAT_DXT5 => {
+            let bc = match format {
+                FORMAT_DXT1 => texpresso::Format::Bc1,
+                FORMAT_DXT3 => texpresso::Format::Bc2,
+                _ => texpresso::Format::Bc3,
+            };
+            let mut rgba = vec![0u8; (mip_w * mip_h * 4) as usize];
+            bc.decompress(&raw, mip_w as usize, mip_h as usize, &mut rgba);
+            make(rgba)
+        }
         other => Err(format!(
-            "formato de textura {other} ainda não suportado (só ARGB8888/RG88/R8/free-image)"
+            "formato de textura {other} ainda não suportado (ARGB8888/RG88/R8/DXT/free-image)"
         )),
     }
 }

@@ -79,7 +79,7 @@ puxe de `/proc/<plasmashell>/environ`):
 - **.tex** (`TEXV0005`/`TEXI0001`): header com `format` (0=ARGB8888, 4=DXT5,
   6=DXT3, 7=DXT1, ...), flags, dims. Container `TEXB0001..0004` (LZ4 quando
   `compression==1`; TEXB0003/4 podem ter imagem **free-image** JPEG/PNG embutida).
-  **Suportamos ARGB8888, RG88, R8 e free-image; DXT NÃO.** ARGB8888 (apesar do
+  **Suportamos ARGB8888, RG88, R8, DXT1/3/5 (via texpresso) e free-image.** ARGB8888 (apesar do
   nome) já vem em ordem **RGBA** — NÃO trocar canais (o WE faz upload como
   GL_RGBA; trocar R↔B faz vermelho virar azul, invisível em grayscale). RG88 =
   luminância(R)+alpha(G) → expandido pra (R,R,R,G); R8 = máscara (R,R,R,R).
@@ -119,8 +119,7 @@ puxe de `/proc/<plasmashell>/environ`):
 
 ## Limitações e pegadinhas conhecidas
 
-- **DXT não é decodificado** — cenas cujo fundo/texturas são DXT falham
-  ("formato N não suportado"). Maior ganho de cobertura futuro seria implementar DXT.
+- **DXT decodificado** (DXT1/3/5 via texpresso) — fundos e sprites DXT funcionam.
 - **Sprite POR sistema** (implementado): cada sistema carrega sua própria textura
   (ex.: `drop` 32x128, `light_shafts` 256x512 RG88, `chromaticdot` 64x64),
   recortada pro conteúdo. Cada sistema é um range no buffer de instâncias,
