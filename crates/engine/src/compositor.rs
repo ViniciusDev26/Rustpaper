@@ -69,6 +69,7 @@ fn layer_quad(l: &Layer) -> [f32; 20] {
 }
 
 // Um efeito resolvido de uma camada: shader + combos + constants (já mesclados).
+#[allow(dead_code)]
 struct EffectPassGpu {
     key: String,
     constants: HashMap<String, Vec<f32>>,
@@ -192,8 +193,10 @@ impl Compositor {
             let vbuf = device.create_buffer(&wgpu::BufferDescriptor { label: Some("vb"), size: 80, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
             queue.write_buffer(&vbuf, 0, bytemuck::cast_slice(&verts));
 
-            // efeitos SIMPLES da camada
-            let fx = build_effects(device, queue, &pkg, &mut programs, &layer.effects);
+            // efeitos por camada desligados por ora (ver render). Não compilamos os
+            // shaders de efeito no startup (economiza dezenas de chamadas ao glslang).
+            let _ = &layer.effects;
+            let fx: Vec<EffectPassGpu> = Vec::new();
 
             layers.push(LayerGpu {
                 key, _tex: ltex, tex_view, extra, vbuf,
@@ -216,7 +219,7 @@ impl Compositor {
                 continue;
             }
             let Some((rgba, sw, sh)) = load_sprite(&pkg, &sp.texture) else { continue };
-            inits.push(ParticleInit { system: sp.system, additive: sp.additive, sprite_rgba: rgba, sprite_w: sw, sprite_h: sh });
+            inits.push(ParticleInit { system: sp.system, additive: sp.additive, sprite_rgba: rgba, sprite_w: sw, sprite_h: sh, origin: sp.origin });
         }
         let particles = if inits.is_empty() {
             None
@@ -235,34 +238,19 @@ impl Compositor {
     /// Renderiza a cena inteira na textura `target` (deve ter o tamanho da cena e
     /// usage RENDER_ATTACHMENT). `time` alimenta g_Time; `dt` avança as partículas.
     pub fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, time: f32, dt: f32, target: &wgpu::TextureView) {
-        let (w, h) = (self.width, self.height);
         let mut first = true;
         for layer in &self.layers {
-            // 1) renderiza a camada (no target direto, ou num scratch se tiver efeito)
-            let has_fx = !layer.effects.is_empty();
-            let scratch_a_view = self.scratch_a.create_view(&Default::default());
-            let layer_target = if has_fx { &scratch_a_view } else { target };
-            let layer_load = if has_fx {
-                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
-            } else if first {
+            // Desenha a camada DIRETO no target. (Efeitos por camada estão desligados
+            // por ora: a maioria das cenas tem cadeias enormes e frágeis que, aplicadas
+            // parcialmente, destroem a imagem — sai pior que sem efeito. O caminho de
+            // efeitos existe em draw_effect/composite e será religado por-efeito quando
+            // cada um estiver confiável.)
+            let load = if first {
                 wgpu::LoadOp::Clear(wgpu::Color { r: self.clear[0] as f64, g: self.clear[1] as f64, b: self.clear[2] as f64, a: 1.0 })
             } else {
                 wgpu::LoadOp::Load
             };
-            self.draw_layer(device, queue, layer, time, layer_target, layer_load, if has_fx { Blend::Alpha } else { layer.blend });
-
-            // 2) efeitos da camada (ping-pong sobre o scratch)
-            if has_fx {
-                let mut src_is_a = true;
-                for fx in &layer.effects {
-                    let (src, dst) = if src_is_a { (&self.scratch_a, &self.scratch_b) } else { (&self.scratch_b, &self.scratch_a) };
-                    self.draw_effect(device, queue, fx, time, w, h, &src.create_view(&Default::default()), &dst.create_view(&Default::default()));
-                    src_is_a = !src_is_a;
-                }
-                // 3) compõe o resultado do scratch no target com o blend da camada
-                let result = if src_is_a { &self.scratch_a } else { &self.scratch_b };
-                self.composite(device, queue, &result.create_view(&Default::default()), target, first, layer.blend);
-            }
+            self.draw_layer(device, queue, layer, time, target, load, layer.blend);
             first = false;
         }
 
@@ -322,6 +310,7 @@ impl Compositor {
     }
 
     // desenha um efeito fullscreen amostrando `src` -> `dst`
+    #[allow(dead_code)]
     fn draw_effect(&self, device: &wgpu::Device, queue: &wgpu::Queue, fx: &EffectPassGpu, time: f32, w: u32, h: u32, src: &wgpu::TextureView, dst: &wgpu::TextureView) {
         let prog = &self.programs[&fx.key];
         // quad fullscreen em espaço de cena (a cena inteira)
@@ -360,6 +349,7 @@ impl Compositor {
     }
 
     // compõe uma textura fullscreen no target, com blend (usa o programa de composição)
+    #[allow(dead_code)]
     fn composite(&self, device: &wgpu::Device, queue: &wgpu::Queue, src: &wgpu::TextureView, target: &wgpu::TextureView, first: bool, blend: Blend) {
         let prog = self.programs.get(COMPOSITE_KEY).expect("composite program");
         let w = self.width;
@@ -400,6 +390,7 @@ impl Compositor {
 const COMPOSITE_KEY: &str = "__composite__";
 
 // resolve os efeitos simples de uma camada em EffectPassGpu (compilando programas).
+#[allow(dead_code)]
 fn build_effects(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
