@@ -16,6 +16,7 @@ pub struct ParticleInit {
     pub sprite_w: u32,
     pub sprite_h: u32,
     pub origin: [f32; 3], // posição do objeto na cena (emitter é local a ela)
+    pub scale: f32,       // escala do objeto (tamanho/velocidade/distância/gravidade)
     pub sheet: Option<we_core::tex::SpriteSheet>, // flipbook (None = sprite único)
 }
 
@@ -61,14 +62,15 @@ struct Sim {
     sys: ParticleSystem,
     additive: bool,
     origin: [f32; 3], // posição do objeto na cena (somada ao emitter local)
+    scale: f32,       // escala do objeto (tamanho/velocidade/distância/gravidade)
     sheet: Option<we_core::tex::SpriteSheet>,
     particles: Vec<Particle>,
     spawn_accum: f32,
 }
 
 impl Sim {
-    fn new(sys: ParticleSystem, additive: bool, origin: [f32; 3], sheet: Option<we_core::tex::SpriteSheet>) -> Self {
-        Sim { sys, additive, origin, sheet, particles: Vec::new(), spawn_accum: 0.0 }
+    fn new(sys: ParticleSystem, additive: bool, origin: [f32; 3], scale: f32, sheet: Option<we_core::tex::SpriteSheet>) -> Self {
+        Sim { sys, additive, origin, scale, sheet, particles: Vec::new(), spawn_accum: 0.0 }
     }
 
     fn update(&mut self, dt: f32, rng: &mut Rng) {
@@ -88,7 +90,7 @@ impl Sim {
             if self.particles.len() >= self.sys.max_count as usize {
                 break;
             }
-            let dist = rng.range(self.sys.distance_min, self.sys.distance_max).max(0.0);
+            let dist = rng.range(self.sys.distance_min, self.sys.distance_max).max(0.0) * self.scale;
             let dir = [rng.range(-1.0, 1.0), rng.range(-1.0, 1.0), rng.range(-1.0, 1.0)];
             let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-3);
             let pos = [
@@ -121,12 +123,15 @@ impl Sim {
                 }
                 None => rng.range3(self.sys.velocity_min, self.sys.velocity_max),
             };
+            // Só o TAMANHO escala com o objeto (escala 0.1 => bolhas pequenas). A
+            // velocidade fica cheia pra as bolhas VIAJAREM e se espalharem (escalar a
+            // velocidade também as deixaria paradas, agrupando tudo num ponto).
             self.particles.push(Particle {
                 pos,
                 vel,
                 age: 0.0,
                 life: rng.range(self.sys.lifetime.0, self.sys.lifetime.1).max(0.1),
-                size: rng.range(self.sys.size.0, self.sys.size.1),
+                size: rng.range(self.sys.size.0, self.sys.size.1) * self.scale,
                 color,
                 osc_freq,
                 osc_phase,
@@ -327,7 +332,7 @@ impl Particles {
                 ],
             });
             systems.push(SystemGpu {
-                sim: Sim::new(init.system, init.additive, init.origin, init.sheet),
+                sim: Sim::new(init.system, init.additive, init.origin, init.scale, init.sheet),
                 bind_group,
                 range: 0..0,
             });
