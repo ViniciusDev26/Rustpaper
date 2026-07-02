@@ -398,6 +398,10 @@ impl Particles {
                 }
                 None => [p.color[0] / 255.0, p.color[1] / 255.0, p.color[2] / 255.0],
             };
+            // Aditivo sem HDR/tonemap satura em branco quando sprites se sobrepõem.
+            // O WE compõe em HDR e faz tonemap; nós amortecemos a contribuição pra
+            // manter o brilho sutil (aproxima o resultado tonemapeado).
+            let rgb = if sim.additive { [rgb[0] * 0.35, rgb[1] * 0.35, rgb[2] * 0.35] } else { rgb };
             let hx = p.size / (scene[0] * 0.5);
             // Sprite sheet: escolhe a célula do frame pela idade (toca a animação uma
             // vez ao longo da vida). Sem sheet, usa a textura inteira (0..1).
