@@ -48,13 +48,14 @@ struct Particle {
 // Simulação de um sistema (parâmetros + partículas vivas + acumulador de spawn).
 struct Sim {
     sys: ParticleSystem,
+    additive: bool, // blend do material (additive = luz que soma; senão alpha)
     particles: Vec<Particle>,
     spawn_accum: f32,
 }
 
 impl Sim {
-    fn new(sys: ParticleSystem) -> Self {
-        Sim { sys, particles: Vec::new(), spawn_accum: 0.0 }
+    fn new(sys: ParticleSystem, additive: bool) -> Self {
+        Sim { sys, additive, particles: Vec::new(), spawn_accum: 0.0 }
     }
 
     fn update(&mut self, dt: f32, rng: &mut Rng) {
@@ -145,11 +146,15 @@ struct Instance {
 pub struct Particles {
     sims: Vec<Sim>,
     scene_size: [f32; 2], // dims do conteúdo da cena (mapeia pos -> clip)
-    pipeline: wgpu::RenderPipeline,
+    alpha_pipeline: wgpu::RenderPipeline,    // blend translucent
+    additive_pipeline: wgpu::RenderPipeline, // blend additive (luz)
     bind_group: wgpu::BindGroup,
     instance_buffer: wgpu::Buffer,
     capacity: usize,
     rng: Rng,
+    // Instâncias no buffer: [0..n_alpha) translucent, [n_alpha..n_total) additive.
+    n_alpha: u32,
+    n_total: u32,
 }
 
 impl Particles {
@@ -157,13 +162,14 @@ impl Particles {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
-        systems: Vec<ParticleSystem>,
+        systems: Vec<(ParticleSystem, bool)>, // (sistema, additive)
         sprite_rgba: &[u8],
         sprite_w: u32,
         sprite_h: u32,
         scene_size: [f32; 2],
     ) -> Self {
-        let capacity: usize = systems.iter().map(|s| s.max_count as usize).sum::<usize>().max(1);
+        let capacity: usize =
+            systems.iter().map(|(s, _)| s.max_count as usize).sum::<usize>().max(1);
 
         // Textura do sprite (compartilhada por todas as partículas).
         let extent = wgpu::Extent3d { width: sprite_w, height: sprite_h, depth_or_array_layers: 1 };
@@ -202,46 +208,95 @@ impl Particles {
 
         let shader = device.create_shader_module(wgpu::include_wgsl!("particle.wgsl"));
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("particle pipeline"),
-            layout: None,
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                // Um buffer de instância: 3 atributos (center, half, color).
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<Instance>() as u64,
-                    step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &[
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 16, shader_location: 2 },
-                    ],
-                }],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    // Alpha blending (translucent).
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
+        // Layout do buffer de instância (center, half, color) — igual pros 2 pipelines.
+        let instance_layout = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Instance>() as u64,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &[
+                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
+                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
+                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 16, shader_location: 2 },
+            ],
+        };
+        // Bind group layout EXPLÍCITO (textura + sampler), compartilhado pelos 2
+        // pipelines. Com layout: None cada pipeline derivaria um layout próprio, e
+        // eles seriam incompatíveis entre si (o bind group de um não serve no outro).
+        let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("particle bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("particle pl"),
+            bind_group_layouts: &[Some(&bgl)],
+            immediate_size: 0,
         });
 
-        let bind_group_layout = pipeline.get_bind_group_layout(0);
+        // Cria um pipeline igual, variando só o blend.
+        let make_pipeline = |blend: wgpu::BlendState, label: &str| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: std::slice::from_ref(&instance_layout),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: Some(blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let alpha_pipeline = make_pipeline(wgpu::BlendState::ALPHA_BLENDING, "particle alpha");
+        // Additive: cor soma ao fundo (luz). src*srcAlpha + dst*1.
+        let additive_pipeline = make_pipeline(
+            wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::SrcAlpha,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Add,
+                },
+            },
+            "particle additive",
+        );
+
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("particle bind group"),
-            layout: &bind_group_layout,
+            layout: &bgl,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
@@ -256,84 +311,99 @@ impl Particles {
         });
 
         Particles {
-            sims: systems.into_iter().map(Sim::new).collect(),
+            sims: systems.into_iter().map(|(s, add)| Sim::new(s, add)).collect(),
             scene_size,
-            pipeline,
+            alpha_pipeline,
+            additive_pipeline,
             bind_group,
             instance_buffer,
             capacity,
             rng: Rng::new(0x9E3779B97F4A7C15),
+            n_alpha: 0,
+            n_total: 0,
         }
     }
 
     // Avança a simulação por `dt` e sobe as instâncias vivas pra GPU. Devolve
     // quantas instâncias desenhar.
-    pub fn update(&mut self, dt: f32, queue: &wgpu::Queue) -> u32 {
+    pub fn update(&mut self, dt: f32, queue: &wgpu::Queue) {
         for sim in &mut self.sims {
             sim.update(dt, &mut self.rng);
         }
 
-        // Pra o sprite ficar quadrado na tela: como o clip (-1..1) é esticado pro
-        // aspecto da tela, multiplicamos o meio-tamanho Y pelo aspecto da cena
-        // (que assumimos igual ao da tela — monitores 16:9 = cena 16:9).
         let scene_aspect = self.scene_size[0] / self.scene_size[1];
+        let cap = self.capacity;
+        let scene = self.scene_size;
 
+        // Monta as instâncias em 2 grupos contíguos: primeiro os translucent
+        // (alpha), depois os additive — pra desenhar cada um com seu pipeline.
         let mut instances: Vec<Instance> = Vec::new();
-        for sim in &self.sims {
-            for p in &sim.particles {
-                if instances.len() >= self.capacity {
-                    break;
-                }
-                let a = sim.alpha(p);
-                if a <= 0.0 {
-                    continue;
-                }
-
-                // Oscilação (balanço): desloca a posição num seno, por eixo (mask).
-                let (mut px, mut py) = (p.pos[0], p.pos[1]);
-                if let Some(osc) = &sim.sys.oscillate {
-                    use std::f32::consts::TAU;
-                    let s = p.osc_scale * (TAU * p.osc_freq * p.age + p.osc_phase * TAU).sin();
-                    px += osc.mask[0] * s;
-                    py += osc.mask[1] * s;
-                }
-
-                // Cor: colorchange (0..1, anima ao longo da vida) tem prioridade;
-                // senão a cor base do colorrandom (0-255).
-                let rgb = match &sim.sys.color_change {
-                    Some(cc) => {
-                        let denom = (cc.end_time - cc.start_time).max(1e-3);
-                        let f = ((p.age / p.life - cc.start_time) / denom).clamp(0.0, 1.0);
-                        [
-                            cc.start[0] + f * (cc.end[0] - cc.start[0]),
-                            cc.start[1] + f * (cc.end[1] - cc.start[1]),
-                            cc.start[2] + f * (cc.end[2] - cc.start[2]),
-                        ]
-                    }
-                    None => [p.color[0] / 255.0, p.color[1] / 255.0, p.color[2] / 255.0],
-                };
-
-                let hx = p.size / (self.scene_size[0] * 0.5);
-                instances.push(Instance {
-                    center: [px / (self.scene_size[0] * 0.5), py / (self.scene_size[1] * 0.5)],
-                    half: [hx, hx * scene_aspect],
-                    color: [rgb[0], rgb[1], rgb[2], a],
-                });
-            }
+        for sim in self.sims.iter().filter(|s| !s.additive) {
+            Self::emit(sim, &mut instances, scene, scene_aspect, cap);
         }
+        self.n_alpha = instances.len() as u32;
+        for sim in self.sims.iter().filter(|s| s.additive) {
+            Self::emit(sim, &mut instances, scene, scene_aspect, cap);
+        }
+        self.n_total = instances.len() as u32;
 
         queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instances));
-        instances.len() as u32
     }
 
-    // Desenha as `count` instâncias no render pass (chamar depois do fundo).
-    pub fn draw(&self, pass: &mut wgpu::RenderPass, count: u32) {
-        if count == 0 {
-            return;
+    // Gera as instâncias de um sistema (oscilação, colorchange, mapeamento p/ clip).
+    fn emit(sim: &Sim, out: &mut Vec<Instance>, scene: [f32; 2], scene_aspect: f32, cap: usize) {
+        for p in &sim.particles {
+            if out.len() >= cap {
+                break;
+            }
+            let a = sim.alpha(p);
+            if a <= 0.0 {
+                continue;
+            }
+
+            // Oscilação (balanço): desloca a posição num seno, por eixo (mask).
+            let (mut px, mut py) = (p.pos[0], p.pos[1]);
+            if let Some(osc) = &sim.sys.oscillate {
+                use std::f32::consts::TAU;
+                let s = p.osc_scale * (TAU * p.osc_freq * p.age + p.osc_phase * TAU).sin();
+                px += osc.mask[0] * s;
+                py += osc.mask[1] * s;
+            }
+
+            // Cor: colorchange (0..1) tem prioridade; senão colorrandom (0-255).
+            let rgb = match &sim.sys.color_change {
+                Some(cc) => {
+                    let denom = (cc.end_time - cc.start_time).max(1e-3);
+                    let f = ((p.age / p.life - cc.start_time) / denom).clamp(0.0, 1.0);
+                    [
+                        cc.start[0] + f * (cc.end[0] - cc.start[0]),
+                        cc.start[1] + f * (cc.end[1] - cc.start[1]),
+                        cc.start[2] + f * (cc.end[2] - cc.start[2]),
+                    ]
+                }
+                None => [p.color[0] / 255.0, p.color[1] / 255.0, p.color[2] / 255.0],
+            };
+
+            let hx = p.size / (scene[0] * 0.5);
+            out.push(Instance {
+                center: [px / (scene[0] * 0.5), py / (scene[1] * 0.5)],
+                half: [hx, hx * scene_aspect],
+                color: [rgb[0], rgb[1], rgb[2], a],
+            });
         }
-        pass.set_pipeline(&self.pipeline);
+    }
+
+    // Desenha os 2 grupos (chamar depois do fundo): translucent + additive.
+    pub fn draw(&self, pass: &mut wgpu::RenderPass) {
         pass.set_bind_group(0, &self.bind_group, &[]);
         pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
-        pass.draw(0..6, 0..count); // 6 vértices (2 triângulos) por instância
+        if self.n_alpha > 0 {
+            pass.set_pipeline(&self.alpha_pipeline);
+            pass.draw(0..6, 0..self.n_alpha);
+        }
+        if self.n_total > self.n_alpha {
+            pass.set_pipeline(&self.additive_pipeline);
+            pass.draw(0..6, self.n_alpha..self.n_total);
+        }
     }
 }

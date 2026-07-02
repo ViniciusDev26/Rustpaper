@@ -18,8 +18,8 @@ pub enum Source {
         height: u32,
         real_width: u32, // região de conteúdo
         real_height: u32,
-        particles: Vec<ParticleSystem>,
-        sprite: Option<(Vec<u8>, u32, u32)>, // textura do sprite (rgba, w, h)
+        particles: Vec<(ParticleSystem, bool)>, // (sistema, additive)
+        sprite: Option<(Vec<u8>, u32, u32)>,    // textura do sprite (rgba, w, h)
     },
 }
 
@@ -59,7 +59,6 @@ pub struct Renderer {
     last_gen: AtomicU64,
     // Partículas da cena (simulação + render instanciado). None p/ vídeo/imagem.
     particles: Option<Particles>,
-    particle_count: u32,
     last_frame: std::time::Instant,
 }
 
@@ -227,7 +226,6 @@ impl Renderer {
             extent,
             last_gen: AtomicU64::new(0),
             particles,
-            particle_count: 0,
             last_frame: std::time::Instant::now(),
         }
     }
@@ -239,7 +237,7 @@ impl Renderer {
         let dt = (now - self.last_frame).as_secs_f32().min(0.1); // clampa picos
         self.last_frame = now;
         if let Some(p) = self.particles.as_mut() {
-            self.particle_count = p.update(dt, &self.queue);
+            p.update(dt, &self.queue);
         }
     }
 
@@ -339,9 +337,9 @@ impl Renderer {
             render_pass.set_bind_group(0, &self.bind_group, &[]);
             render_pass.draw(0..3, 0..1);
 
-            // Partículas por cima (instanciadas, com alpha blend).
+            // Partículas por cima (instanciadas, blend por sistema).
             if let Some(p) = self.particles.as_ref() {
-                p.draw(&mut render_pass, self.particle_count);
+                p.draw(&mut render_pass);
             }
         }
 
