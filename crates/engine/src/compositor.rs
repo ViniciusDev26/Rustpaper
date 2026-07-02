@@ -20,9 +20,9 @@ use crate::program::{ortho, Blend, Program};
 
 const BASE: &str = "/home/vscode/we-assets";
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
-// Partículas ligadas? Desligadas até o simulador reproduzir os sistemas do WE com
-// fidelidade (hoje saem como "quadrados de bolhas"). Ver nota em Compositor::new.
-const PARTICLES_ENABLED: bool = false;
+// Partículas ligadas? Agora com sprite sheet (flipbook) — antes os "quadrados de
+// bolhas" eram a grade inteira do sheet amostrada de uma vez.
+const PARTICLES_ENABLED: bool = true;
 
 fn resolve(pkg: &Pkg, path: &str) -> Option<Vec<u8>> {
     pkg.read(path).map(|b| b.to_vec()).or_else(|| std::fs::read(PathBuf::from(BASE).join(path)).ok())
@@ -227,7 +227,11 @@ impl Compositor {
                     continue;
                 }
                 let Some((rgba, sw, sh)) = load_sprite(&pkg, &sp.texture) else { continue };
-                inits.push(ParticleInit { system: sp.system, additive: sp.additive, sprite_rgba: rgba, sprite_w: sw, sprite_h: sh, origin: sp.origin });
+                // sprite sheet (flipbook) via o JSON companheiro do .tex, se houver.
+                let sheet = resolve(&pkg, &format!("materials/{}.tex-json", sp.texture))
+                    .and_then(|b| String::from_utf8(b).ok())
+                    .and_then(|j| we_core::tex::parse_spritesheet(&j, sw, sh));
+                inits.push(ParticleInit { system: sp.system, additive: sp.additive, sprite_rgba: rgba, sprite_w: sw, sprite_h: sh, origin: sp.origin, sheet });
             }
             (!inits.is_empty()).then(|| Particles::new(device, queue, FORMAT, inits, [lay.width, lay.height]))
         } else {

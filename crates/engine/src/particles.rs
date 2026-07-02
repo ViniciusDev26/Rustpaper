@@ -16,6 +16,7 @@ pub struct ParticleInit {
     pub sprite_w: u32,
     pub sprite_h: u32,
     pub origin: [f32; 3], // posição do objeto na cena (emitter é local a ela)
+    pub sheet: Option<we_core::tex::SpriteSheet>, // flipbook (None = sprite único)
 }
 
 // PRNG minúsculo (xorshift64*), determinístico, sem crate externa.
@@ -60,13 +61,14 @@ struct Sim {
     sys: ParticleSystem,
     additive: bool,
     origin: [f32; 3], // posição do objeto na cena (somada ao emitter local)
+    sheet: Option<we_core::tex::SpriteSheet>,
     particles: Vec<Particle>,
     spawn_accum: f32,
 }
 
 impl Sim {
-    fn new(sys: ParticleSystem, additive: bool, origin: [f32; 3]) -> Self {
-        Sim { sys, additive, origin, particles: Vec::new(), spawn_accum: 0.0 }
+    fn new(sys: ParticleSystem, additive: bool, origin: [f32; 3], sheet: Option<we_core::tex::SpriteSheet>) -> Self {
+        Sim { sys, additive, origin, sheet, particles: Vec::new(), spawn_accum: 0.0 }
     }
 
     fn update(&mut self, dt: f32, rng: &mut Rng) {
@@ -153,6 +155,8 @@ struct Instance {
     center: [f32; 2],
     half: [f32; 2],
     color: [f32; 4],
+    uv_offset: [f32; 2], // canto do frame no sprite sheet
+    uv_scale: [f32; 2],  // tamanho do frame (1,1 se não for sheet)
 }
 
 // Um sistema já pronto na GPU: a simulação + o bind group do seu sprite + o range
@@ -221,6 +225,8 @@ impl Particles {
                 wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
                 wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
                 wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 16, shader_location: 2 },
+                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 32, shader_location: 3 },
+                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 40, shader_location: 4 },
             ],
         };
         let make_pipeline = |blend: wgpu::BlendState, label: &str| {
@@ -321,7 +327,7 @@ impl Particles {
                 ],
             });
             systems.push(SystemGpu {
-                sim: Sim::new(init.system, init.additive, init.origin),
+                sim: Sim::new(init.system, init.additive, init.origin, init.sheet),
                 bind_group,
                 range: 0..0,
             });
@@ -393,12 +399,28 @@ impl Particles {
                 None => [p.color[0] / 255.0, p.color[1] / 255.0, p.color[2] / 255.0],
             };
             let hx = p.size / (scene[0] * 0.5);
+            // Sprite sheet: escolhe a célula do frame pela idade (toca a animação uma
+            // vez ao longo da vida). Sem sheet, usa a textura inteira (0..1).
+            let (uv_offset, uv_scale) = match sim.sheet {
+                Some(s) => {
+                    let f = ((p.age / p.life) * s.frames as f32).floor() as u32;
+                    let f = f.min(s.frames.saturating_sub(1));
+                    let (col, row) = (f % s.cols, f / s.cols);
+                    (
+                        [col as f32 / s.cols as f32, row as f32 / s.rows as f32],
+                        [1.0 / s.cols as f32, 1.0 / s.rows as f32],
+                    )
+                }
+                None => ([0.0, 0.0], [1.0, 1.0]),
+            };
             // Posição da cena (0..scene, y pra baixo) -> clip space [-1,1] com Y
             // invertido. Sem o -1/flip as partículas ficavam presas num quadrado.
             out.push(Instance {
                 center: [px / (scene[0] * 0.5) - 1.0, 1.0 - py / (scene[1] * 0.5)],
                 half: [hx, hx * scene_aspect],
                 color: [rgb[0], rgb[1], rgb[2], a],
+                uv_offset,
+                uv_scale,
             });
         }
     }

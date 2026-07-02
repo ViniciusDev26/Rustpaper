@@ -3,9 +3,11 @@
 // do buffer de instância.
 
 struct Instance {
-    @location(0) center: vec2<f32>, // clip space
-    @location(1) half: vec2<f32>,   // meio-tamanho em clip
+    @location(0) center: vec2<f32>,     // clip space
+    @location(1) half: vec2<f32>,       // meio-tamanho em clip
     @location(2) color: vec4<f32>,
+    @location(3) uv_offset: vec2<f32>,  // canto do frame no sprite sheet (0..1)
+    @location(4) uv_scale: vec2<f32>,   // tamanho do frame (1,1 se não for sheet)
 };
 
 struct VOut {
@@ -27,7 +29,8 @@ fn vs_main(@builtin(vertex_index) vi: u32, inst: Instance) -> VOut {
     let c = corners[vi];
     var out: VOut;
     out.pos = vec4<f32>(inst.center + c * inst.half, 0.0, 1.0);
-    out.uv = c * 0.5 + 0.5;
+    // uv local (0..1) mapeado pra célula do frame no sprite sheet.
+    out.uv = inst.uv_offset + (c * 0.5 + 0.5) * inst.uv_scale;
     out.color = inst.color;
     return out;
 }

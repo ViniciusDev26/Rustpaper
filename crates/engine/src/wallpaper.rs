@@ -136,6 +136,7 @@ fn scene_source(dir: &Path) -> Source {
             sprite_w,
             sprite_h,
             origin: sp.origin,
+            sheet: None,
         });
     }
     if total > 0 {

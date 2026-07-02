@@ -17,6 +17,31 @@ const FORMAT_RG88: u32 = 8; // 2 canais (R,G) — sprites com alpha no canal G
 const FORMAT_R8: u32 = 9; // 1 canal — máscara (luminância = alpha)
 const FIF_UNKNOWN: u32 = 0xFFFF_FFFF; // FreeImage: sem formato = -1
 
+/// Sprite sheet (flipbook) de uma textura: N frames numa grade cols×rows. Muitas
+/// partículas do WE (bolhas, faíscas) animam por esses frames ao longo da vida.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SpriteSheet {
+    pub frames: u32,
+    pub cols: u32,
+    pub rows: u32,
+}
+
+/// Lê o sprite sheet do JSON companheiro do .tex (`spritesheetsequences`), dado o
+/// tamanho da textura. Ex.: frames=64, cell 128×128 em 1024×1024 → 8×8.
+pub fn parse_spritesheet(tex_json: &str, tex_w: u32, tex_h: u32) -> Option<SpriteSheet> {
+    let v: serde_json::Value = serde_json::from_str(tex_json).ok()?;
+    let seq = v.get("spritesheetsequences")?.as_array()?.first()?;
+    let frames = seq.get("frames")?.as_u64()? as u32;
+    let cw = seq.get("width")?.as_u64()? as u32;
+    let ch = seq.get("height")?.as_u64()? as u32;
+    if frames == 0 || cw == 0 || ch == 0 {
+        return None;
+    }
+    let cols = (tex_w / cw).max(1);
+    let rows = (tex_h / ch).max(1);
+    Some(SpriteSheet { frames, cols, rows })
+}
+
 pub struct DecodedTexture {
     pub width: u32,       // dims do buffer decodificado (pode vir com padding)
     pub height: u32,
