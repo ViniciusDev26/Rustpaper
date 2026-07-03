@@ -227,6 +227,14 @@ Sem áudio/widgets no escopo. Onde estamos vs. a meta:
   `cargo build --workspace --all-targets` e `cargo test --workspace`. Rode
   `cargo fmt --all` e `cargo clippy --fix` localmente antes de commitar pra não
   quebrar o gate.
+- **Imagem de CI** (`docker/ci/Dockerfile`): Ubuntu 24.04 + toolchain Rust (stable
+  + rustfmt/clippy) + as deps de sistema do workspace (wayland/xkbcommon/glslang
+  pro engine, webkit2gtk/gtk do Tauri pro selector), publicada em
+  `ghcr.io/viniciusdev26/rustpaper-ci`. O próprio `ci.yml` builda/publica essa
+  imagem (job `image`, com cache de camadas) ANTES dos outros jobs, então ela
+  nunca fica desatualizada em relação ao Dockerfile do commit — não precisa de
+  workflow separado nem de rebuild manual. Mudou uma dependência de sistema? Só
+  editar o Dockerfile; o próximo push já refaz a imagem.
 
 ## Roadmap / frentes abertas
 
