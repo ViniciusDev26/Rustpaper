@@ -22,8 +22,12 @@ permissions:
 jobs:
   # Builda/publica a imagem de CI (docker/ci/Dockerfile: Ubuntu 24.04 + toolchain
   # Rust + deps de sistema do workspace) ANTES dos outros jobs, pra garantir que a
-  # tag `:latest` usada abaixo sempre reflete o Dockerfile deste commit. Se o
-  # Dockerfile não mudou, o cache (type=gha) faz isso ser praticamente instantâneo.
+  # tag usada abaixo sempre reflete o Dockerfile deste commit. Se o Dockerfile não
+  # mudou, o cache (type=gha) faz isso ser praticamente instantâneo.
+  #
+  # Tag por evento: push na main publica `:latest` (o que os outros runs de main
+  # esperam encontrar); PR publica numa tag isolada `:pr-<número>`, pra rodar a
+  # suíte da PR sem sobrescrever o `:latest` que a main usa.
   image:
     name: Build CI image
     runs-on: ubuntu-latest
@@ -37,16 +41,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/setup-buildx-action@v3
+      - id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "image=${{ env.IMAGE }}:pr-${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "image=${{ env.IMAGE }}:latest" >> "$GITHUB_OUTPUT"
+          fi
       - uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/ci/Dockerfile
           push: true
-          tags: ${{ env.IMAGE }}:latest
+          tags: ${{ steps.tag.outputs.image }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - id: tag
-        run: echo "image=${{ env.IMAGE }}:latest" >> "$GITHUB_OUTPUT"
 
   fmt:
     name: Format
@@ -64,7 +73,12 @@ jobs:
     container: ${{ needs.image.outputs.image }}
     steps:
       - uses: actions/checkout@v4
+      # shared-key fixo: sem isso, o rust-cache usa o nome do job na chave e
+      # clippy/build/test cada um recompila as deps (wgpu, webkit2gtk-sys, gtk...)
+      # do zero, mesmo rodando logo em seguida um do outro na mesma imagem.
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rustpaper-ci
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   build:
@@ -74,7 +88,12 @@ jobs:
     container: ${{ needs.image.outputs.image }}
     steps:
       - uses: actions/checkout@v4
+      # shared-key fixo: sem isso, o rust-cache usa o nome do job na chave e
+      # clippy/build/test cada um recompila as deps (wgpu, webkit2gtk-sys, gtk...)
+      # do zero, mesmo rodando logo em seguida um do outro na mesma imagem.
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rustpaper-ci
       - run: cargo build --workspace --all-targets --verbose
 
   test:
@@ -84,5 +103,10 @@ jobs:
     container: ${{ needs.image.outputs.image }}
     steps:
       - uses: actions/checkout@v4
+      # shared-key fixo: sem isso, o rust-cache usa o nome do job na chave e
+      # clippy/build/test cada um recompila as deps (wgpu, webkit2gtk-sys, gtk...)
+      # do zero, mesmo rodando logo em seguida um do outro na mesma imagem.
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rustpaper-ci
       - run: cargo test --workspace --verbose
