@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::Mutex;
 
-use serde::Serialize;
 use rustpaper_core::project::{Project, WallpaperKind};
+use serde::Serialize;
 
 // Pasta do Workshop montada no container. TODO: tornar configurável.
 const WORKSHOP_DIR: &str = "/home/vscode/wallpapers";
@@ -20,11 +20,11 @@ struct EngineState(Mutex<Option<Child>>);
 
 #[derive(Serialize)]
 struct WallpaperEntry {
-    id: String,          // nome da pasta (id do Workshop)
+    id: String, // nome da pasta (id do Workshop)
     title: String,
-    kind: String,        // "video" | "scene" | "web" | "unknown"
+    kind: String,            // "video" | "scene" | "web" | "unknown"
     preview: Option<String>, // caminho absoluto da imagem de preview
-    supported: bool,     // o engine sabe tocar? (video/scene)
+    supported: bool,         // o engine sabe tocar? (video/scene)
 }
 
 // Acha o arquivo de preview da pasta (estático primeiro, gif por último).
@@ -68,7 +68,7 @@ fn list_wallpapers() -> Vec<WallpaperEntry> {
             supported,
         });
     }
-    out.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+    out.sort_by_key(|a| a.title.to_lowercase());
     out
 }
 

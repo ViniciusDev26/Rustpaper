@@ -9,15 +9,24 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
 
-use rustpaper_core::shader::{translate, Stage};
+use rustpaper_core::shader::{Stage, translate};
 
 // Acha o glslangValidator (não costuma estar no PATH do processo).
 fn glslang_bin() -> &'static str {
     use std::sync::OnceLock;
     static BIN: OnceLock<String> = OnceLock::new();
     BIN.get_or_init(|| {
-        for c in ["glslangValidator", "/usr/sbin/glslangValidator", "/usr/bin/glslangValidator"] {
-            if Command::new(c).arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        for c in [
+            "glslangValidator",
+            "/usr/sbin/glslangValidator",
+            "/usr/bin/glslangValidator",
+        ] {
+            if Command::new(c)
+                .arg("--version")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+            {
                 return c.to_string();
             }
         }
@@ -35,7 +44,18 @@ pub fn glsl_to_spirv(stage: &str, glsl: &str) -> Result<Vec<u32>, String> {
     std::fs::write(&inp, glsl).map_err(|e| e.to_string())?;
 
     let out = Command::new(glslang_bin())
-        .args(["-V", "-R", "--amb", "--aml", "--sdub", "WeGlobals", "0", "0", "-S", stage])
+        .args([
+            "-V",
+            "-R",
+            "--amb",
+            "--aml",
+            "--sdub",
+            "WeGlobals",
+            "0",
+            "0",
+            "-S",
+            stage,
+        ])
         .arg(&inp)
         .arg("-o")
         .arg(&outp)
@@ -51,7 +71,10 @@ pub fn glsl_to_spirv(stage: &str, glsl: &str) -> Result<Vec<u32>, String> {
     let bytes = std::fs::read(&outp).map_err(|e| e.to_string())?;
     let _ = std::fs::remove_file(&inp);
     let _ = std::fs::remove_file(&outp);
-    Ok(bytes.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect())
+    Ok(bytes
+        .chunks_exact(4)
+        .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+        .collect())
 }
 
 /// Compila vertex + fragment JUNTOS (linkados) pra SPIR-V. Isso faz o glslang
@@ -59,7 +82,10 @@ pub fn glsl_to_spirv(stage: &str, glsl: &str) -> Result<Vec<u32>, String> {
 /// SPIR-V resultantes têm o MESMO struct, com os mesmos offsets. É o que permite usar
 /// o vertex do WE (que a maioria dos efeitos precisa, pra coords animadas) junto do
 /// fragment, compartilhando um único UBO no binding 0. Retorna (vert_spirv, frag_spirv).
-pub fn glsl_to_spirv_linked(vert_glsl: &str, frag_glsl: &str) -> Result<(Vec<u32>, Vec<u32>), String> {
+pub fn glsl_to_spirv_linked(
+    vert_glsl: &str,
+    frag_glsl: &str,
+) -> Result<(Vec<u32>, Vec<u32>), String> {
     // subdiretório único: o glslang com -l escreve vert.spv/frag.spv no CWD.
     let dir = std::env::temp_dir().join(format!("we_link_{}", std::process::id()));
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -68,7 +94,19 @@ pub fn glsl_to_spirv_linked(vert_glsl: &str, frag_glsl: &str) -> Result<(Vec<u32
 
     let out = Command::new(glslang_bin())
         .current_dir(&dir)
-        .args(["-V", "-R", "--amb", "--aml", "--sdub", "WeGlobals", "0", "0", "-l", "s.vert", "s.frag"])
+        .args([
+            "-V",
+            "-R",
+            "--amb",
+            "--aml",
+            "--sdub",
+            "WeGlobals",
+            "0",
+            "0",
+            "-l",
+            "s.vert",
+            "s.frag",
+        ])
         .output()
         .map_err(|e| e.to_string())?;
     if !out.status.success() {
@@ -80,7 +118,10 @@ pub fn glsl_to_spirv_linked(vert_glsl: &str, frag_glsl: &str) -> Result<(Vec<u32
     }
     let read = |name: &str| -> Result<Vec<u32>, String> {
         let bytes = std::fs::read(dir.join(name)).map_err(|e| format!("{name}: {e}"))?;
-        Ok(bytes.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect())
+        Ok(bytes
+            .chunks_exact(4)
+            .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+            .collect())
     };
     let vert = read("vert.spv")?;
     let frag = read("frag.spv")?;
@@ -152,7 +193,10 @@ pub fn reflect_vertex_inputs(spirv: &[u32]) -> Result<Vec<VertexInput>, String> 
                 naga::TypeInner::Vector { size, .. } => size as u32,
                 _ => continue,
             };
-            out.push(VertexInput { location, components });
+            out.push(VertexInput {
+                location,
+                components,
+            });
         }
     }
     out.sort_by_key(|v| v.location);

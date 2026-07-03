@@ -1,8 +1,8 @@
 // Ferramenta de dev: traduz um shader do WE pra GLSL e imprime no stdout.
 // Uso: cargo run -p rustpaper-core --example translate_shader -- <vert|frag> <nome> [shaders_dir]
 // Ex.: ... translate_shader frag genericimage2 /home/vscode/we-assets/shaders
+use rustpaper_core::shader::{Stage, translate};
 use std::path::PathBuf;
-use rustpaper_core::shader::{translate, Stage};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -20,7 +20,11 @@ fn main() {
             .cloned()
             .unwrap_or_else(|| "/home/vscode/we-assets/shaders".into()),
     );
-    let ext = if stage == Stage::Vertex { "vert" } else { "frag" };
+    let ext = if stage == Stage::Vertex {
+        "vert"
+    } else {
+        "frag"
+    };
     let src = std::fs::read_to_string(dir.join(format!("{name}.{ext}"))).expect("ler shader");
 
     // combos extras via CLI: NOME=valor
@@ -32,5 +36,8 @@ fn main() {
         })
         .collect();
 
-    print!("{}", translate(stage, &src, &combos, &dir).expect("traduzir"));
+    print!(
+        "{}",
+        translate(stage, &src, &combos, &dir).expect("traduzir")
+    );
 }

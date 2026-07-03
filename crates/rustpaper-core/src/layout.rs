@@ -35,7 +35,9 @@ pub struct SceneLayout {
 }
 
 fn parse_floats(s: &str) -> Vec<f32> {
-    s.split_whitespace().filter_map(|t| t.parse().ok()).collect()
+    s.split_whitespace()
+        .filter_map(|t| t.parse().ok())
+        .collect()
 }
 fn vec3(v: &serde_json::Value, key: &str, default: [f32; 3]) -> [f32; 3] {
     v.get(key)
@@ -54,13 +56,20 @@ fn vec2(v: &serde_json::Value, key: &str, default: [f32; 2]) -> [f32; 2] {
         .unwrap_or(default)
 }
 fn scalar(v: &serde_json::Value, key: &str, default: f32) -> f32 {
-    v.get(key).and_then(|x| x.as_f64()).map(|n| n as f32).unwrap_or(default)
+    v.get(key)
+        .and_then(|x| x.as_f64())
+        .map(|n| n as f32)
+        .unwrap_or(default)
 }
 
 // texturas do primeiro pass de um material (mesmo critério do scene::first_texture,
 // mas devolve o caminho completo).
 fn first_texture_path(mat: &MaterialInfo) -> Option<String> {
-    mat.textures.iter().flatten().next().map(|t| format!("materials/{t}.tex"))
+    mat.textures
+        .iter()
+        .flatten()
+        .next()
+        .map(|t| format!("materials/{t}.tex"))
 }
 
 /// Lê a cena inteira do pkg como uma lista de camadas.
@@ -69,35 +78,67 @@ pub fn parse_layout(pkg: &Pkg) -> Option<SceneLayout> {
     let scene: serde_json::Value = serde_json::from_str(scene_json).ok()?;
 
     let general = scene.get("general").cloned().unwrap_or_default();
-    let proj = general.get("orthogonalprojection").cloned().unwrap_or_default();
+    let proj = general
+        .get("orthogonalprojection")
+        .cloned()
+        .unwrap_or_default();
     let width = proj.get("width").and_then(|w| w.as_f64()).unwrap_or(1920.0) as f32;
-    let height = proj.get("height").and_then(|h| h.as_f64()).unwrap_or(1080.0) as f32;
+    let height = proj
+        .get("height")
+        .and_then(|h| h.as_f64())
+        .unwrap_or(1080.0) as f32;
     let clear_color = vec3(&general, "clearcolor", [0.0, 0.0, 0.0]);
 
     let mut layers = Vec::new();
     let empty = Vec::new();
-    let objects = scene.get("objects").and_then(|o| o.as_array()).unwrap_or(&empty);
+    let objects = scene
+        .get("objects")
+        .and_then(|o| o.as_array())
+        .unwrap_or(&empty);
     for obj in objects {
         // só objetos-imagem visíveis
-        let Some(image_path) = obj.get("image").and_then(|i| i.as_str()) else { continue };
-        if obj.get("visible").map(|v| v == &serde_json::Value::Bool(false)).unwrap_or(false) {
+        let Some(image_path) = obj.get("image").and_then(|i| i.as_str()) else {
+            continue;
+        };
+        if obj
+            .get("visible")
+            .map(|v| v == &serde_json::Value::Bool(false))
+            .unwrap_or(false)
+        {
             continue;
         }
         // resolve model -> material -> textura
-        let Some(model) = pkg.read(image_path).and_then(|b| std::str::from_utf8(b).ok().map(String::from)) else {
+        let Some(model) = pkg
+            .read(image_path)
+            .and_then(|b| std::str::from_utf8(b).ok().map(String::from))
+        else {
             continue;
         };
-        let Some(mat_path) = model_material(&model) else { continue };
-        let Some(mat_json) = pkg.read(&mat_path).and_then(|b| std::str::from_utf8(b).ok().map(String::from)) else {
+        let Some(mat_path) = model_material(&model) else {
             continue;
         };
-        let Some(material) = scene::material_info_str(&mat_json) else { continue };
+        let Some(mat_json) = pkg
+            .read(&mat_path)
+            .and_then(|b| std::str::from_utf8(b).ok().map(String::from))
+        else {
+            continue;
+        };
+        let Some(material) = scene::material_info_str(&mat_json) else {
+            continue;
+        };
 
         let texture = first_texture_path(&material);
-        let effects = obj.get("effects").map(effects::effects_from_json).unwrap_or_default();
+        let effects = obj
+            .get("effects")
+            .map(effects::effects_from_json)
+            .unwrap_or_default();
 
         layers.push(Layer {
-            name: obj.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string(),
+            name: obj
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("")
+                .to_string(),
             texture,
             blend: obj
                 .get("blending")
@@ -116,7 +157,12 @@ pub fn parse_layout(pkg: &Pkg) -> Option<SceneLayout> {
         });
     }
 
-    Some(SceneLayout { width, height, clear_color, layers })
+    Some(SceneLayout {
+        width,
+        height,
+        clear_color,
+        layers,
+    })
 }
 
 // caminho do material de um model json.
@@ -144,7 +190,10 @@ mod tests {
 
     #[test]
     fn model_material_extrai() {
-        assert_eq!(model_material(r#"{"material":"materials/x.json"}"#).as_deref(), Some("materials/x.json"));
+        assert_eq!(
+            model_material(r#"{"material":"materials/x.json"}"#).as_deref(),
+            Some("materials/x.json")
+        );
         assert_eq!(model_material(r#"{}"#), None);
     }
 }

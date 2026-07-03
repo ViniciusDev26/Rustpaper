@@ -69,7 +69,9 @@ struct RawScene {
 }
 
 fn combos_of(m: Map<String, Value>) -> Vec<(String, i64)> {
-    m.into_iter().filter_map(|(k, v)| v.as_i64().map(|n| (k, n))).collect()
+    m.into_iter()
+        .filter_map(|(k, v)| v.as_i64().map(|n| (k, n)))
+        .collect()
 }
 
 fn to_override(r: RawPassOverride) -> PassOverride {
@@ -198,7 +200,14 @@ pub fn parse_effect(effect_json: &str) -> Option<EffectDef> {
         .filter_map(|p| {
             Some(EffectPass {
                 material: p.material?,
-                binds: p.bind.into_iter().map(|b| Bind { name: b.name, index: b.index }).collect(),
+                binds: p
+                    .bind
+                    .into_iter()
+                    .map(|b| Bind {
+                        name: b.name,
+                        index: b.index,
+                    })
+                    .collect(),
                 target: p.target,
             })
         })
@@ -206,7 +215,11 @@ pub fn parse_effect(effect_json: &str) -> Option<EffectDef> {
     let fbos = raw
         .fbos
         .into_iter()
-        .map(|f| Fbo { name: f.name, scale: f.scale, format: f.format })
+        .map(|f| Fbo {
+            name: f.name,
+            scale: f.scale,
+            format: f.format,
+        })
         .collect();
     Some(EffectDef { passes, fbos })
 }
@@ -264,10 +277,19 @@ mod tests {
         let def = parse_effect(ej).unwrap();
         assert_eq!(def.passes.len(), 2);
         assert_eq!(def.passes[0].target.as_deref(), Some("_rt_Half1"));
-        assert_eq!(def.passes[1].binds, vec![
-            Bind { name: "_rt_Half1".into(), index: 0 },
-            Bind { name: "previous".into(), index: 1 },
-        ]);
+        assert_eq!(
+            def.passes[1].binds,
+            vec![
+                Bind {
+                    name: "_rt_Half1".into(),
+                    index: 0
+                },
+                Bind {
+                    name: "previous".into(),
+                    index: 1
+                },
+            ]
+        );
         assert_eq!(def.fbos.len(), 1);
         assert_eq!(def.fbos[0].scale, 2.0);
         assert!(!is_simple(&def)); // multi-pass + fbos

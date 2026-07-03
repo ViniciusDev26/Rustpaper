@@ -1,18 +1,23 @@
 // Varre um wallpaper: imprime o shader do fundo e, pra cada efeito do fundo, se é
 // SIMPLES (1 pass, sem FBO) ou complexo. Ajuda a achar cenas boas pra demo.
 // Uso: scan_effects <pasta-do-wallpaper>
-use std::path::Path;
 use rustpaper_core::{effects, pkg::Pkg, scene};
+use std::path::Path;
 
 fn main() {
     let dir = std::env::args().nth(1).expect("uso: scan_effects <pasta>");
     let Ok(pkg) = Pkg::open(Path::new(&dir).join("scene.pkg").as_path()) else {
         return;
     };
-    let Some(scene_json) = pkg.read("scene.json").and_then(|b| std::str::from_utf8(b).ok()) else {
+    let Some(scene_json) = pkg
+        .read("scene.json")
+        .and_then(|b| std::str::from_utf8(b).ok())
+    else {
         return;
     };
-    let shader = scene::background_material(&pkg).map(|m| m.shader).unwrap_or_else(|| "?".into());
+    let shader = scene::background_material(&pkg)
+        .map(|m| m.shader)
+        .unwrap_or_else(|| "?".into());
     let fx = effects::background_effects(scene_json);
     if fx.is_empty() {
         return;

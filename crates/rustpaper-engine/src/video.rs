@@ -35,12 +35,17 @@ impl Video {
         // na fps do vídeo); saída = rawvideo RGBA no stdout.
         let mut child = Command::new("ffmpeg")
             .args([
-                "-loglevel", "error",
-                "-stream_loop", "-1",
+                "-loglevel",
+                "error",
+                "-stream_loop",
+                "-1",
                 "-re",
-                "-i", path,
-                "-f", "rawvideo",
-                "-pix_fmt", "rgba",
+                "-i",
+                path,
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgba",
                 "-",
             ])
             .stdout(Stdio::piped())
@@ -51,15 +56,17 @@ impl Video {
         let slot_thread = Arc::clone(&slot);
 
         // Thread de decodificação: lê um frame inteiro por vez e atualiza o slot.
-        thread::spawn(move || loop {
-            let mut frame = vec![0u8; frame_size];
-            // read_exact preenche o buffer inteiro (bloqueia até ter um frame completo).
-            if stdout.read_exact(&mut frame).is_err() {
-                break; // ffmpeg terminou ou o pipe quebrou
+        thread::spawn(move || {
+            loop {
+                let mut frame = vec![0u8; frame_size];
+                // read_exact preenche o buffer inteiro (bloqueia até ter um frame completo).
+                if stdout.read_exact(&mut frame).is_err() {
+                    break; // ffmpeg terminou ou o pipe quebrou
+                }
+                let mut s = slot_thread.lock().unwrap();
+                s.data = frame;
+                s.generation += 1;
             }
-            let mut s = slot_thread.lock().unwrap();
-            s.data = frame;
-            s.generation += 1;
         });
 
         Video {
@@ -95,10 +102,14 @@ impl Drop for Video {
 fn probe(path: &str) -> (u32, u32) {
     let out = Command::new("ffprobe")
         .args([
-            "-v", "error",
-            "-select_streams", "v:0",
-            "-show_entries", "stream=width,height",
-            "-of", "csv=p=0",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height",
+            "-of",
+            "csv=p=0",
             path,
         ])
         .output()

@@ -4,8 +4,8 @@
 use std::ptr::NonNull;
 use std::time::Duration;
 
-use calloop::timer::{TimeoutAction, Timer};
 use calloop::EventLoop;
+use calloop::timer::{TimeoutAction, Timer};
 use calloop_wayland_source::WaylandSource;
 use raw_window_handle::{
     RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
@@ -17,16 +17,16 @@ use smithay_client_toolkit::{
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
     shell::{
+        WaylandSurface,
         wlr_layer::{
             Anchor, Layer, LayerShell, LayerShellHandler, LayerSurface, LayerSurfaceConfigure,
         },
-        WaylandSurface,
     },
 };
 use wayland_client::{
+    Connection, Proxy, QueueHandle,
     globals::registry_queue_init,
     protocol::{wl_output, wl_surface},
-    Connection, Proxy, QueueHandle,
 };
 
 use std::path::Path;
@@ -93,7 +93,11 @@ fn load_texture(pkg: &Pkg, name: &str) -> Option<(Vec<u8>, u32, u32)> {
     if t.width == t.real_width && t.height == t.real_height {
         return Some((t.rgba, t.width, t.height));
     }
-    let (bw, rw, rh) = (t.width as usize, t.real_width as usize, t.real_height as usize);
+    let (bw, rw, rh) = (
+        t.width as usize,
+        t.real_width as usize,
+        t.real_height as usize,
+    );
     let mut out = Vec::with_capacity(rw * rh * 4);
     for y in 0..rh {
         let row = &t.rgba[y * bw * 4..y * bw * 4 + rw * 4];
@@ -217,7 +221,9 @@ pub fn run(dir: &Path) {
         })
         .expect("inserir timer");
 
-    event_loop.run(None, &mut state, |_| {}).expect("rodar event loop");
+    event_loop
+        .run(None, &mut state, |_| {})
+        .expect("rodar event loop");
 }
 
 impl Wallpaper {
@@ -318,7 +324,11 @@ impl LayerShellHandler for Wallpaper {
         };
 
         let (w, h) = configure.new_size;
-        let (w, h) = if w == 0 || h == 0 { (1920, 1080) } else { (w, h) };
+        let (w, h) = if w == 0 || h == 0 {
+            (1920, 1080)
+        } else {
+            (w, h)
+        };
 
         // Configura a surface do wgpu pro tamanho desta tela.
         let config = self
@@ -333,10 +343,38 @@ impl LayerShellHandler for Wallpaper {
 }
 
 impl CompositorHandler for Wallpaper {
-    fn scale_factor_changed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: i32) {}
-    fn transform_changed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: wl_output::Transform) {}
-    fn surface_enter(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: &wl_output::WlOutput) {}
-    fn surface_leave(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: &wl_output::WlOutput) {}
+    fn scale_factor_changed(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        _: i32,
+    ) {
+    }
+    fn transform_changed(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        _: wl_output::Transform,
+    ) {
+    }
+    fn surface_enter(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        _: &wl_output::WlOutput,
+    ) {
+    }
+    fn surface_leave(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_surface::WlSurface,
+        _: &wl_output::WlOutput,
+    ) {
+    }
 
     // Não usamos frame callbacks pra dirigir o render (o timer faz isso), então
     // este handler fica vazio.

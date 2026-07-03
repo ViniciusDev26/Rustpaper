@@ -127,7 +127,13 @@ impl Pass {
             cache: None,
         });
 
-        Self { pipeline, bgl, tex_binding, smp_binding, ubo_size }
+        Self {
+            pipeline,
+            bgl,
+            tex_binding,
+            smp_binding,
+            ubo_size,
+        }
     }
 
     pub fn ubo_size(&self) -> u64 {
@@ -160,7 +166,10 @@ impl Pass {
             label: Some("pp-bg"),
             layout: &self.bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: ubo.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: ubo.as_entire_binding(),
+                },
                 wgpu::BindGroupEntry {
                     binding: self.tex_binding,
                     resource: wgpu::BindingResource::TextureView(input),

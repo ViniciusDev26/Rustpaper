@@ -9,7 +9,7 @@ pub struct ParticleSystem {
     pub max_count: u32,
     pub material: String, // caminho do material (→ textura do sprite)
     // Emissão
-    pub rate: f32,        // partículas por segundo
+    pub rate: f32, // partículas por segundo
     pub origin: [f32; 3],
     pub distance_min: f32,
     pub distance_max: f32,
@@ -30,8 +30,8 @@ pub struct ParticleSystem {
     pub oscillate: Option<Oscillate>,
     pub color_change: Option<ColorChange>,
     // Metadados pro engine decidir se sabe renderizar (degradação graciosa):
-    pub renderer: String,        // "sprite" | "spritetrail" | ...
-    pub operators: Vec<String>,  // nomes dos operadores presentes
+    pub renderer: String,       // "sprite" | "spritetrail" | ...
+    pub operators: Vec<String>, // nomes dos operadores presentes
 }
 
 // oscillateposition: desloca a partícula num seno (balanço). Faixas por partícula.
@@ -56,7 +56,9 @@ pub struct ColorChange {
 // "x y z" -> [x, y, z]. Aceita também número puro (replica nos 3).
 fn vec3(v: &Value) -> [f32; 3] {
     if let Some(s) = v.as_str() {
-        let mut it = s.split_whitespace().map(|t| t.parse::<f32>().unwrap_or(0.0));
+        let mut it = s
+            .split_whitespace()
+            .map(|t| t.parse::<f32>().unwrap_or(0.0));
         return [
             it.next().unwrap_or(0.0),
             it.next().unwrap_or(0.0),
@@ -92,11 +94,26 @@ impl ParticleSystem {
             .to_string();
 
         // Emitter (usamos o primeiro).
-        let emitter = root.get("emitter").and_then(|e| e.as_array()).and_then(|a| a.first());
-        let rate = emitter.and_then(|e| e.get("rate")).map(f32_of).unwrap_or(0.0);
-        let origin = emitter.and_then(|e| e.get("origin")).map(vec3).unwrap_or([0.0; 3]);
-        let distance_min = emitter.and_then(|e| e.get("distancemin")).map(f32_of).unwrap_or(0.0);
-        let distance_max = emitter.and_then(|e| e.get("distancemax")).map(f32_of).unwrap_or(0.0);
+        let emitter = root
+            .get("emitter")
+            .and_then(|e| e.as_array())
+            .and_then(|a| a.first());
+        let rate = emitter
+            .and_then(|e| e.get("rate"))
+            .map(f32_of)
+            .unwrap_or(0.0);
+        let origin = emitter
+            .and_then(|e| e.get("origin"))
+            .map(vec3)
+            .unwrap_or([0.0; 3]);
+        let distance_min = emitter
+            .and_then(|e| e.get("distancemin"))
+            .map(f32_of)
+            .unwrap_or(0.0);
+        let distance_max = emitter
+            .and_then(|e| e.get("distancemax"))
+            .map(f32_of)
+            .unwrap_or(0.0);
 
         // Initializers (por nome).
         let init = root.get("initializer");
@@ -113,8 +130,14 @@ impl ParticleSystem {
         // Operators.
         let op = root.get("operator");
         let movement = find_named(op, "movement");
-        let gravity = movement.and_then(|m| m.get("gravity")).map(vec3).unwrap_or([0.0; 3]);
-        let drag = movement.and_then(|m| m.get("drag")).map(f32_of).unwrap_or(0.0);
+        let gravity = movement
+            .and_then(|m| m.get("gravity"))
+            .map(vec3)
+            .unwrap_or([0.0; 3]);
+        let drag = movement
+            .and_then(|m| m.get("drag"))
+            .map(f32_of)
+            .unwrap_or(0.0);
         let fade_in_time = find_named(op, "alphafade")
             .and_then(|a| a.get("fadeintime"))
             .map(f32_of)
@@ -245,7 +268,10 @@ mod tests {
         assert_eq!(p.velocity_max, [-37.0, -90.0, 0.0]);
         assert_eq!(p.fade_in_time, 0.1);
         assert_eq!(p.renderer, "sprite");
-        assert_eq!(p.operators, vec!["movement", "oscillateposition", "alphafade"]);
+        assert_eq!(
+            p.operators,
+            vec!["movement", "oscillateposition", "alphafade"]
+        );
         let osc = p.oscillate.expect("deveria ter oscillate");
         assert_eq!(osc.mask, [1.0, 0.5, 0.0]);
         assert_eq!(osc.scale, (20.0, 35.0));

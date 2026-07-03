@@ -14,7 +14,7 @@ pub enum Source {
     Video(String), // caminho do arquivo
     Scene {
         rgba: Vec<u8>,
-        width: u32,      // dims do buffer (pode ter padding)
+        width: u32, // dims do buffer (pode ter padding)
         height: u32,
         real_width: u32, // região de conteúdo
         real_height: u32,
@@ -53,8 +53,8 @@ pub struct Renderer {
     uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     format: wgpu::TextureFormat,
-    content_size: [f32; 2],  // dims do conteúdo, pra o cover (aspect)
-    content_norm: [f32; 2],  // conteúdo/buffer, pra o recorte no shader
+    content_size: [f32; 2], // dims do conteúdo, pra o cover (aspect)
+    content_norm: [f32; 2], // conteúdo/buffer, pra o recorte no shader
     // Vídeo: presente só quando a fonte é vídeo (textura atualizada por frame).
     video: Option<Video>,
     texture: wgpu::Texture,
@@ -83,25 +83,40 @@ impl Renderer {
         let format = first_surface.get_capabilities(&adapter).formats[0];
 
         // Resolve as dimensões e a fonte (vídeo x cena x compositor).
-        let (buf_w, buf_h, content_w, content_h, initial_rgba, video, part_inits, mut compositor) = match source {
-            Source::Video(path) => {
-                let v = Video::open(&path);
-                let (w, h) = (v.width, v.height);
-                // vídeo: buffer == conteúdo, sem padding, sem partículas
-                (w, h, w, h, None, Some(v), Vec::new(), None)
-            }
-            Source::Scene { rgba, width, height, real_width, real_height, particles } => {
-                (width, height, real_width, real_height, Some(rgba), None, particles, None)
-            }
-            Source::SceneComposite(dir) => {
-                let comp = Compositor::new(&device, &queue, &dir)
-                    .expect("falha ao montar o compositor da cena");
-                let (w, h) = (comp.width, comp.height);
-                // buffer == conteúdo (sem padding); sem vídeo/partículas; o compositor
-                // preenche a textura de conteúdo a cada frame.
-                (w, h, w, h, None, None, Vec::new(), Some(comp))
-            }
-        };
+        let (buf_w, buf_h, content_w, content_h, initial_rgba, video, part_inits, mut compositor) =
+            match source {
+                Source::Video(path) => {
+                    let v = Video::open(&path);
+                    let (w, h) = (v.width, v.height);
+                    // vídeo: buffer == conteúdo, sem padding, sem partículas
+                    (w, h, w, h, None, Some(v), Vec::new(), None)
+                }
+                Source::Scene {
+                    rgba,
+                    width,
+                    height,
+                    real_width,
+                    real_height,
+                    particles,
+                } => (
+                    width,
+                    height,
+                    real_width,
+                    real_height,
+                    Some(rgba),
+                    None,
+                    particles,
+                    None,
+                ),
+                Source::SceneComposite(dir) => {
+                    let comp = Compositor::new(&device, &queue, &dir)
+                        .expect("falha ao montar o compositor da cena");
+                    let (w, h) = (comp.width, comp.height);
+                    // buffer == conteúdo (sem padding); sem vídeo/partículas; o compositor
+                    // preenche a textura de conteúdo a cada frame.
+                    (w, h, w, h, None, None, Vec::new(), Some(comp))
+                }
+            };
 
         let extent = wgpu::Extent3d {
             width: buf_w,
@@ -199,7 +214,10 @@ impl Renderer {
             label: Some("bind group"),
             layout: &bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: uniform_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                },
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(&texture_view),
@@ -233,7 +251,10 @@ impl Renderer {
             bind_group,
             format,
             content_size: [content_w as f32, content_h as f32],
-            content_norm: [content_w as f32 / buf_w as f32, content_h as f32 / buf_h as f32],
+            content_norm: [
+                content_w as f32 / buf_w as f32,
+                content_h as f32 / buf_h as f32,
+            ],
             video,
             texture,
             extent,
@@ -254,7 +275,9 @@ impl Renderer {
         // Compositor: redesenha a cena inteira na textura de conteúdo (g_Time avança;
         // dt anima as partículas).
         let t = self.start.elapsed().as_secs_f32();
-        let view = self.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = self
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
         let (dev, q) = (&self.device, &self.queue);
         if let Some(c) = self.compositor.as_mut() {
             c.render(dev, q, t, dt, &view);
@@ -315,14 +338,17 @@ impl Renderer {
         self.update_video_texture();
 
         let frame = match surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            wgpu::CurrentSurfaceTexture::Success(f)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 surface.configure(&self.device, config);
                 return;
             }
             _ => return,
         };
-        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
 
         let uniforms = Uniforms {
             scale: cover_scale(
@@ -333,11 +359,14 @@ impl Renderer {
             ),
             content: self.content_norm,
         };
-        self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+        self.queue
+            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
         let mut encoder = self
             .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("encoder") });
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("encoder"),
+            });
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main pass"),

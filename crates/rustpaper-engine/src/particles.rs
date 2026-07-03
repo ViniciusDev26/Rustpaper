@@ -41,7 +41,11 @@ impl Rng {
         a + (b - a) * self.unit()
     }
     fn range3(&mut self, a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-        [self.range(a[0], b[0]), self.range(a[1], b[1]), self.range(a[2], b[2])]
+        [
+            self.range(a[0], b[0]),
+            self.range(a[1], b[1]),
+            self.range(a[2], b[2]),
+        ]
     }
 }
 
@@ -69,8 +73,22 @@ struct Sim {
 }
 
 impl Sim {
-    fn new(sys: ParticleSystem, additive: bool, origin: [f32; 3], scale: f32, sheet: Option<rustpaper_core::tex::SpriteSheet>) -> Self {
-        Sim { sys, additive, origin, scale, sheet, particles: Vec::new(), spawn_accum: 0.0 }
+    fn new(
+        sys: ParticleSystem,
+        additive: bool,
+        origin: [f32; 3],
+        scale: f32,
+        sheet: Option<rustpaper_core::tex::SpriteSheet>,
+    ) -> Self {
+        Sim {
+            sys,
+            additive,
+            origin,
+            scale,
+            sheet,
+            particles: Vec::new(),
+            spawn_accum: 0.0,
+        }
     }
 
     fn update(&mut self, dt: f32, rng: &mut Rng) {
@@ -98,9 +116,18 @@ impl Sim {
             if self.particles.len() >= self.sys.max_count as usize {
                 break;
             }
-            let dist = rng.range(self.sys.distance_min, self.sys.distance_max).max(0.0) * self.scale;
-            let dir = [rng.range(-1.0, 1.0), rng.range(-1.0, 1.0), rng.range(-1.0, 1.0)];
-            let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-3);
+            let dist = rng
+                .range(self.sys.distance_min, self.sys.distance_max)
+                .max(0.0)
+                * self.scale;
+            let dir = [
+                rng.range(-1.0, 1.0),
+                rng.range(-1.0, 1.0),
+                rng.range(-1.0, 1.0),
+            ];
+            let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2])
+                .sqrt()
+                .max(1e-3);
             let pos = [
                 self.origin[0] + self.sys.origin[0] + dir[0] / len * dist,
                 self.origin[1] + self.sys.origin[1] + dir[1] / len * dist,
@@ -124,7 +151,11 @@ impl Sim {
             // usar turbulentvelocityrandom; senão a faixa velocityrandom.
             let vel = match self.sys.turbulent_speed {
                 Some((smin, smax)) => {
-                    let d = [rng.range(-1.0, 1.0), rng.range(-1.0, 1.0), rng.range(-1.0, 1.0)];
+                    let d = [
+                        rng.range(-1.0, 1.0),
+                        rng.range(-1.0, 1.0),
+                        rng.range(-1.0, 1.0),
+                    ];
                     let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-3);
                     let sp = rng.range(smin, smax);
                     [d[0] / l * sp, d[1] / l * sp, d[2] / l * sp]
@@ -198,8 +229,11 @@ impl Particles {
         inits: Vec<ParticleInit>,
         scene_size: [f32; 2],
     ) -> Self {
-        let capacity: usize =
-            inits.iter().map(|i| i.system.max_count as usize).sum::<usize>().max(1);
+        let capacity: usize = inits
+            .iter()
+            .map(|i| i.system.max_count as usize)
+            .sum::<usize>()
+            .max(1);
 
         // Bind group layout explícito (textura + sampler), compartilhado por todos
         // os sistemas e pelos 2 pipelines.
@@ -235,11 +269,31 @@ impl Particles {
             array_stride: std::mem::size_of::<Instance>() as u64,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &[
-                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
-                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
-                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 16, shader_location: 2 },
-                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 32, shader_location: 3 },
-                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 40, shader_location: 4 },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x2,
+                    offset: 0,
+                    shader_location: 0,
+                },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x2,
+                    offset: 8,
+                    shader_location: 1,
+                },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x4,
+                    offset: 16,
+                    shader_location: 2,
+                },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x2,
+                    offset: 32,
+                    shader_location: 3,
+                },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x2,
+                    offset: 40,
+                    shader_location: 4,
+                },
             ],
         };
         let make_pipeline = |blend: wgpu::BlendState, label: &str| {
@@ -335,12 +389,24 @@ impl Particles {
                 label: Some("particle bind group"),
                 layout: &bgl,
                 entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
                 ],
             });
             systems.push(SystemGpu {
-                sim: Sim::new(init.system, init.additive, init.origin, init.scale, init.sheet),
+                sim: Sim::new(
+                    init.system,
+                    init.additive,
+                    init.origin,
+                    init.scale,
+                    init.sheet,
+                ),
                 bind_group,
                 range: 0..0,
             });
@@ -414,7 +480,11 @@ impl Particles {
             // Aditivo sem HDR/tonemap satura em branco quando sprites se sobrepõem.
             // O WE compõe em HDR e faz tonemap; nós amortecemos a contribuição pra
             // manter o brilho sutil (aproxima o resultado tonemapeado).
-            let rgb = if sim.additive { [rgb[0] * 0.35, rgb[1] * 0.35, rgb[2] * 0.35] } else { rgb };
+            let rgb = if sim.additive {
+                [rgb[0] * 0.35, rgb[1] * 0.35, rgb[2] * 0.35]
+            } else {
+                rgb
+            };
             let hx = p.size / (scene[0] * 0.5);
             // Sprite sheet: escolhe a célula do frame pela idade (toca a animação uma
             // vez ao longo da vida). Sem sheet, usa a textura inteira (0..1).
@@ -449,7 +519,11 @@ impl Particles {
             if s.range.is_empty() {
                 continue;
             }
-            let pipe = if s.sim.additive { &self.additive_pipeline } else { &self.alpha_pipeline };
+            let pipe = if s.sim.additive {
+                &self.additive_pipeline
+            } else {
+                &self.alpha_pipeline
+            };
             pass.set_pipeline(pipe);
             pass.set_bind_group(0, &s.bind_group, &[]);
             pass.draw(0..6, s.range.clone());
