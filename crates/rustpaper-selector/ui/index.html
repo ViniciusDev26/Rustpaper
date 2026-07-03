@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="pt-br">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Rustpaper</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: system-ui, sans-serif;
+        background: #1e1e2e;
+        color: #cdd6f4;
+      }
+      header {
+        position: sticky; top: 0;
+        padding: 14px 20px;
+        background: #181825;
+        border-bottom: 1px solid #313244;
+        display: flex; align-items: center; gap: 12px;
+      }
+      header h1 { font-size: 1rem; margin: 0; font-weight: 600; }
+      header .count { color: #6c7086; font-size: .85rem; }
+      header .spacer { flex: 1; }
+      header label { font-size: .85rem; color: #a6adc8; display: flex; align-items: center; gap: 6px; cursor: pointer; }
+      #status { padding: 20px; color: #a6adc8; }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 14px;
+        padding: 20px;
+      }
+      .card {
+        background: #313244;
+        border-radius: 10px;
+        overflow: hidden;
+        cursor: pointer;
+        border: 2px solid transparent;
+        transition: border-color .12s, transform .12s;
+      }
+      .card:hover { border-color: #89b4fa; transform: translateY(-2px); }
+      .card.unsupported { opacity: .5; cursor: not-allowed; }
+      .card.unsupported:hover { border-color: transparent; transform: none; }
+      .thumb {
+        width: 100%; aspect-ratio: 16 / 10;
+        object-fit: cover; display: block;
+        background: #45475a;
+      }
+      .no-thumb {
+        width: 100%; aspect-ratio: 16 / 10;
+        display: grid; place-items: center;
+        background: #45475a; color: #6c7086; font-size: .8rem;
+      }
+      .meta { padding: 8px 10px; }
+      .title {
+        font-size: .85rem; white-space: nowrap;
+        overflow: hidden; text-overflow: ellipsis;
+      }
+      .badge {
+        display: inline-block; margin-top: 4px;
+        font-size: .65rem; text-transform: uppercase; letter-spacing: .04em;
+        padding: 2px 6px; border-radius: 4px; background: #585b70; color: #cdd6f4;
+      }
+      .badge.video { background: #a6e3a1; color: #11111b; }
+      .badge.scene { background: #89b4fa; color: #11111b; }
+      .toast {
+        position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+        background: #89b4fa; color: #11111b; padding: 8px 16px;
+        border-radius: 8px; font-size: .85rem; opacity: 0;
+        transition: opacity .2s; pointer-events: none;
+      }
+      .toast.show { opacity: 1; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Rustpaper</h1>
+      <span class="count" id="count"></span>
+      <span class="spacer"></span>
+      <label><input type="checkbox" id="autostart" /> Iniciar no login</label>
+    </header>
+    <div id="status">Carregando wallpapers…</div>
+    <div class="grid" id="grid"></div>
+    <div class="toast" id="toast"></div>
+
+    <script>
+      const { invoke, convertFileSrc } = window.__TAURI__.core;
+
+      const grid = document.getElementById("grid");
+      const status = document.getElementById("status");
+      const count = document.getElementById("count");
+      const toast = document.getElementById("toast");
+      const autostartEl = document.getElementById("autostart");
+
+      function showToast(msg) {
+        toast.textContent = msg;
+        toast.classList.add("show");
+        setTimeout(() => toast.classList.remove("show"), 1800);
+      }
+
+      async function apply(id, title) {
+        try {
+          await invoke("apply", { id });
+          showToast(`Aplicado: ${title}`);
+        } catch (e) {
+          showToast(`Erro: ${e}`);
+        }
+      }
+
+      function card(w) {
+        const el = document.createElement("div");
+        el.className = "card" + (w.supported ? "" : " unsupported");
+
+        const thumb = w.preview
+          ? `<img class="thumb" loading="lazy" src="${convertFileSrc(w.preview)}" />`
+          : `<div class="no-thumb">sem preview</div>`;
+
+        el.innerHTML = `
+          ${thumb}
+          <div class="meta">
+            <div class="title" title="${w.title}">${w.title || w.id}</div>
+            <span class="badge ${w.kind}">${w.kind}</span>
+          </div>`;
+
+        if (w.supported) {
+          el.addEventListener("click", () => apply(w.id, w.title || w.id));
+        }
+        return el;
+      }
+
+      autostartEl.addEventListener("change", async () => {
+        try {
+          await invoke("set_autostart", { enabled: autostartEl.checked });
+          showToast(autostartEl.checked ? "Autostart ligado" : "Autostart desligado");
+        } catch (e) {
+          autostartEl.checked = !autostartEl.checked; // reverte se falhou
+          showToast(`${e}`);
+        }
+      });
+
+      async function load() {
+        try {
+          const settings = await invoke("get_settings");
+          autostartEl.checked = settings.autostart;
+
+          const wallpapers = await invoke("list_wallpapers");
+          status.style.display = "none";
+          count.textContent = `${wallpapers.length} wallpapers`;
+          for (const w of wallpapers) grid.appendChild(card(w));
+        } catch (e) {
+          status.textContent = `Erro ao carregar: ${e}`;
+        }
+      }
+
+      load();
+    </script>
+  </body>
+</html>

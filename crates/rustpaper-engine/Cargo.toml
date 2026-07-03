@@ -1,0 +1,30 @@
+[package]
+name = "rustpaper-engine"
+version = "0.1.0"
+edition = "2024"
+
+# Binário nomeado rustpaper (mantém o caminho de execução conhecido:
+# target/debug/rustpaper).
+[[bin]]
+name = "rustpaper"
+path = "src/main.rs"
+
+[dependencies]
+rustpaper-core = { path = "../rustpaper-core" }
+# feature `spirv`: aceitar ShaderSource::SpirV (shaders do WE compilados via glslang).
+wgpu = { version = "29.0.3", features = ["spirv"] }
+# reflexão do SPIR-V (layout do bloco de uniforms + bindings) — mesma versão do wgpu.
+naga = { version = "29.0.3", features = ["spv-in"] }
+serde_json = "1.0.150"
+pollster = "0.4.0"
+bytemuck = { version = "1.25.0", features = ["derive"] }
+raw-window-handle = "0.6"
+smithay-client-toolkit = "0.19"
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system"] }
+calloop = "0.14"
+calloop-wayland-source = "0.4"
+
+# Só pros examples (ex.: render_material grava PNG pra inspeção offscreen).
+[dev-dependencies]
+image = { version = "0.25.10", default-features = false, features = ["png"] }

@@ -1,7 +1,7 @@
-# Workspace raiz. Os sub-projetos ("crates") ficam em crates/*.
-#   we-core : lógica dos formatos do Wallpaper Engine (compartilhada)
-#   engine  : o renderer (usa we-core), binário do wallpaper
-# (futuro) selector : app desktop pra escolher wallpaper (usará we-core)
+# Workspace raiz do Rustpaper. Os sub-projetos ("crates") ficam em crates/*.
+#   rustpaper-core     : lógica dos formatos do Wallpaper Engine (compartilhada)
+#   rustpaper-engine   : o renderer (usa rustpaper-core), binário `rustpaper`
+#   rustpaper-selector : app desktop pra escolher wallpaper (usa rustpaper-core)
 [workspace]
 resolver = "3"
-members = ["crates/we-core", "crates/engine", "crates/selector"]
+members = ["crates/rustpaper-core", "crates/rustpaper-engine", "crates/rustpaper-selector"]
