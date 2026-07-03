@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8a7cf8"/>
+      <stop offset="55%" stop-color="#6a5cf5"/>
+      <stop offset="100%" stop-color="#4636c9"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#eef0ff"/>
+      <stop offset="100%" stop-color="#c9d0ff"/>
+    </linearGradient>
+  </defs>
+
+  <!-- background squircle -->
+  <rect x="0" y="0" width="512" height="512" rx="116" fill="url(#bg)"/>
+
+  <!-- monitor stand -->
+  <path d="M236 324 L276 324 L288 350 L224 350 Z" fill="#241f52"/>
+  <rect x="196" y="350" width="120" height="16" rx="8" fill="#241f52"/>
+
+  <!-- monitor bezel -->
+  <rect x="96" y="100" width="320" height="228" rx="26" fill="#241f52"/>
+
+  <!-- screen -->
+  <rect x="116" y="120" width="280" height="164" rx="12" fill="url(#screen)"/>
+
+  <!-- wallpaper content: sun + mountains, clipped to screen -->
+  <clipPath id="screenClip">
+    <rect x="116" y="120" width="280" height="164" rx="12"/>
+  </clipPath>
+  <g clip-path="url(#screenClip)">
+    <circle cx="345" cy="152" r="20" fill="#ffcf6b"/>
+    <path d="M116 260 L200 190 L250 232 L300 172 L396 260 L396 284 L116 284 Z" fill="#4c3fd1"/>
+    <path d="M116 272 L170 226 L228 268 L286 214 L396 272 L396 284 L116 284 Z" fill="#6a5cf5" opacity="0.85"/>
+  </g>
+
+  <!-- gear (engine) overlapping bottom-right of monitor -->
+  <g transform="translate(378,352)">
+    <g fill="#ffffff">
+      <rect x="-11" y="-70" width="22" height="28" rx="5"/>
+      <rect x="-11" y="-70" width="22" height="28" rx="5" transform="rotate(45)"/>
+      <rect x="-11" y="-70" width="22" height="28" rx="5" transform="rotate(90)"/>
+      <rect x="-11" y="-70" width="22" height="28" rx="5" transform="rotate(135)"/>
+      <rect x="-11" y="-70" width="22" height="28" rx="5" transform="rotate(180)"/>
+      <rect x="-11" y="-70" width="22" height="28" rx="5" transform="rotate(225)"/>
+      <rect x="-11" y="-70" width="22" height="28" rx="5" transform="rotate(270)"/>
+      <rect x="-11" y="-70" width="22" height="28" rx="5" transform="rotate(315)"/>
+    </g>
+    <circle r="52" fill="#ffffff"/>
+    <circle r="21" fill="#2f2570"/>
+  </g>
+</svg>

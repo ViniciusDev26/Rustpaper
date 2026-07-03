@@ -1,4 +1,4 @@
-# wallpaper-engine-rs
+# Rustpaper (wallpaper-engine-rs)
 
 Reimplementação (em Rust, do zero) de um "Wallpaper Engine" para Linux: um
 **engine** que renderiza wallpapers (vídeo e cenas do Wallpaper Engine da Steam)
@@ -11,29 +11,29 @@ Projeto de aprendizado de Rust — priorize clareza e explicação didática ao 
 
 Monorepo com 3 crates em `crates/`:
 
-- **`we-core`** — lógica pura dos formatos do WE (sem GPU/UI). Módulos:
+- **`rustpaper-core`** — lógica pura dos formatos do WE (sem GPU/UI). Módulos:
   `project` (project.json), `pkg` (.pkg PKGV), `tex` (.tex → RGBA + `SpriteSheet`),
   `scene` (scene.json → material/textura/partículas + `MaterialInfo`),
   `particle` (particles/*.json), `layout` (cena INTEIRA → camadas com transform),
   `effects` (grafo de efeitos), `shader` (tradução do dialeto WE → GLSL).
   Deps: `serde`, `serde_json`, `lz4_flex`, `image` (só jpeg/png), `texpresso`.
   Dev-dep: `naga` (valida o GLSL/SPIR-V produzido nos testes).
-- **`engine`** — o renderer (lib + binário **`wallpaper-engine-rs`**). Módulos:
+- **`rustpaper-engine`** — o renderer (lib + binário **`rustpaper`**). Módulos:
   `main`, `wallpaper` (layer-shell + event loop), `gpu` (wgpu: surface, cover-scale,
   render por monitor), `compositor` (render multi-camada da cena),
   `program` (material WE compilado: vert+frag linkados + UBO + blend),
   `shader_compile` (translate → glslang → SPIR-V + reflexão via naga),
   `postprocess` (primitiva de passe de efeito), `video` (ffmpeg), `particles`.
   Shaders: `shader.wgsl` (blit final por monitor), `particle.wgsl` (sprites).
-  Deps: `we-core`, `wgpu` 29 (feature `spirv`), `naga` 29 (feature `spv-in`),
+  Deps: `rustpaper-core`, `wgpu` 29 (feature `spirv`), `naga` 29 (feature `spv-in`),
   `serde_json`, `pollster`, `bytemuck`, `raw-window-handle` 0.6,
   `smithay-client-toolkit` 0.19, `wayland-client` 0.31,
   `wayland-backend` (feature `client_system`), `calloop` 0.14, `calloop-wayland-source` 0.4.
   Precisa do **glslangValidator** em runtime (compila os shaders do WE).
-- **`selector`** — app desktop Tauri v2. Binário **`wallpaper-selector`**.
+- **`rustpaper-selector`** — app desktop Tauri v2. Binário **`rustpaper-selector`**.
   Backend Rust (`main`, `settings`) + frontend web estático em `ui/`. Comandos:
   `list_wallpapers`, `apply`, `get_settings`, `set_autostart`. Deps: `tauri` 2
-  (feature `protocol-asset`), `serde`, `serde_json`, `we-core`.
+  (feature `protocol-asset`), `serde`, `serde_json`, `rustpaper-core`.
 
 ## Como buildar e rodar
 
@@ -49,18 +49,18 @@ cargo build            # workspace inteiro
 cargo test             # ~32 testes (unitários inline + integração de shader/naga)
 
 # rodar um wallpaper direto no engine (pasta de um item do Workshop):
-./target/debug/wallpaper-engine-rs /home/vscode/wallpapers/<id>
+./target/debug/rustpaper /home/vscode/wallpapers/<id>
 
 # rodar o selector (galeria); ele spawna o engine ao clicar:
-cargo run -p selector
+cargo run -p rustpaper-selector
 ```
 
 - O engine precisa de `WAYLAND_DISPLAY=/tmp/wayland-0` (já setado no container).
 - O selector **embute** no `main.rs` os envs de container (`GDK_BACKEND=x11`,
   `WEBKIT_DISABLE_COMPOSITING_MODE/DMABUF`) — sem eles o webview crasha ou fica
   em branco. Rodar via `docker exec` funciona porque `DISPLAY=:0` já vem no container.
-- Rode as ferramentas de inspeção de formato com os examples do we-core:
-  `cargo run -p we-core --example dump_pkg|dump_scene|dump_tex -- <arquivo>`.
+- Rode as ferramentas de inspeção de formato com os examples do rustpaper-core:
+  `cargo run -p rustpaper-core --example dump_pkg|dump_scene|dump_tex -- <arquivo>`.
 
 ## Devcontainer (repo `~/.config/devcontainer`)
 
@@ -113,7 +113,7 @@ HLSL (`mul`, `frac`, `saturate`, `CAST3`, `texSample2D`) e GLSL legado (`varying
 `gl_FragColor`). Detalhes completos em **`docs/SHADER_TRANSLATION.md`**. Pipeline:
 
     WE .vert/.frag
-      │  we_core::shader::translate  → prelúdio (dialeto→GLSL) + includes + #require
+      │  rustpaper_core::shader::translate  → prelúdio (dialeto→GLSL) + includes + #require
       │                                + combos + SEPARA samplers (texture2D+sampler)
       ▼  GLSL 450 (Vulkan-flavored)
       │  glslangValidator -V -R --amb --aml --sdub WeGlobals 0 0   (subprocesso)
@@ -136,11 +136,11 @@ HLSL (`mul`, `frac`, `saturate`, `CAST3`, `texSample2D`) e GLSL legado (`varying
 ## Compositor multi-camada (o render de cena atual)
 
 Uma cena do WE é uma PILHA de camadas-imagem (a Ashe = 15 camadas: cabelo, luva,
-capa, corpo...). O `we_core::layout::parse_layout` lê a cena inteira: projeção
+capa, corpo...). O `rustpaper_core::layout::parse_layout` lê a cena inteira: projeção
 ortográfica + cada objeto-imagem com transform (origin/scale/angles/size), material,
 blend, alpha/cor/brilho e efeitos, em ordem de desenho.
 
-- `engine::compositor::Compositor` pré-constrói cada camada (textura, `Program`, quad
+- `rustpaper_engine::compositor::Compositor` pré-constrói cada camada (textura, `Program`, quad
   no espaço da cena, constants) e renderiza TUDO numa textura de conteúdo por frame:
   cada camada é um quad em espaço de cena (ortho → NDC, Y invertido) desenhado pelo
   shader real do WE, com **alpha/additive blend** e sRGB.
@@ -195,16 +195,19 @@ Sem áudio/widgets no escopo. Onde estamos vs. a meta:
 - **DXT decodificado** (DXT1/3/5 via texpresso) — fundos e sprites DXT funcionam.
 - **Um engine por vez.** Dois engines na camada Background competem → flicker. O
   `apply` do selector mata o anterior; launches MANUAIS (via `docker exec`) podem
-  acumular. Matar: `docker exec vini-dev pkill -9 -f target/debug/wallpaper-engine-rs`
-  (o pkill do host e o do container veem PID namespaces diferentes — use o do container).
+  acumular. Matar: `docker exec vini-dev pkill -9 -f "target/debug/rustpaper "`
+  (nota o espaço no fim — evita casar também `rustpaper-selector`, que começa
+  com o mesmo prefixo; o pkill do host e o do container veem PID namespaces
+  diferentes — use o do container).
 - **Concorrência com o `linux-wallpaperengine`**: se o autostart antigo dele subir,
   compete na camada Background → flicker. Deve ser desabilitado.
 - **Autostart** dispara no login do **HOST**; hoje os binários/arquivos ficam no
   container (não é sessão de login). Só vale de verdade após um passo de
   **distribuição** (binários instalados no host + .desktop no ~/.config/autostart do host).
 - **`pkill -f "target/debug/..."` mata o próprio shell do `docker exec`** (o comando
-  casa o padrão) → use `pkill -f "debug/wallpaper"` num exec SEPARADO do launch, ou
-  faça kill e launch em execs distintos.
+  casa o padrão) → use `pkill -f "debug/rustpaper "` (com o espaço, pra não pegar
+  `rustpaper-selector` também) num exec SEPARADO do launch, ou faça kill e launch
+  em execs distintos.
 - **Verificação ao vivo**: rodar o engine detached (`setsid ... </dev/null & disown`),
   esperar, e `spectacle -b -n -f -o <png>` no HOST com o env da sessão Plasma (puxado
   de `/proc/<plasmashell>/environ`). Pra ver partículas/detalhes, recortar+ampliar com

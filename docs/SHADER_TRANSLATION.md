@@ -25,7 +25,7 @@ precisamos de GLSL→WGSL.
 ## Pipeline PROVADO (compila ponta-a-ponta com genericimage2 real)
 
     WE .vert/.frag
-      │  shader::translate  (we-core)
+      │  shader::translate  (rustpaper-core)
       ▼  resolve #include + prelúdio (dialeto→GLSL) + combos + SEPARA samplers
     GLSL 450 (Vulkan-flavored, samplers separados)
       │  glslangValidator -V -R --amb --aml --sdub WeGlobals 0 0 -S <stage>
@@ -56,7 +56,7 @@ binding `2N+1`; sampler `_smp_g_TextureN` = binding `2N+2`.
   amostragem. glslang então emite imagem+sampler separados, que o naga spv-in
   ACEITA.
 
-Provado por `crates/we-core/tests/naga_compile.rs` (genericimage2 vert+frag).
+Provado por `crates/rustpaper-core/tests/naga_compile.rs` (genericimage2 vert+frag).
 
 ## Estado do render (offscreen, verificado por PNG)
 
@@ -65,7 +65,7 @@ Provado por `crates/we-core/tests/naga_compile.rs` (genericimage2 vert+frag).
   o quadro anterior. `postprocess::Pass` é a primitiva de passe reutilizável.
 - **Reflexão** (`shader_compile::reflect`): lê do SPIR-V o layout do bloco de
   uniforms (offsets por nome) e os bindings de textura/sampler via naga.
-- **Parsers** (we-core): `scene::MaterialInfo` (shader/combos/constants),
+- **Parsers** (rustpaper-core): `scene::MaterialInfo` (shader/combos/constants),
   `effects` (grafo de efeitos: objeto→effect.json→passes/fbos/binds + overrides),
   `shader::parse_params` (anotações `// {json}`: uniform↔material + defaults).
 
@@ -76,7 +76,7 @@ A maioria dos efeitos precisa do VERTEX do WE (ex.: filmgrain calcula
 membros DIFERENTES no bloco `WeGlobals` — compilados separados, colidiriam no
 binding 0. Solução: compilar vertex+fragment LINKADOS (`glslang -l`), que UNIFICA o
 bloco default — os dois SPIR-V saem com o MESMO struct e os MESMOS offsets. Ver
-`shader_compile::compile_linked` e o teste `engine/tests/linked_compile.rs`
+`shader_compile::compile_linked` e o teste `rustpaper-engine/tests/linked_compile.rs`
 (genericimage2: UBO unificado de 96 bytes, `g_ModelViewProjectionMatrix@0` +
 `g_Brightness@88` visíveis nos dois estágios).
 
@@ -92,7 +92,7 @@ multi-passe/multi-FBO (blur, godrays). Integração ao vivo no `wallpaper.rs` po
 
 1. **Resolver includes** — módulo que lê um shader do WE e expande `#include "x.h"`
    recursivamente a partir de `we-assets/shaders/` (+ `/base`). Pura lógica de
-   texto → testável no we-core.
+   texto → testável no rustpaper-core.
 2. **Combos/defines** — ler `passes[].combos` do material + os combos implícitos
    (ex.: textura presente liga um combo). Montar a lista de `#define NOME valor`.
    As anotações `// {json}` dos uniforms dão os defaults dos combos.
