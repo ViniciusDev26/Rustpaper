@@ -8,75 +8,81 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  IMAGE: ghcr.io/viniciusdev26/rustpaper-ci
 
 # Cancela runs antigos da mesma branch/PR quando um push novo chega.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
-  # Dependências de sistema pra compilar o workspace (rustpaper-engine precisa de
-  # wayland-client/xkbcommon + glslangValidator; rustpaper-selector é um app Tauri
-  # e precisa dos devs do webkit2gtk/gtk). Nada disso precisa de GPU/compositor
-  # rodando: wgpu (Vulkan) e o wayland-client resolvem o driver/compositor via
-  # dlopen em tempo de execução, não em tempo de build.
-  fmt:
-    name: Format
+  # Builda/publica a imagem de CI (docker/ci/Dockerfile: Ubuntu 24.04 + toolchain
+  # Rust + deps de sistema do workspace) ANTES dos outros jobs, pra garantir que a
+  # tag `:latest` usada abaixo sempre reflete o Dockerfile deste commit. Se o
+  # Dockerfile não mudou, o cache (type=gha) faz isso ser praticamente instantâneo.
+  image:
+    name: Build CI image
     runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.tag.outputs.image }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: docker/login-action@v3
         with:
-          components: rustfmt
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/ci/Dockerfile
+          push: true
+          tags: ${{ env.IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - id: tag
+        run: echo "image=${{ env.IMAGE }}:latest" >> "$GITHUB_OUTPUT"
+
+  fmt:
+    name: Format
+    needs: image
+    runs-on: ubuntu-latest
+    container: ${{ needs.image.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
       - run: cargo fmt --all -- --check
 
   clippy:
     name: Clippy
+    needs: image
     runs-on: ubuntu-latest
+    container: ${{ needs.image.outputs.image }}
     steps:
       - uses: actions/checkout@v4
-      - name: Instala dependências de sistema
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            pkg-config libwayland-dev libxkbcommon-dev glslang-tools \
-            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev libssl-dev libxdo-dev
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   build:
     name: Build
+    needs: image
     runs-on: ubuntu-latest
+    container: ${{ needs.image.outputs.image }}
     steps:
       - uses: actions/checkout@v4
-      - name: Instala dependências de sistema
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            pkg-config libwayland-dev libxkbcommon-dev glslang-tools \
-            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev libssl-dev libxdo-dev
-      - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --workspace --all-targets --verbose
 
   test:
     name: Test
-    needs: build
+    needs: [image, build]
     runs-on: ubuntu-latest
+    container: ${{ needs.image.outputs.image }}
     steps:
       - uses: actions/checkout@v4
-      - name: Instala dependências de sistema
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            pkg-config libwayland-dev libxkbcommon-dev glslang-tools \
-            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev libssl-dev libxdo-dev
-      - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --verbose
