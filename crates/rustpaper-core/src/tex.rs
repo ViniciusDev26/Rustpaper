@@ -43,11 +43,11 @@ pub fn parse_spritesheet(tex_json: &str, tex_w: u32, tex_h: u32) -> Option<Sprit
 }
 
 pub struct DecodedTexture {
-    pub width: u32,       // dims do buffer decodificado (pode vir com padding)
+    pub width: u32, // dims do buffer decodificado (pode vir com padding)
     pub height: u32,
-    pub real_width: u32,  // região "de conteúdo" (dims da imagem no header)
+    pub real_width: u32, // região "de conteúdo" (dims da imagem no header)
     pub real_height: u32,
-    pub rgba: Vec<u8>,    // width*height*4
+    pub rgba: Vec<u8>, // width*height*4
 }
 
 struct Cursor<'a> {
@@ -167,7 +167,13 @@ pub fn parse(data: &[u8]) -> Result<DecodedTexture, String> {
     }
 
     let make = |rgba: Vec<u8>| {
-        Ok(DecodedTexture { width: mip_w, height: mip_h, real_width: width, real_height: height, rgba })
+        Ok(DecodedTexture {
+            width: mip_w,
+            height: mip_h,
+            real_width: width,
+            real_height: height,
+            rgba,
+        })
     };
 
     match format {

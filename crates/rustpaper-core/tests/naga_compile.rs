@@ -16,9 +16,9 @@
 // Precisa dos assets do WE ($WE_SHADERS_DIR ou /home/vscode/we-assets/shaders) e do
 // glslangValidator no PATH. Se faltar, o teste é PULADO (não falha).
 
+use rustpaper_core::shader::{Stage, translate};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use rustpaper_core::shader::{translate, Stage};
 
 fn shaders_dir() -> Option<PathBuf> {
     if let Ok(d) = std::env::var("WE_SHADERS_DIR") {
@@ -52,7 +52,18 @@ fn to_spirv(stage: Stage, src: &str, dir: &Path) -> Result<Vec<u32>, String> {
     std::fs::write(&in_path, &glsl).map_err(|e| e.to_string())?;
 
     let out = Command::new("glslangValidator")
-        .args(["-V", "-R", "--amb", "--aml", "--sdub", "WeGlobals", "0", "0", "-S", sflag])
+        .args([
+            "-V",
+            "-R",
+            "--amb",
+            "--aml",
+            "--sdub",
+            "WeGlobals",
+            "0",
+            "0",
+            "-S",
+            sflag,
+        ])
         .arg(&in_path)
         .arg("-o")
         .arg(&out_path)
@@ -108,7 +119,10 @@ fn genericimage2_pipeline_completo() {
 
         eprintln!("--- {ext}: {} globais ---", module.global_variables.len());
         for (_, gv) in module.global_variables.iter() {
-            eprintln!("  {:?} space={:?} binding={:?}", gv.name, gv.space, gv.binding);
+            eprintln!(
+                "  {:?} space={:?} binding={:?}",
+                gv.name, gv.space, gv.binding
+            );
         }
     }
 }

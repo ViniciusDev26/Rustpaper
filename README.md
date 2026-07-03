@@ -6,6 +6,9 @@
 <p align="center"><i>Wallpaper Engine, reconstruído do zero em Rust — pro seu Linux.</i></p>
 
 <p align="center">
+  <a href="https://github.com/ViniciusDev26/Rustpaper/actions/workflows/ci.yml">
+    <img alt="CI" src="https://github.com/ViniciusDev26/Rustpaper/actions/workflows/ci.yml/badge.svg">
+  </a>
   <img alt="Rust" src="https://img.shields.io/badge/rust-stable-orange?logo=rust">
   <img alt="Platform" src="https://img.shields.io/badge/platform-linux%20%2F%20wayland-blue">
   <img alt="Status" src="https://img.shields.io/badge/status-beta-yellow">

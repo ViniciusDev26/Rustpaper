@@ -1,11 +1,13 @@
 // `cargo run -p rustpaper-core --example dump_pkg -- <arquivo.pkg>`
 // Lista os arquivos de um .pkg do Wallpaper Engine.
 
-use std::path::Path;
 use rustpaper_core::pkg::Pkg;
+use std::path::Path;
 
 fn main() {
-    let path = std::env::args().nth(1).expect("uso: dump_pkg <arquivo.pkg>");
+    let path = std::env::args()
+        .nth(1)
+        .expect("uso: dump_pkg <arquivo.pkg>");
     let pkg = Pkg::open(Path::new(&path)).expect("falha ao abrir o .pkg");
 
     let names: Vec<&str> = pkg.names().collect();
@@ -17,7 +19,11 @@ fn main() {
     // Segundo arg opcional: imprime o conteúdo completo daquele arquivo do pkg.
     if let Some(entry) = std::env::args().nth(2) {
         match pkg.read(&entry) {
-            Some(data) => println!("\n=== {entry} ({} bytes) ===\n{}", data.len(), String::from_utf8_lossy(data)),
+            Some(data) => println!(
+                "\n=== {entry} ({} bytes) ===\n{}",
+                data.len(),
+                String::from_utf8_lossy(data)
+            ),
             None => println!("\n(entrada {entry:?} não encontrada)"),
         }
         return;

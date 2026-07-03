@@ -110,7 +110,9 @@ fn material_of_model(model_json: &str) -> Option<String> {
 // O nome da primeira textura de um material json.
 fn first_texture(material_json: &str) -> Option<String> {
     let mat: MaterialRaw = serde_json::from_str(material_json).ok()?;
-    mat.passes.into_iter().find_map(|p| p.textures.into_iter().flatten().next())
+    mat.passes
+        .into_iter()
+        .find_map(|p| p.textures.into_iter().flatten().next())
 }
 
 // O modo de blending do primeiro pass (default "translucent").
@@ -150,15 +152,18 @@ pub fn background_material(pkg: &Pkg) -> Option<MaterialInfo> {
 // Um sistema de partículas da cena, já com o nome da textura do sprite resolvido.
 pub struct SceneParticles {
     pub system: ParticleSystem,
-    pub texture: String,    // ex.: "particle/halo" (o engine resolve pro .tex)
-    pub additive: bool,     // blend do material: additive (luz) vs translucent
-    pub origin: [f32; 3],   // posição do objeto na cena (soma-se ao emitter local)
-    pub scale: f32,         // escala do objeto (multiplica tamanho/velocidade/distância)
+    pub texture: String,  // ex.: "particle/halo" (o engine resolve pro .tex)
+    pub additive: bool,   // blend do material: additive (luz) vs translucent
+    pub origin: [f32; 3], // posição do objeto na cena (soma-se ao emitter local)
+    pub scale: f32,       // escala do objeto (multiplica tamanho/velocidade/distância)
 }
 
 // Extrai todos os sistemas de partículas da cena (objetos com "particle").
 pub fn particle_systems(pkg: &Pkg) -> Vec<SceneParticles> {
-    let Some(scene_json) = pkg.read("scene.json").and_then(|b| std::str::from_utf8(b).ok()) else {
+    let Some(scene_json) = pkg
+        .read("scene.json")
+        .and_then(|b| std::str::from_utf8(b).ok())
+    else {
         return Vec::new();
     };
     let Ok(scene) = serde_json::from_str::<SceneRaw>(scene_json) else {
@@ -171,9 +176,13 @@ pub fn particle_systems(pkg: &Pkg) -> Vec<SceneParticles> {
         let Some(pjson) = pkg.read(&ppath).and_then(|b| std::str::from_utf8(b).ok()) else {
             continue;
         };
-        let Ok(system) = ParticleSystem::parse(pjson) else { continue };
+        let Ok(system) = ParticleSystem::parse(pjson) else {
+            continue;
+        };
         // material -> nome da textura do sprite + modo de blend
-        let material_json = pkg.read(&system.material).and_then(|b| std::str::from_utf8(b).ok());
+        let material_json = pkg
+            .read(&system.material)
+            .and_then(|b| std::str::from_utf8(b).ok());
         let texture = material_json.and_then(first_texture).unwrap_or_default();
         let additive = material_json.map(first_blending).as_deref() == Some("additive");
         // origin do OBJETO (o emitter da partícula é local a ele).
@@ -181,18 +190,35 @@ pub fn particle_systems(pkg: &Pkg) -> Vec<SceneParticles> {
             .origin
             .as_deref()
             .map(|s| {
-                let f: Vec<f32> = s.split_whitespace().filter_map(|t| t.parse().ok()).collect();
-                [*f.first().unwrap_or(&0.0), *f.get(1).unwrap_or(&0.0), *f.get(2).unwrap_or(&0.0)]
+                let f: Vec<f32> = s
+                    .split_whitespace()
+                    .filter_map(|t| t.parse().ok())
+                    .collect();
+                [
+                    *f.first().unwrap_or(&0.0),
+                    *f.get(1).unwrap_or(&0.0),
+                    *f.get(2).unwrap_or(&0.0),
+                ]
             })
             .unwrap_or([0.0; 3]);
         // escala do objeto (usa o X; a maioria é uniforme).
         let scale = obj
             .scale
             .as_deref()
-            .and_then(|s| s.split_whitespace().next().and_then(|t| t.parse::<f32>().ok()))
+            .and_then(|s| {
+                s.split_whitespace()
+                    .next()
+                    .and_then(|t| t.parse::<f32>().ok())
+            })
             .filter(|s| *s > 0.0)
             .unwrap_or(1.0);
-        out.push(SceneParticles { system, texture, additive, origin, scale });
+        out.push(SceneParticles {
+            system,
+            texture,
+            additive,
+            origin,
+            scale,
+        });
     }
     out
 }
@@ -213,7 +239,10 @@ mod tests {
     #[test]
     fn reads_material_from_model() {
         let model = r#"{ "autosize": true, "material": "materials/bg.json" }"#;
-        assert_eq!(material_of_model(model), Some("materials/bg.json".to_string()));
+        assert_eq!(
+            material_of_model(model),
+            Some("materials/bg.json".to_string())
+        );
     }
 
     #[test]
@@ -245,7 +274,10 @@ mod tests {
 
     #[test]
     fn material_info_sem_shader_e_none() {
-        assert_eq!(material_info(r#"{ "passes": [ { "textures": ["x"] } ] }"#), None);
+        assert_eq!(
+            material_info(r#"{ "passes": [ { "textures": ["x"] } ] }"#),
+            None
+        );
         assert_eq!(material_info(r#"{ "passes": [] }"#), None);
     }
 

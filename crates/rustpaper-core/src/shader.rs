@@ -117,8 +117,9 @@ fn resolve_includes(
         if let Some(name) = parse_include(line) {
             if seen.insert(name.clone()) {
                 let path = shaders_dir.join(&name);
-                let content = std::fs::read_to_string(&path)
-                    .map_err(|e| format!("include {name:?} não encontrado ({}): {e}", path.display()))?;
+                let content = std::fs::read_to_string(&path).map_err(|e| {
+                    format!("include {name:?} não encontrado ({}): {e}", path.display())
+                })?;
                 out.push_str(&format!("// begin include {name}\n"));
                 out.push_str(&resolve_includes(&content, shaders_dir, seen)?);
                 out.push_str(&format!("\n// end include {name}\n"));
@@ -187,9 +188,10 @@ fn type_components(ty: &str) -> Option<usize> {
 fn parse_default(v: &serde_json::Value, components: usize) -> Vec<f32> {
     let mut out = match v {
         serde_json::Value::Number(n) => vec![n.as_f64().unwrap_or(0.0) as f32],
-        serde_json::Value::String(s) => {
-            s.split_whitespace().filter_map(|t| t.parse::<f32>().ok()).collect()
-        }
+        serde_json::Value::String(s) => s
+            .split_whitespace()
+            .filter_map(|t| t.parse::<f32>().ok())
+            .collect(),
         _ => Vec::new(),
     };
     out.resize(components, 0.0);
@@ -203,21 +205,42 @@ pub fn parse_params(source: &str) -> Vec<UniformParam> {
     let mut out = Vec::new();
     for line in source.lines() {
         let t = line.trim();
-        let Some(rest) = t.strip_prefix("uniform ") else { continue };
-        let Some((decl, comment)) = rest.split_once("//") else { continue };
+        let Some(rest) = t.strip_prefix("uniform ") else {
+            continue;
+        };
+        let Some((decl, comment)) = rest.split_once("//") else {
+            continue;
+        };
         // decl = "<tipo> <nome> ;" (com ; no fim)
         let decl = decl.trim().trim_end_matches(';').trim();
         let mut it = decl.split_whitespace();
-        let (Some(ty), Some(name)) = (it.next(), it.next()) else { continue };
+        let (Some(ty), Some(name)) = (it.next(), it.next()) else {
+            continue;
+        };
         // nome pode ter [N] (array) — ignoramos arrays por ora
         if name.contains('[') {
             continue;
         }
-        let Some(components) = type_components(ty) else { continue };
-        let Ok(json) = serde_json::from_str::<serde_json::Value>(comment.trim()) else { continue };
-        let material = json.get("material").and_then(|m| m.as_str()).map(String::from);
-        let default = json.get("default").map(|d| parse_default(d, components)).unwrap_or_else(|| vec![0.0; components]);
-        out.push(UniformParam { uniform: name.to_string(), material, default, components });
+        let Some(components) = type_components(ty) else {
+            continue;
+        };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(comment.trim()) else {
+            continue;
+        };
+        let material = json
+            .get("material")
+            .and_then(|m| m.as_str())
+            .map(String::from);
+        let default = json
+            .get("default")
+            .map(|d| parse_default(d, components))
+            .unwrap_or_else(|| vec![0.0; components]);
+        out.push(UniformParam {
+            uniform: name.to_string(),
+            material,
+            default,
+            components,
+        });
     }
     out
 }
@@ -229,8 +252,12 @@ pub fn parse_combo_defaults(source: &str) -> Vec<(String, i64)> {
     let mut out = Vec::new();
     for line in source.lines() {
         let t = line.trim_start();
-        let Some(rest) = t.strip_prefix("// [COMBO]") else { continue };
-        let Ok(json) = serde_json::from_str::<serde_json::Value>(rest.trim()) else { continue };
+        let Some(rest) = t.strip_prefix("// [COMBO]") else {
+            continue;
+        };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(rest.trim()) else {
+            continue;
+        };
         let (Some(name), Some(def)) = (
             json.get("combo").and_then(|c| c.as_str()),
             json.get("default").and_then(|d| d.as_i64()),
@@ -248,11 +275,13 @@ pub fn parse_combo_defaults(source: &str) -> Vec<(String, i64)> {
 pub fn parse_sampler_defaults(source: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for line in source.lines() {
-        let Some((name, comment)) = parse_sampler_decl(line) else { continue };
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(comment.trim()) {
-            if let Some(def) = json.get("default").and_then(|d| d.as_str()) {
-                out.push((name, def.to_string()));
-            }
+        let Some((name, comment)) = parse_sampler_decl(line) else {
+            continue;
+        };
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(comment.trim())
+            && let Some(def) = json.get("default").and_then(|d| d.as_str())
+        {
+            out.push((name, def.to_string()));
         }
     }
     out
@@ -316,7 +345,11 @@ fn parse_sampler_decl(line: &str) -> Option<(String, String)> {
     if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         return None;
     }
-    let comment = rest[semi + 1..].trim().trim_start_matches('/').trim().to_string();
+    let comment = rest[semi + 1..]
+        .trim()
+        .trim_start_matches('/')
+        .trim()
+        .to_string();
     Some((name.to_string(), comment))
 }
 
@@ -336,8 +369,14 @@ mod tests {
 
     #[test]
     fn parse_include_extrai_nome() {
-        assert_eq!(parse_include("#include \"common_pbr.h\"").as_deref(), Some("common_pbr.h"));
-        assert_eq!(parse_include("  #include   \"a.h\"  ").as_deref(), Some("a.h"));
+        assert_eq!(
+            parse_include("#include \"common_pbr.h\"").as_deref(),
+            Some("common_pbr.h")
+        );
+        assert_eq!(
+            parse_include("  #include   \"a.h\"  ").as_deref(),
+            Some("a.h")
+        );
         assert_eq!(parse_include("uniform float x;"), None);
         assert_eq!(parse_include("// #include comentado"), None);
     }
@@ -383,8 +422,24 @@ mod tests {
                    uniform float g_NoAnno;\n";
         let ps = parse_params(src);
         assert_eq!(ps.len(), 2); // sampler e sem-anotação ignorados
-        assert_eq!(ps[0], UniformParam { uniform: "g_Brightness".into(), material: Some("Brightness".into()), default: vec![1.0], components: 1 });
-        assert_eq!(ps[1], UniformParam { uniform: "g_TintColor".into(), material: Some("color".into()), default: vec![1.0, 0.0, 0.0], components: 3 });
+        assert_eq!(
+            ps[0],
+            UniformParam {
+                uniform: "g_Brightness".into(),
+                material: Some("Brightness".into()),
+                default: vec![1.0],
+                components: 1
+            }
+        );
+        assert_eq!(
+            ps[1],
+            UniformParam {
+                uniform: "g_TintColor".into(),
+                material: Some("color".into()),
+                default: vec![1.0, 0.0, 0.0],
+                components: 3
+            }
+        );
     }
 
     #[test]

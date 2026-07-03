@@ -54,7 +54,10 @@ impl Pkg {
 
     // Parse PURO (bytes -> índice). Não toca em disco -> testável.
     pub fn parse(data: Vec<u8>) -> Result<Pkg, String> {
-        let mut c = Cursor { data: &data, pos: 0 };
+        let mut c = Cursor {
+            data: &data,
+            pos: 0,
+        };
 
         let version = c.sized_string().ok_or("header ausente")?;
         if !version.starts_with("PKGV") {
@@ -64,14 +67,24 @@ impl Pkg {
         let count = c.u32().ok_or("contagem de arquivos ausente")?;
         let mut entries = Vec::with_capacity(count as usize);
         for i in 0..count {
-            let name = c.sized_string().ok_or(format!("nome do arquivo {i} ausente"))?;
+            let name = c
+                .sized_string()
+                .ok_or(format!("nome do arquivo {i} ausente"))?;
             let offset = c.u32().ok_or(format!("offset do arquivo {i} ausente"))?;
             let length = c.u32().ok_or(format!("length do arquivo {i} ausente"))?;
-            entries.push(Entry { name, offset, length });
+            entries.push(Entry {
+                name,
+                offset,
+                length,
+            });
         }
 
         let base_offset = c.pos;
-        Ok(Pkg { data, base_offset, entries })
+        Ok(Pkg {
+            data,
+            base_offset,
+            entries,
+        })
     }
 
     // Nomes dos arquivos contidos no pacote.

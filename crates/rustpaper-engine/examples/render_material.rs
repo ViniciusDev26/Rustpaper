@@ -12,8 +12,8 @@
 // Uso: cargo run -p rustpaper-engine --example render_material
 // Saída: /tmp/render_material.png
 
+use rustpaper_core::shader::{Stage, translate};
 use std::process::Command;
-use rustpaper_core::shader::{translate, Stage};
 
 const SIZE: u32 = 256;
 
@@ -36,8 +36,17 @@ fn vs_main(@builtin(vertex_index) i: u32) -> VsOut {
 "#;
 
 fn glslang() -> &'static str {
-    for c in ["glslangValidator", "/usr/sbin/glslangValidator", "/usr/bin/glslangValidator"] {
-        if Command::new(c).arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+    for c in [
+        "glslangValidator",
+        "/usr/sbin/glslangValidator",
+        "/usr/bin/glslangValidator",
+    ] {
+        if Command::new(c)
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
             return Box::leak(c.to_string().into_boxed_str());
         }
     }
@@ -46,22 +55,50 @@ fn glslang() -> &'static str {
 
 fn compile_frag_spirv(shaders_dir: &str) -> Vec<u32> {
     let src = std::fs::read_to_string(format!("{shaders_dir}/genericimage2.frag")).unwrap();
-    let glsl = translate(Stage::Fragment, &src, &[], std::path::Path::new(shaders_dir)).unwrap();
+    let glsl = translate(
+        Stage::Fragment,
+        &src,
+        &[],
+        std::path::Path::new(shaders_dir),
+    )
+    .unwrap();
     let inp = std::env::temp_dir().join("render_material.frag");
     let outp = std::env::temp_dir().join("render_material.frag.spv");
     std::fs::write(&inp, &glsl).unwrap();
     let o = Command::new(glslang())
-        .args(["-V", "-R", "--amb", "--aml", "--sdub", "WeGlobals", "0", "0", "-S", "frag"])
-        .arg(&inp).arg("-o").arg(&outp)
-        .output().unwrap();
-    assert!(o.status.success(), "glslang: {}{}",
-        String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+        .args([
+            "-V",
+            "-R",
+            "--amb",
+            "--aml",
+            "--sdub",
+            "WeGlobals",
+            "0",
+            "0",
+            "-S",
+            "frag",
+        ])
+        .arg(&inp)
+        .arg("-o")
+        .arg(&outp)
+        .output()
+        .unwrap();
+    assert!(
+        o.status.success(),
+        "glslang: {}{}",
+        String::from_utf8_lossy(&o.stdout),
+        String::from_utf8_lossy(&o.stderr)
+    );
     let bytes = std::fs::read(&outp).unwrap();
-    bytes.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect()
+    bytes
+        .chunks_exact(4)
+        .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+        .collect()
 }
 
 fn main() {
-    let shaders_dir = std::env::var("WE_SHADERS_DIR").unwrap_or_else(|_| "/home/vscode/we-assets/shaders".into());
+    let shaders_dir =
+        std::env::var("WE_SHADERS_DIR").unwrap_or_else(|_| "/home/vscode/we-assets/shaders".into());
     let frag_spirv = compile_frag_spirv(&shaders_dir);
 
     // --- wgpu headless (sem surface) ---
@@ -70,7 +107,8 @@ fn main() {
         power_preference: wgpu::PowerPreference::HighPerformance,
         force_fallback_adapter: false,
         compatible_surface: None,
-    })).expect("adapter");
+    }))
+    .expect("adapter");
     println!("adapter: {:?}", adapter.get_info());
     let (device, queue) =
         pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
@@ -86,7 +124,11 @@ fn main() {
             rgba[i + 3] = 255;
         }
     }
-    let extent = wgpu::Extent3d { width: SIZE, height: SIZE, depth_or_array_layers: 1 };
+    let extent = wgpu::Extent3d {
+        width: SIZE,
+        height: SIZE,
+        depth_or_array_layers: 1,
+    };
     let in_tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("input"),
         size: extent,
@@ -98,9 +140,18 @@ fn main() {
         view_formats: &[],
     });
     queue.write_texture(
-        wgpu::TexelCopyTextureInfo { texture: &in_tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+        wgpu::TexelCopyTextureInfo {
+            texture: &in_tex,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
         &rgba,
-        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * SIZE), rows_per_image: Some(SIZE) },
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4 * SIZE),
+            rows_per_image: Some(SIZE),
+        },
         extent,
     );
     let in_view = in_tex.create_view(&wgpu::TextureViewDescriptor::default());
@@ -138,17 +189,28 @@ fn main() {
         label: Some("bgl"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
-                binding: 0, visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
                 count: None,
             },
             wgpu::BindGroupLayoutEntry {
-                binding: 1, visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
                 count: None,
             },
             wgpu::BindGroupLayoutEntry {
-                binding: 2, visibility: wgpu::ShaderStages::FRAGMENT,
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
             },
@@ -158,9 +220,18 @@ fn main() {
         label: Some("bg"),
         layout: &bgl,
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: ubo.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&in_view) },
-            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&sampler) },
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: ubo.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&in_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            },
         ],
     });
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -173,12 +244,21 @@ fn main() {
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("material"),
         layout: Some(&layout),
-        vertex: wgpu::VertexState { module: &vs, entry_point: Some("vs_main"), compilation_options: Default::default(), buffers: &[] },
+        vertex: wgpu::VertexState {
+            module: &vs,
+            entry_point: Some("vs_main"),
+            compilation_options: Default::default(),
+            buffers: &[],
+        },
         fragment: Some(wgpu::FragmentState {
             module: &fs,
             entry_point: Some("main"),
             compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState { format: target_format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+            targets: &[Some(wgpu::ColorTargetState {
+                format: target_format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
         }),
         primitive: wgpu::PrimitiveState::default(),
         depth_stencil: None,
@@ -200,15 +280,24 @@ fn main() {
     });
     let out_view = out_tex.create_view(&wgpu::TextureViewDescriptor::default());
 
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let mut encoder =
+        device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     {
         let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &out_view, resolve_target: None, depth_slice: None,
-                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                view: &out_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
             })],
-            depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
         });
         rp.set_pipeline(&pipeline);
         rp.set_bind_group(0, &bind_group, &[]);
@@ -224,8 +313,20 @@ fn main() {
         mapped_at_creation: false,
     });
     encoder.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo { texture: &out_tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-        wgpu::TexelCopyBufferInfo { buffer: &readback, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bpr), rows_per_image: Some(SIZE) } },
+        wgpu::TexelCopyTextureInfo {
+            texture: &out_tex,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &readback,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(bpr),
+                rows_per_image: Some(SIZE),
+            },
+        },
         extent,
     );
     queue.submit(Some(encoder.finish()));

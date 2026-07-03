@@ -119,7 +119,11 @@ impl Program {
                 2 => (12u64, wgpu::VertexFormat::Float32x2),
                 _ => continue,
             };
-            attrs.push(wgpu::VertexAttribute { format, offset, shader_location: vi.location });
+            attrs.push(wgpu::VertexAttribute {
+                format,
+                offset,
+                shader_location: vi.location,
+            });
         }
         let vbl = wgpu::VertexBufferLayout {
             array_stride: 20,
@@ -130,14 +134,22 @@ impl Program {
         let mut entries = vec![wgpu::BindGroupLayoutEntry {
             binding: 0,
             visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-            ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
             count: None,
         }];
         for &b in &refl.texture_bindings {
             entries.push(wgpu::BindGroupLayoutEntry {
                 binding: b,
                 visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
                 count: None,
             });
         }
@@ -149,18 +161,34 @@ impl Program {
                 count: None,
             });
         }
-        let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("prog-bgl"), entries: &entries });
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(&bgl)], immediate_size: 0 });
+        let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("prog-bgl"),
+            entries: &entries,
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[Some(&bgl)],
+            immediate_size: 0,
+        });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("prog"),
             layout: Some(&layout),
-            vertex: wgpu::VertexState { module: &vs, entry_point: Some("main"), compilation_options: Default::default(), buffers: &[vbl] },
+            vertex: wgpu::VertexState {
+                module: &vs,
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                buffers: &[vbl],
+            },
             fragment: Some(wgpu::FragmentState {
                 module: &fs,
                 entry_point: Some("main"),
                 compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState { format: target, blend: blend.state(), write_mask: wgpu::ColorWrites::ALL })],
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: target,
+                    blend: blend.state(),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
             }),
             primitive: Default::default(),
             depth_stencil: None,
@@ -214,7 +242,11 @@ impl Program {
         if let Some(&o) = self.offsets.get("g_Time") {
             write(&mut buf, o, &[time]);
         }
-        for res in ["g_Texture0Resolution", "g_Texture1Resolution", "g_Texture2Resolution"] {
+        for res in [
+            "g_Texture0Resolution",
+            "g_Texture1Resolution",
+            "g_Texture2Resolution",
+        ] {
             if let Some(&o) = self.offsets.get(res) {
                 write(&mut buf, o, &[w as f32, h as f32, w as f32, h as f32]);
             }
@@ -234,7 +266,9 @@ impl Program {
         }
         // params anotados: default, sobrescrito por constant do material/cena
         for p in &self.params {
-            let Some(&o) = self.offsets.get(&p.uniform) else { continue };
+            let Some(&o) = self.offsets.get(&p.uniform) else {
+                continue;
+            };
             let mut vals = p
                 .material
                 .as_ref()
@@ -252,9 +286,21 @@ impl Program {
 /// (y=0 no topo). Coluna-maior (como o GLSL espera).
 pub fn ortho(w: f32, h: f32) -> [f32; 16] {
     [
-        2.0 / w, 0.0, 0.0, 0.0,
-        0.0, -2.0 / h, 0.0, 0.0,
-        0.0, 0.0, 1.0, 0.0,
-        -1.0, 1.0, 0.0, 1.0,
+        2.0 / w,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        -2.0 / h,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        -1.0,
+        1.0,
+        0.0,
+        1.0,
     ]
 }

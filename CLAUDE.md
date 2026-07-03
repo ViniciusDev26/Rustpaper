@@ -222,6 +222,11 @@ Sem áudio/widgets no escopo. Onde estamos vs. a meta:
 - **Commits em INGLÊS** (o resto da conversa pode ser em português).
 - Ao mexer na API do `wgpu`/SCTK, **cheque a fonte** no cargo registry antes de
   chutar — as APIs mudam bastante entre versões (já apanhamos várias vezes).
+- **CI** (`.github/workflows/ci.yml`, roda em push/PR pra `main`): `cargo fmt --check`,
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+  `cargo build --workspace --all-targets` e `cargo test --workspace`. Rode
+  `cargo fmt --all` e `cargo clippy --fix` localmente antes de commitar pra não
+  quebrar o gate.
 
 ## Roadmap / frentes abertas
 

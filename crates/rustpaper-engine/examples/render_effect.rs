@@ -13,12 +13,12 @@
 
 use std::path::Path;
 
-use rustpaper_engine::postprocess::Pass;
-use rustpaper_engine::shader_compile::{self, Reflection};
 use rustpaper_core::pkg::Pkg;
 use rustpaper_core::scene;
 use rustpaper_core::shader::Stage;
 use rustpaper_core::tex;
+use rustpaper_engine::postprocess::Pass;
+use rustpaper_engine::shader_compile::{self, Reflection};
 
 fn align256(n: u32) -> u32 {
     (n + 255) & !255
@@ -42,7 +42,11 @@ fn put_vec3(buf: &mut [u8], refl: &Reflection, name: &str, v: [f32; 3]) {
 fn make_target(device: &wgpu::Device, w: u32, h: u32) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: None,
-        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -56,9 +60,14 @@ fn make_target(device: &wgpu::Device, w: u32, h: u32) -> wgpu::Texture {
 }
 
 fn main() {
-    let dir = std::env::args().nth(1).expect("uso: render_effect <pasta-do-wallpaper> [saida.png]");
-    let out_png = std::env::args().nth(2).unwrap_or_else(|| "/tmp/render_effect.png".into());
-    let shaders_dir = std::env::var("WE_SHADERS_DIR").unwrap_or_else(|_| "/home/vscode/we-assets/shaders".into());
+    let dir = std::env::args()
+        .nth(1)
+        .expect("uso: render_effect <pasta-do-wallpaper> [saida.png]");
+    let out_png = std::env::args()
+        .nth(2)
+        .unwrap_or_else(|| "/tmp/render_effect.png".into());
+    let shaders_dir =
+        std::env::var("WE_SHADERS_DIR").unwrap_or_else(|_| "/home/vscode/we-assets/shaders".into());
     let sd = Path::new(&shaders_dir);
 
     // --- fundo da cena ---
@@ -81,8 +90,10 @@ fn main() {
         power_preference: wgpu::PowerPreference::HighPerformance,
         force_fallback_adapter: false,
         compatible_surface: None,
-    })).expect("adapter");
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+    }))
+    .expect("adapter");
+    let (device, queue) =
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
 
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         mag_filter: wgpu::FilterMode::Linear,
@@ -94,16 +105,31 @@ fn main() {
     // textura de entrada = conteúdo decodificado
     let in_tex = make_target(&device, cw, ch);
     queue.write_texture(
-        wgpu::TexelCopyTextureInfo { texture: &in_tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+        wgpu::TexelCopyTextureInfo {
+            texture: &in_tex,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
         &content,
-        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * cw), rows_per_image: Some(ch) },
-        wgpu::Extent3d { width: cw, height: ch, depth_or_array_layers: 1 },
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4 * cw),
+            rows_per_image: Some(ch),
+        },
+        wgpu::Extent3d {
+            width: cw,
+            height: ch,
+            depth_or_array_layers: 1,
+        },
     );
     let in_view = in_tex.create_view(&Default::default());
 
     // ---- Passe 1: material de fundo (genericimage2, v_TexCoord vec2) ----
-    let bg_frag = std::fs::read_to_string(format!("{shaders_dir}/{}.frag", material.shader)).expect("bg .frag");
-    let bg_spirv = shader_compile::compile(Stage::Fragment, &bg_frag, &material.combos, sd).expect("compilar fundo");
+    let bg_frag = std::fs::read_to_string(format!("{shaders_dir}/{}.frag", material.shader))
+        .expect("bg .frag");
+    let bg_spirv = shader_compile::compile(Stage::Fragment, &bg_frag, &material.combos, sd)
+        .expect("compilar fundo");
     let bg_refl = shader_compile::reflect(&bg_spirv).expect("refletir fundo");
     let bg_pass = Pass::new(&device, &bg_spirv, &bg_refl, fmt, false);
     let mut bg_ubo = vec![0u8; bg_pass.ubo_size() as usize];
@@ -118,9 +144,13 @@ fn main() {
     let tint_path = "/home/vscode/we-assets/effects/tint/shaders/effects/tint.frag";
     let tint_frag = std::fs::read_to_string(tint_path).expect("tint.frag");
     let tint_combos = vec![("BLENDMODE".to_string(), 2i64)]; // multiply
-    let tint_spirv = shader_compile::compile(Stage::Fragment, &tint_frag, &tint_combos, sd).expect("compilar tint");
+    let tint_spirv = shader_compile::compile(Stage::Fragment, &tint_frag, &tint_combos, sd)
+        .expect("compilar tint");
     let tint_refl = shader_compile::reflect(&tint_spirv).expect("refletir tint");
-    println!("tint reflection: ubo={} membros={:?} tex={:?}", tint_refl.uniform_size, tint_refl.uniform_offsets, tint_refl.texture_bindings);
+    println!(
+        "tint reflection: ubo={} membros={:?} tex={:?}",
+        tint_refl.uniform_size, tint_refl.uniform_offsets, tint_refl.texture_bindings
+    );
     let tint_pass = Pass::new(&device, &tint_spirv, &tint_refl, fmt, true);
     let mut tint_ubo = vec![0u8; tint_pass.ubo_size() as usize];
     put_f32(&mut tint_ubo, &tint_refl, "g_BlendAlpha", 1.0);
@@ -140,9 +170,25 @@ fn main() {
     });
     let mut enc = device.create_command_encoder(&Default::default());
     enc.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo { texture: &tex_b, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-        wgpu::TexelCopyBufferInfo { buffer: &readback, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bpr), rows_per_image: Some(ch) } },
-        wgpu::Extent3d { width: cw, height: ch, depth_or_array_layers: 1 },
+        wgpu::TexelCopyTextureInfo {
+            texture: &tex_b,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &readback,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(bpr),
+                rows_per_image: Some(ch),
+            },
+        },
+        wgpu::Extent3d {
+            width: cw,
+            height: ch,
+            depth_or_array_layers: 1,
+        },
     );
     queue.submit(Some(enc.finish()));
     let slice = readback.slice(..);

@@ -16,7 +16,7 @@ pub enum WallpaperKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Project {
     pub kind: WallpaperKind,
-    pub file: String,  // arquivo principal, relativo à pasta (ex.: "video.mp4")
+    pub file: String, // arquivo principal, relativo à pasta (ex.: "video.mp4")
     pub title: String,
 }
 
@@ -38,7 +38,13 @@ impl Project {
     pub fn parse(json: &str) -> Result<Project, serde_json::Error> {
         let raw: RawProject = serde_json::from_str(json)?;
         // Casing varia no WE (scene/Scene, video/Video) -> normaliza.
-        let kind = match raw.r#type.as_deref().unwrap_or("").to_ascii_lowercase().as_str() {
+        let kind = match raw
+            .r#type
+            .as_deref()
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .as_str()
+        {
             "video" => WallpaperKind::Video,
             "scene" => WallpaperKind::Scene,
             "web" => WallpaperKind::Web,
@@ -54,8 +60,7 @@ impl Project {
     // Lê e parseia o project.json dentro de uma pasta de wallpaper.
     pub fn load(dir: &Path) -> std::io::Result<Project> {
         let json = std::fs::read_to_string(dir.join("project.json"))?;
-        Project::parse(&json)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        Project::parse(&json).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
 
     // Caminho absoluto do arquivo principal, dado a pasta do wallpaper.
@@ -89,16 +94,34 @@ mod tests {
     #[test]
     fn type_is_case_insensitive() {
         // No WE aparecem tanto "Video" quanto "video".
-        assert_eq!(Project::parse(r#"{"type":"Video","file":"a.mp4"}"#).unwrap().kind, WallpaperKind::Video);
-        assert_eq!(Project::parse(r#"{"type":"Scene","file":"scene.json"}"#).unwrap().kind, WallpaperKind::Scene);
+        assert_eq!(
+            Project::parse(r#"{"type":"Video","file":"a.mp4"}"#)
+                .unwrap()
+                .kind,
+            WallpaperKind::Video
+        );
+        assert_eq!(
+            Project::parse(r#"{"type":"Scene","file":"scene.json"}"#)
+                .unwrap()
+                .kind,
+            WallpaperKind::Scene
+        );
     }
 
     #[test]
     fn unknown_and_missing_type() {
         // Tipo não suportado (web) -> Unknown com o texto normalizado.
-        assert_eq!(Project::parse(r#"{"type":"web","file":"index.html"}"#).unwrap().kind, WallpaperKind::Web);
+        assert_eq!(
+            Project::parse(r#"{"type":"web","file":"index.html"}"#)
+                .unwrap()
+                .kind,
+            WallpaperKind::Web
+        );
         // Sem campo type -> Unknown("").
-        assert_eq!(Project::parse(r#"{"file":""}"#).unwrap().kind, WallpaperKind::Unknown(String::new()));
+        assert_eq!(
+            Project::parse(r#"{"file":""}"#).unwrap().kind,
+            WallpaperKind::Unknown(String::new())
+        );
     }
 
     #[test]
@@ -109,6 +132,9 @@ mod tests {
     #[test]
     fn file_path_joins_dir() {
         let p = Project::parse(r#"{"type":"video","file":"clip.mp4"}"#).unwrap();
-        assert_eq!(p.file_path(Path::new("/wallpapers/123")), PathBuf::from("/wallpapers/123/clip.mp4"));
+        assert_eq!(
+            p.file_path(Path::new("/wallpapers/123")),
+            PathBuf::from("/wallpapers/123/clip.mp4")
+        );
     }
 }

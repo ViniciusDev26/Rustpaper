@@ -17,7 +17,10 @@ fn main() {
     .unwrap();
 
     let info = adapter.get_info();
-    println!("Adapter escolhido: {}  [{:?}, {:?}]", info.name, info.backend, info.device_type);
+    println!(
+        "Adapter escolhido: {}  [{:?}, {:?}]",
+        info.name, info.backend, info.device_type
+    );
 
     // 2) ABRIR o device + queue nessa GPU. É aqui que realmente "ligamos" a placa:
     //    - Device: cria recursos (buffers, texturas, shaders, pipelines).
@@ -34,5 +37,8 @@ fn main() {
 
     // Espia um limite real da GPU só pra provar que o device conhece o hardware.
     let limits = device.limits();
-    println!("max_texture_dimension_2d = {}", limits.max_texture_dimension_2d);
+    println!(
+        "max_texture_dimension_2d = {}",
+        limits.max_texture_dimension_2d
+    );
 }
