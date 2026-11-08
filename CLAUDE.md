@@ -11,7 +11,8 @@ Projeto de aprendizado de Rust — priorize clareza e explicação didática ao 
 
 - **`rustpaper-gl`** (OpenGL 3.3 via headless EGL, runs on the host — no
   devcontainer): renders WE scenes with a generic effect runtime. CLI:
-  `rustpaper-render <workshop id> [--describe] [--dump-passes dir] [--video ...]`.
+  `rustpaper-render <workshop id> [--describe] [--dump-passes dir] [--only ids] [--video ...]`.
+  Layers, effects and particle systems all render through the real WE shaders.
   WE behaviours it had to match and known gaps: **`docs/GL_RENDERER.md`**.
 - **Harness** (`harness/run.sh <id>`): captures the real WE (Proton) on a
   headless output and compares mean / motion against Rustpaper:

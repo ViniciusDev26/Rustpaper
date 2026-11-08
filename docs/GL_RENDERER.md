@@ -12,7 +12,8 @@ cargo run --release -p rustpaper-gl --bin rustpaper-render -- <workshop id | fol
     [--video out.mp4 --duration 10 --fps 30 --width 1920]
 ```
 
-`--describe` lists layers + every load/compile warning. `--dump-passes` writes
+`--only id,id` draws just those scene objects (isolate one layer or particle
+system). `--describe` lists layers + every load/compile warning. `--dump-passes` writes
 every intermediate target (layer, each effect pass, named FBOs) as PNG — the
 fastest way to find which pass breaks a scene. `RUSTPAPER_TRACE=1` prints each
 draw with its program variant and the texture bound to every slot.
@@ -77,10 +78,53 @@ If the runtime fills uniforms/textures/combos like WE, every effect works.
   8-bit values. Mipmaps are generated for every texture.
 - **TEXB0004:** the extra per-mipmap header only exists for mp4 textures.
 
-## Known gaps (as of the first version)
+## Particles (`particles.rs`)
 
-- Particles, text objects, puppet/skeletal animation, SceneScript (JS-driven
-  properties, e.g. audio visualizers), audio uniforms, camera parallax.
+Particle objects are drawn in scene.json order, interleaved with layers, by the
+REAL `genericparticle` shader: the simulation only produces 4 vertices per
+particle in the layout its vertex stage reads (center, uv + rotation z + size,
+color, rotation xy, velocity + sprite-sheet phase) and the shader expands the
+quad, the trail (`TRAILRENDERER`) or the sprite-sheet frame (`SPRITESHEET`,
+`g_RenderVar1`).
+
+- Supported: emitters `sphererandom`, `boxrandom` (+ `instantaneous` bursts);
+  initializers lifetime/size/color/alpha/velocity/rotation/angular velocity/
+  turbulent velocity; operators movement, alphafade, size/alpha/color change,
+  oscillate alpha/size/position, turbulence, controlpointattract, vortex,
+  angularmovement; renderers `sprite`, `spritetrail`; child systems
+  (`eventfollow`, `eventspawn`, `eventdeath`); `starttime` prewarm;
+  `instanceoverride` multipliers. Sprite sheets come from the `TEXS` block
+  inside the .tex (Workshop) or the `.tex-json` (base assets).
+- Deterministic: seeded RNG + fixed 1/60 s steps; going back in time replays.
+- Calibrated against WE with the harness (each choice is commented in code):
+  rendered size = `size` x 0.5; oscillation frequencies are rad/s and oscillate
+  between scalemin..scalemax; turbulence makes particles FOLLOW a slowly
+  evolving noise field (not accelerate, not curl); `offset` of
+  turbulentvelocityrandom is a noise phase, not a push.
+
+## More WE behaviours found while adding particles
+
+- **Object hierarchy:** objects can have a `parent` (any object, including
+  groups); origin/angles/scale are relative to it (`world_matrices`).
+- **Depth:** scenes put things at large z (emitters spread hundreds of units in
+  depth). The ortho projections scale z down so nothing is clipped.
+- **`"image": null`** appears on particle/group objects: test for a string, or
+  particle systems are silently dropped as broken image layers.
+- **1/2-channel textures keep GL layout:** RG88 samples as (lum, alpha, 0, 1)
+  and R8 as (r, 0, 0, 1), and WE passes each texture's format to shaders as
+  `TEXnFORMAT` (ConvertTexture0Format turns RG88 into .rrrg). Pre-expanding
+  them made every RG88 sprite an opaque quad and every RG88 flow map wrong
+  (`shake`); fixing it took Yor from 0.94 to 0.98 mean SSIM.
+- Engine aliases (`_alias_lightCookie`, shadow atlases) only exist with scene
+  lighting; they resolve to white.
+
+## Known gaps
+
+- Text objects, puppet/skeletal animation, SceneScript (JS-driven properties,
+  e.g. audio visualizers), audio uniforms, camera parallax.
+- Particles: rope renderers (`rope`, `ropetrail`: genericropeparticle shader,
+  9 scenes), operator `remapvalue`, initializers `mapsequence*`, audio
+  response, `orientation` other than screen-facing.
 - ~10 Workshop shaders rely on HLSL implicit conversions (vec4 -> vec3,
   int -> uint) that GLSL rejects; those passes are skipped (image passes
   through unchanged).

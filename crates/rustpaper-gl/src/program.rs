@@ -89,9 +89,14 @@ impl Program {
                 gl.attach_shader(program, s);
                 stages.push(s);
             }
-            // Fixed attribute slots, matching QuadMesh.
+            // Fixed attribute slots, matching QuadMesh / ParticleMesh.
             gl.bind_attrib_location(program, 0, "a_Position");
             gl.bind_attrib_location(program, 1, "a_TexCoord");
+            // genericparticle's vertex stream (see ParticleMesh)
+            gl.bind_attrib_location(program, 2, "a_TexCoordVec4");
+            gl.bind_attrib_location(program, 3, "a_Color");
+            gl.bind_attrib_location(program, 4, "a_TexCoordC2");
+            gl.bind_attrib_location(program, 5, "a_TexCoordVec4C1");
             gl.link_program(program);
             for s in stages {
                 gl.detach_shader(program, s);
