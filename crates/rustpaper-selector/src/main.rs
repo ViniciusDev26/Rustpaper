@@ -12,8 +12,11 @@ use std::sync::Mutex;
 use rustpaper_core::project::{Project, WallpaperKind};
 use serde::Serialize;
 
-// Pasta do Workshop montada no container. TODO: tornar configurável.
-const WORKSHOP_DIR: &str = "/home/vscode/wallpapers";
+/// Workshop folder: the Steam library on the host, or `$WE_WORKSHOP_DIR`.
+fn workshop_dir() -> PathBuf {
+    rustpaper_core::paths::workshop_dir()
+        .unwrap_or_else(|| PathBuf::from("/home/vscode/wallpapers"))
+}
 
 // Guarda o processo do engine em execução, pra matá-lo ao trocar de wallpaper.
 struct EngineState(Mutex<Option<Child>>);
@@ -40,9 +43,9 @@ fn find_preview(dir: &Path) -> Option<PathBuf> {
 
 #[tauri::command]
 fn list_wallpapers() -> Vec<WallpaperEntry> {
-    let base = Path::new(WORKSHOP_DIR);
+    let base = workshop_dir();
     let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(base) else {
+    let Ok(entries) = std::fs::read_dir(&base) else {
         return out;
     };
     for e in entries.flatten() {
@@ -81,7 +84,7 @@ fn engine_path() -> Option<PathBuf> {
 
 #[tauri::command]
 fn apply(id: String, state: tauri::State<EngineState>) -> Result<(), String> {
-    let dir = Path::new(WORKSHOP_DIR).join(&id);
+    let dir = workshop_dir().join(&id);
     if !dir.join("project.json").exists() {
         return Err(format!("project.json não encontrado para {id}"));
     }
@@ -127,7 +130,7 @@ fn set_autostart(enabled: bool) -> Result<(), String> {
         let engine = engine_path().ok_or("binário do engine não encontrado")?;
         match &s.last_id {
             Some(id) => {
-                let dir = Path::new(WORKSHOP_DIR).join(id);
+                let dir = workshop_dir().join(id);
                 settings::write_autostart(&engine, &dir).map_err(|e| e.to_string())?;
             }
             None => return Err("aplique um wallpaper antes de ligar o autostart".into()),

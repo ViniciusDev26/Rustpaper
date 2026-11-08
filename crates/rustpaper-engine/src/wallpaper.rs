@@ -11,7 +11,7 @@ use raw_window_handle::{
     RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
 };
 use smithay_client_toolkit::{
-    compositor::{CompositorHandler, CompositorState},
+    compositor::{CompositorHandler, CompositorState, Region},
     delegate_compositor, delegate_layer, delegate_output, delegate_registry,
     output::{OutputHandler, OutputState},
     registry::{ProvidesRegistryState, RegistryState},
@@ -49,6 +49,12 @@ const MAX_PARTICLE_SIZE: f32 = 400.0;
 fn is_supported(sys: &ParticleSystem) -> bool {
     sys.renderer == "sprite" && sys.size.1 <= MAX_PARTICLE_SIZE
 }
+
+/// Layer the wallpaper lives on. `Bottom` (above the Background layer, below
+/// every window) because desktop shells such as Omarchy's draw their own
+/// background on `Background` and would cover ours. Our surface takes no input,
+/// so desktop clicks still reach the shell background underneath.
+pub(crate) const LAYER: Layer = Layer::Bottom;
 
 // Uma tela: sua layer surface, a wl_surface, a surface do wgpu e a config (tamanho).
 struct Monitor {
@@ -257,10 +263,13 @@ impl OutputHandler for Wallpaper {
     fn new_output(&mut self, _: &Connection, qh: &QueueHandle<Self>, output: wl_output::WlOutput) {
         // Cria a layer surface ancorada a ESTE output específico.
         let surface = self.compositor.create_surface(qh);
+        if let Ok(region) = Region::new(&self.compositor) {
+            surface.set_input_region(Some(region.wl_region()));
+        }
         let layer = self.layer_shell.create_layer_surface(
             qh,
             surface,
-            Layer::Background,
+            LAYER,
             Some("rustpaper"),
             Some(&output),
         );

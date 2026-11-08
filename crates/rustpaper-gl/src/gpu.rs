@@ -296,3 +296,69 @@ fn as_bytes(v: &[f32; 20]) -> &[u8] {
     // SAFETY: f32 has no padding/invalid bit patterns; the slice covers exactly v.
     unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, std::mem::size_of_val(v)) }
 }
+
+/// Source rectangle (x0, y0, x1, y1) of a `src_w`x`src_h` image that "covers" a
+/// `dst_w`x`dst_h` screen: scaled to fill it, centered, overflow cropped.
+pub fn cover_rect(src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) -> (i32, i32, i32, i32) {
+    let (sw, sh) = (src_w as f32, src_h as f32);
+    let scale = (dst_w as f32 / sw).max(dst_h as f32 / sh);
+    let (cw, ch) = (dst_w as f32 / scale, dst_h as f32 / scale);
+    let (x0, y0) = ((sw - cw) * 0.5, (sh - ch) * 0.5);
+    (
+        x0.round() as i32,
+        y0.round() as i32,
+        (x0 + cw).round() as i32,
+        (y0 + ch).round() as i32,
+    )
+}
+
+/// Copies a finished frame to the current window surface (default framebuffer)
+/// of `dst_w`x`dst_h`, cover-scaled. Our targets keep the image top in row 0,
+/// the window's row 0 is the bottom, so the destination rectangle is flipped.
+pub fn present_cover(gl: &glow::Context, src: &Target, dst_w: u32, dst_h: u32) {
+    let (x0, y0, x1, y1) = cover_rect(src.tex.width, src.tex.height, dst_w, dst_h);
+    unsafe {
+        gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(src.fbo));
+        gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, None);
+        // A context first made current WITHOUT a surface (EGL_KHR_surfaceless_
+        // context, how the live wallpaper starts) keeps DRAW_BUFFER = GL_NONE
+        // even after a window surface is bound: every draw to the window would
+        // be silently discarded. Select the back buffer explicitly.
+        gl.draw_buffer(glow::BACK);
+        gl.viewport(0, 0, dst_w as i32, dst_h as i32);
+        gl.blit_framebuffer(
+            x0,
+            y0,
+            x1,
+            y1,
+            0,
+            dst_h as i32,
+            dst_w as i32,
+            0,
+            glow::COLOR_BUFFER_BIT,
+            glow::LINEAR,
+        );
+        // The wallpaper is opaque: force alpha to 1 so the compositor never
+        // blends it with whatever is below the background layer.
+        gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+        gl.color_mask(false, false, false, true);
+        gl.clear_color(0.0, 0.0, 0.0, 1.0);
+        gl.clear(glow::COLOR_BUFFER_BIT);
+        gl.color_mask(true, true, true, true);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cover_rect;
+
+    #[test]
+    fn cover_crops_the_overflowing_axis() {
+        // same aspect: whole image
+        assert_eq!(cover_rect(3840, 2160, 1920, 1080), (0, 0, 3840, 2160));
+        // 16:9 scene on a 16:10 screen: crop left/right
+        assert_eq!(cover_rect(1920, 1080, 1920, 1200), (96, 0, 1824, 1080));
+        // 16:9 scene on an ultrawide: crop top/bottom
+        assert_eq!(cover_rect(1920, 1080, 3440, 1440), (0, 138, 1920, 942));
+    }
+}

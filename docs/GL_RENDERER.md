@@ -17,6 +17,26 @@ every intermediate target (layer, each effect pass, named FBOs) as PNG — the
 fastest way to find which pass breaks a scene. `RUSTPAPER_TRACE=1` prints each
 draw with its program variant and the texture bound to every slot.
 
+## Live wallpaper (`rustpaper-engine/src/gl_wallpaper.rs`)
+
+`rustpaper <wallpaper folder>` runs scenes on this renderer (videos stay on the
+wgpu path; `RUSTPAPER_LEGACY_SCENE=1` brings back the old scene compositor).
+
+- One EGL context on the compositor's `wl_display`, one EGL window surface per
+  output. Each timer tick (~30 fps) renders the scene ONCE into its FBO, then
+  cover-blits it to every output and swaps with vsync off (a covered surface
+  must never block the loop).
+- With `wp_viewporter`, buffers use the output's PHYSICAL mode (3840x2160 on a
+  1.5x-scaled 4K screen) shown at the logical size: sharp under fractional scale.
+- Layer `Bottom`, not `Background`: shells like Omarchy draw their own
+  background on `Background` and would cover ours. The surface has an empty
+  input region, so desktop clicks still reach the shell background.
+- Gotcha: a context first made current with NO surface (surfaceless, as here)
+  keeps `DRAW_BUFFER = GL_NONE` after a window is bound — `present_cover`
+  selects `GL_BACK` explicitly, otherwise every frame is silently empty.
+- Cost (Yor Forger, 4K scene, 17 effects, 3 outputs, RTX 4060 Ti): ~2% of one
+  CPU core, ~4% GPU, 215 MB RSS.
+
 ## Render graph (`scene.rs`)
 
 ```
@@ -64,5 +84,3 @@ If the runtime fills uniforms/textures/combos like WE, every effect works.
 - ~10 Workshop shaders rely on HLSL implicit conversions (vec4 -> vec3,
   int -> uint) that GLSL rejects; those passes are skipped (image passes
   through unchanged).
-- Live presentation still goes through `rustpaper-engine`; wiring this renderer
-  into the layer-shell presenter is the next step.

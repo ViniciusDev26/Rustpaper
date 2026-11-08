@@ -16,6 +16,10 @@ Projeto de aprendizado de Rust — priorize clareza e explicação didática ao 
 - **Harness** (`harness/run.sh <id>`): captures the real WE (Proton) on a
   headless output and compares mean / motion against Rustpaper:
   **`docs/HARNESS.md`**. Validate rendering changes with it, not by eye.
+- **Live:** `target/release/rustpaper <wallpaper folder>` now renders scenes with
+  rustpaper-gl (EGL window per output, layer `Bottom`, physical-resolution
+  buffers via wp_viewporter); videos still use the wgpu path below. Stop it with
+  `kill $(pgrep -x rustpaper)` (exact name: `pkill -f` matches your own shell).
 - WE paths come from `rustpaper_core::paths` (Steam library, or
   `WE_ASSETS_DIR` / `WE_WORKSHOP_DIR`).
 
