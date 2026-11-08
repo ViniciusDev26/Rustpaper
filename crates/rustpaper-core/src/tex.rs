@@ -48,6 +48,8 @@ pub struct DecodedTexture {
     pub real_width: u32, // região "de conteúdo" (dims da imagem no header)
     pub real_height: u32,
     pub rgba: Vec<u8>, // width*height*4
+    /// Header flags: bit 0 = no interpolation (nearest filter), bit 1 = clamp UVs.
+    pub flags: u32,
 }
 
 struct Cursor<'a> {
@@ -94,7 +96,7 @@ pub fn parse(data: &[u8]) -> Result<DecodedTexture, String> {
         return Err(format!("sub-container inesperado: {vi:?}"));
     }
     let format = c.u32()?;
-    let _flags = c.u32()?;
+    let flags = c.u32()?;
     let _tex_w = c.u32()?;
     let _tex_h = c.u32()?;
     let width = c.u32()?; // dims reais da imagem
@@ -105,10 +107,11 @@ pub fn parse(data: &[u8]) -> Result<DecodedTexture, String> {
     let container = c.magic8()?;
     let _image_count = c.u32()?;
     let mut free_image_format = FIF_UNKNOWN;
+    let mut is_mp4 = false;
     match container.as_str() {
         "TEXB0004" => {
             free_image_format = c.u32()?;
-            let _is_mp4 = c.u32()?;
+            is_mp4 = c.u32()? == 1;
         }
         "TEXB0003" => {
             free_image_format = c.u32()?;
@@ -121,7 +124,9 @@ pub fn parse(data: &[u8]) -> Result<DecodedTexture, String> {
 
     // --- primeiro mipmap (o maior) da primeira imagem ---
     let _mipmap_count = c.u32()?;
-    if is_texb0004 {
+    // The extra per-mipmap header only exists for video (mp4) textures; for
+    // regular TEXB0004 images the width/height follow the mipmap count directly.
+    if is_texb0004 && is_mp4 {
         let _ = c.u32()?;
         let _ = c.u32()?;
         c.null_string()?; // json do editor
@@ -158,6 +163,7 @@ pub fn parse(data: &[u8]) -> Result<DecodedTexture, String> {
             .to_rgba8();
         let (w, h) = img.dimensions();
         return Ok(DecodedTexture {
+            flags,
             width: w,
             height: h,
             real_width: width,
@@ -168,6 +174,7 @@ pub fn parse(data: &[u8]) -> Result<DecodedTexture, String> {
 
     let make = |rgba: Vec<u8>| {
         Ok(DecodedTexture {
+            flags,
             width: mip_w,
             height: mip_h,
             real_width: width,
@@ -184,7 +191,7 @@ pub fn parse(data: &[u8]) -> Result<DecodedTexture, String> {
         // pra rgb = R (cinza, a cor vem do tint da partícula) e a = G.
         FORMAT_RG88 => {
             let mut rgba = Vec::with_capacity(raw.len() * 2);
-            for px in raw.chunks_exact(2) {
+            for px in raw.as_chunks::<2>().0 {
                 rgba.extend_from_slice(&[px[0], px[0], px[0], px[1]]);
             }
             make(rgba)
