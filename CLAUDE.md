@@ -7,6 +7,18 @@ e um **selector** (app desktop Tauri) para navegar o catálogo e aplicar.
 
 Projeto de aprendizado de Rust — priorize clareza e explicação didática ao mexer.
 
+## New scene renderer + reference harness (host, Hyprland)
+
+- **`rustpaper-gl`** (OpenGL 3.3 via headless EGL, runs on the host — no
+  devcontainer): renders WE scenes with a generic effect runtime. CLI:
+  `rustpaper-render <workshop id> [--describe] [--dump-passes dir] [--video ...]`.
+  WE behaviours it had to match and known gaps: **`docs/GL_RENDERER.md`**.
+- **Harness** (`harness/run.sh <id>`): captures the real WE (Proton) on a
+  headless output and compares mean / motion against Rustpaper:
+  **`docs/HARNESS.md`**. Validate rendering changes with it, not by eye.
+- WE paths come from `rustpaper_core::paths` (Steam library, or
+  `WE_ASSETS_DIR` / `WE_WORKSHOP_DIR`).
+
 ## Workspace (Cargo)
 
 Monorepo com 3 crates em `crates/`:

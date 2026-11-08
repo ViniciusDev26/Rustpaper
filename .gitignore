@@ -2,3 +2,4 @@
 
 # vídeos de teste (grandes; não versionar)
 assets/*.mp4
+/harness-out
