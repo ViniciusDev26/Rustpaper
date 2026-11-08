@@ -82,8 +82,10 @@ fn to_spirv(stage: Stage, src: &str, dir: &Path) -> Result<Vec<u32>, String> {
     }
     let bytes = std::fs::read(&out_path).map_err(|e| e.to_string())?;
     Ok(bytes
-        .chunks_exact(4)
-        .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| u32::from_le_bytes(*c))
         .collect())
 }
 

@@ -2,6 +2,7 @@
 pub mod effects;
 pub mod layout;
 pub mod particle;
+pub mod paths;
 pub mod pkg;
 pub mod project;
 pub mod scene;

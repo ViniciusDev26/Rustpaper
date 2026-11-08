@@ -104,6 +104,133 @@ pub fn translate(
     Ok(out)
 }
 
+/// OpenGL flavour of the WE dialect prelude (used by `rustpaper-gl`).
+///
+/// Much closer to what the WE files expect than the Vulkan path: samplers stay
+/// COMBINED (`sampler2D`), uniforms stay loose (no block, no bindings) and are
+/// set by name at runtime. Only the HLSL-isms and legacy GLSL keywords need macros.
+const GL_PRELUDE: &str = "#version 330 core\n\
+    #define mul(x, y) ((y) * (x))\n\
+    #define max(x, y) max(y, x)\n\
+    #define lerp mix\n\
+    #define frac fract\n\
+    #define CAST2(x) (vec2(x))\n\
+    #define CAST3(x) (vec3(x))\n\
+    #define CAST4(x) (vec4(x))\n\
+    #define CAST3X3(x) (mat3(x))\n\
+    #define float2 vec2\n\
+    #define float3 vec3\n\
+    #define float4 vec4\n\
+    #define int2 ivec2\n\
+    #define int3 ivec3\n\
+    #define int4 ivec4\n\
+    #define saturate(x) (clamp(x, 0.0, 1.0))\n\
+    #define texSample2D texture\n\
+    #define texSample2DLod textureLod\n\
+    #define texture2D texture\n\
+    #define log10(x) (log2(x) * 0.301029995663981)\n\
+    #define atan2 atan\n\
+    #define fmod(x, y) ((x)-(y)*trunc((x)/(y)))\n\
+    #define ddx dFdx\n\
+    #define ddy(x) dFdy(-(x))\n\
+    #define GLSL 1\n";
+
+const GL_FRAGMENT_DEFINES: &str = "out vec4 out_FragColor;\n#define varying in\n";
+const GL_VERTEX_DEFINES: &str = "#define attribute in\n#define varying out\n";
+
+/// Translates a WE shader to GLSL 330 core for OpenGL.
+///
+/// Same steps as [`translate`] (includes, `#require`, combos, `gl_FragColor`),
+/// but WITHOUT splitting samplers: in GL a `sampler2D` uniform is just a texture
+/// unit index, which is exactly what the WE shaders were written for.
+pub fn translate_gl(
+    stage: Stage,
+    source: &str,
+    combos: &[(String, i64)],
+    shaders_dir: &Path,
+) -> Result<String, String> {
+    let mut seen = HashSet::new();
+    let body = resolve_includes(source, shaders_dir, &mut seen)?;
+    let body = resolve_requires(&body);
+    let body = body.replace("gl_FragColor", "out_FragColor");
+    let (samplers, body) = hoist_samplers(&body);
+
+    let mut out = String::with_capacity(GL_PRELUDE.len() + body.len() + 512);
+    out.push_str(GL_PRELUDE);
+    out.push_str(match stage {
+        Stage::Vertex => GL_VERTEX_DEFINES,
+        Stage::Fragment => GL_FRAGMENT_DEFINES,
+    });
+    for (name, value) in combos {
+        out.push_str(&format!("#define {} {}\n", name.to_uppercase(), value));
+    }
+    out.push_str(&samplers);
+    // `#line 1` keeps driver error line numbers close to the WE source.
+    out.push_str("#line 1\n");
+    out.push_str(&body);
+    Ok(out)
+}
+
+/// Moves every `uniform sampler2D` declaration to the top (deduplicated).
+///
+/// WE's shader compiler collects uniform declarations before the code, so an
+/// include may use `g_Texture0` that the main file only declares AFTER the
+/// `#include` line (e.g. common_blur.h in every blur effect). Plain GLSL needs
+/// the declaration first. Only samplers are hoisted: an unused sampler is
+/// harmless, while moving other uniforms out of `#if` blocks could change meaning.
+fn hoist_samplers(body: &str) -> (String, String) {
+    let mut decls = String::new();
+    let mut seen = HashSet::new();
+    let mut rest = String::with_capacity(body.len());
+    for line in body.lines() {
+        if let Some((name, _)) = parse_sampler_decl(line) {
+            if seen.insert(name.clone()) {
+                decls.push_str(&format!("uniform sampler2D {name};\n"));
+            }
+            rest.push_str("// (hoisted) ");
+        }
+        rest.push_str(line);
+        rest.push('\n');
+    }
+    (decls, rest)
+}
+
+/// Annotation of a `uniform sampler2D` declaration in a WE shader.
+///
+/// `uniform sampler2D g_Texture1; // {"combo":"MASK","default":"util/white","hidden":true}`
+/// - `default`: texture to bind when neither the material nor the scene sets one;
+/// - `combo`: combo that is defined to 1 when a texture IS provided for this slot
+///   (this is how WE switches e.g. the mask code path on).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SamplerAnnotation {
+    pub name: String,
+    pub default: Option<String>,
+    pub combo: Option<String>,
+}
+
+/// Parses every `uniform sampler2D` declaration (with or without annotation).
+pub fn parse_samplers(source: &str) -> Vec<SamplerAnnotation> {
+    let mut out = Vec::new();
+    for line in source.lines() {
+        let Some((name, comment)) = parse_sampler_decl(line) else {
+            continue;
+        };
+        let json = serde_json::from_str::<serde_json::Value>(comment.trim()).ok();
+        let field = |k: &str| {
+            json.as_ref()
+                .and_then(|j| j.get(k))
+                .and_then(|v| v.as_str())
+                .map(String::from)
+        };
+        out.push(SamplerAnnotation {
+            name,
+            default: field("default"),
+            combo: field("combo"),
+        });
+    }
+    out
+}
+
 // Expande `#include "arquivo.h"` recursivamente, inserindo o conteúdo no lugar da
 // diretiva. Cada arquivo é incluído no MÁXIMO uma vez (dedupe por nome) — funciona
 // como include guard, evitando redefinições (GLSL não tem `#pragma once`).
@@ -450,6 +577,23 @@ mod tests {
         // módulo desconhecido vira comentário, não some nem quebra
         let unk = resolve_requires("#require Foo\n");
         assert!(unk.contains("// #require Foo"));
+    }
+
+    #[test]
+    fn gl_translation_hoists_samplers_above_includes() {
+        let dir = std::env::temp_dir().join("we_shader_test_hoist");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("blur.h"),
+            "vec4 b(vec2 u) { return texSample2D(g_Texture0, u); }\n",
+        )
+        .unwrap();
+        let src = "#include \"blur.h\"\nuniform sampler2D g_Texture0; // {\"hidden\":true}\nvoid main() {}\n";
+        let out = translate_gl(Stage::Fragment, src, &[], &dir).unwrap();
+        let decl = out.find("uniform sampler2D g_Texture0;").unwrap();
+        let usage = out.find("texSample2D(g_Texture0").unwrap();
+        assert!(decl < usage);
+        assert_eq!(out.matches("\nuniform sampler2D g_Texture0").count(), 1);
     }
 
     #[test]

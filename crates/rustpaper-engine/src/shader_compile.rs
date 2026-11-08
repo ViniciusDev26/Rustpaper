@@ -72,8 +72,10 @@ pub fn glsl_to_spirv(stage: &str, glsl: &str) -> Result<Vec<u32>, String> {
     let _ = std::fs::remove_file(&inp);
     let _ = std::fs::remove_file(&outp);
     Ok(bytes
-        .chunks_exact(4)
-        .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| u32::from_le_bytes(*c))
         .collect())
 }
 
@@ -119,8 +121,10 @@ pub fn glsl_to_spirv_linked(
     let read = |name: &str| -> Result<Vec<u32>, String> {
         let bytes = std::fs::read(dir.join(name)).map_err(|e| format!("{name}: {e}"))?;
         Ok(bytes
-            .chunks_exact(4)
-            .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| u32::from_le_bytes(*c))
             .collect())
     };
     let vert = read("vert.spv")?;
