@@ -8,6 +8,8 @@ pub struct Tex {
     pub id: glow::Texture,
     pub width: u32,
     pub height: u32,
+    /// WE format id of the source .tex (see DecodedTexture::format).
+    pub format: u32,
 }
 
 impl Tex {
@@ -33,6 +35,24 @@ pub fn upload_texture(gl: &glow::Context, tex: &rustpaper_core::tex::DecodedText
         if src + row <= tex.rgba.len() {
             content[dst..dst + row].copy_from_slice(&tex.rgba[src..src + row]);
         }
+    }
+    // The core decoder expands 1/2-channel formats for convenience (R8 ->
+    // rrrr, RG88 -> rrrg). WE uploads them as R8 / RG8 GL textures, which
+    // sample as (r, 0, 0, 1) and (r, g, 0, 1), and shaders that care undo that
+    // with TEXnFORMAT (e.g. ConvertTexture0Format: RG88 -> .rrrg). Restore the
+    // GL layout, or that conversion would read luminance as alpha.
+    match tex.format {
+        8 => content.as_chunks_mut::<4>().0.iter_mut().for_each(|px| {
+            px[1] = px[3];
+            px[2] = 0;
+            px[3] = 255;
+        }),
+        9 => content.as_chunks_mut::<4>().0.iter_mut().for_each(|px| {
+            px[1] = 0;
+            px[2] = 0;
+            px[3] = 255;
+        }),
+        _ => {}
     }
     let nearest = tex.flags & 1 != 0;
     let clamp = tex.flags & 2 != 0;
@@ -70,6 +90,7 @@ pub fn upload_texture(gl: &glow::Context, tex: &rustpaper_core::tex::DecodedText
             id,
             width: w,
             height: h,
+            format: tex.format,
         }
     }
 }
@@ -104,6 +125,7 @@ pub fn solid_texture(gl: &glow::Context, rgba: [u8; 4]) -> Tex {
             id,
             width: 1,
             height: 1,
+            format: 0,
         }
     }
 }
@@ -155,6 +177,7 @@ impl Target {
                     id,
                     width: w,
                     height: h,
+                    format: 0,
                 },
             }
         }
@@ -290,6 +313,81 @@ impl QuadMesh {
             gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
         }
     }
+}
+
+/// Dynamic vertex/index buffers for particle quads in the layout of
+/// `particles::VERTEX_FLOATS` (attributes 0, 2, 3, 4, 5; see Program::build).
+pub struct ParticleMesh {
+    vao: glow::VertexArray,
+    vbo: glow::Buffer,
+    ebo: glow::Buffer,
+    index_capacity: usize, // in particles
+}
+
+impl ParticleMesh {
+    pub fn new(gl: &glow::Context) -> ParticleMesh {
+        unsafe {
+            let vao = gl.create_vertex_array().expect("glGenVertexArrays");
+            let vbo = gl.create_buffer().expect("glGenBuffers");
+            let ebo = gl.create_buffer().expect("glGenBuffers");
+            gl.bind_vertex_array(Some(vao));
+            gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
+            gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(ebo));
+            let stride = (crate::particles::VERTEX_FLOATS * 4) as i32;
+            // (location, components, float offset)
+            for (loc, n, off) in [(0, 3, 0), (2, 4, 3), (3, 4, 7), (4, 2, 11), (5, 4, 13)] {
+                gl.enable_vertex_attrib_array(loc);
+                gl.vertex_attrib_pointer_f32(loc, n, glow::FLOAT, false, stride, off * 4);
+            }
+            gl.bind_vertex_array(None);
+            ParticleMesh {
+                vao,
+                vbo,
+                ebo,
+                index_capacity: 0,
+            }
+        }
+    }
+
+    /// Uploads `vertices` (4 per particle) and draws them as quads.
+    pub fn draw(&mut self, gl: &glow::Context, vertices: &[f32]) {
+        let particles = vertices.len() / (crate::particles::VERTEX_FLOATS * 4);
+        if particles == 0 {
+            return;
+        }
+        unsafe {
+            gl.bind_vertex_array(Some(self.vao));
+            if particles > self.index_capacity {
+                let cap = particles.next_power_of_two();
+                let mut idx: Vec<u32> = Vec::with_capacity(cap * 6);
+                for i in 0..cap as u32 {
+                    let b = i * 4;
+                    idx.extend_from_slice(&[b, b + 1, b + 2, b + 2, b + 1, b + 3]);
+                }
+                gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(self.ebo));
+                gl.buffer_data_u8_slice(
+                    glow::ELEMENT_ARRAY_BUFFER,
+                    slice_bytes(&idx),
+                    glow::STATIC_DRAW,
+                );
+                self.index_capacity = cap;
+            }
+            gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.vbo));
+            gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, slice_bytes(vertices), glow::STREAM_DRAW);
+            gl.draw_elements(
+                glow::TRIANGLES,
+                (particles * 6) as i32,
+                glow::UNSIGNED_INT,
+                0,
+            );
+            gl.bind_vertex_array(None);
+        }
+    }
+}
+
+fn slice_bytes<T: Copy>(v: &[T]) -> &[u8] {
+    // SAFETY: plain-old-data numeric slices; the byte view covers exactly v.
+    unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, std::mem::size_of_val(v)) }
 }
 
 fn as_bytes(v: &[f32; 20]) -> &[u8] {

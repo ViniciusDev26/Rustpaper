@@ -24,6 +24,8 @@ struct Args {
     duration: f32,
     fps: u32,
     width: Option<u32>,
+    start: f32,
+    only: Option<Vec<i64>>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -38,6 +40,8 @@ fn parse_args() -> Result<Args, String> {
     let mut duration = 10.0;
     let mut fps = 30;
     let mut width = None;
+    let mut start = 0.0;
+    let mut only = None;
     let floats = |s: String| -> Result<Vec<f32>, String> {
         s.split(',')
             .map(|t| t.trim().parse::<f32>().map_err(|e| format!("{t:?}: {e}")))
@@ -55,6 +59,15 @@ fn parse_args() -> Result<Args, String> {
             "--video" => video = Some(PathBuf::from(it.next().ok_or("--video needs a file")?)),
             "--duration" => duration = floats(it.next().ok_or("--duration needs seconds")?)?[0],
             "--fps" => fps = floats(it.next().ok_or("--fps needs a value")?)?[0] as u32,
+            "--only" => {
+                only = Some(
+                    floats(it.next().ok_or("--only needs object ids")?)?
+                        .iter()
+                        .map(|v| *v as i64)
+                        .collect(),
+                )
+            }
+            "--start" => start = floats(it.next().ok_or("--start needs seconds")?)?[0],
             "--width" => width = Some(floats(it.next().ok_or("--width needs pixels")?)?[0] as u32),
             "--dump-passes" => {
                 dump_passes = Some(PathBuf::from(
@@ -86,6 +99,8 @@ fn parse_args() -> Result<Args, String> {
         duration,
         fps,
         width,
+        start,
+        only,
     })
 }
 
@@ -108,7 +123,7 @@ fn main() -> ExitCode {
                 eprintln!("error: {e}");
             }
             eprintln!(
-                "usage: rustpaper-render <workshop id | folder> [--time 0,1.5] [--out x.png] [--pointer x,y] [--describe] [--dump-passes dir]\n       [--video out.mp4 --duration 10 --fps 30] [--width 1920]"
+                "usage: rustpaper-render <workshop id | folder> [--time 0,1.5] [--out x.png] [--pointer x,y] [--describe] [--dump-passes dir] [--only id,id]\n       [--video out.mp4 --duration 10 --fps 30 --start 0] [--width 1920]"
             );
             return ExitCode::from(2);
         }
@@ -145,6 +160,9 @@ fn main() -> ExitCode {
         }
     }
 
+    if let Some(ids) = &args.only {
+        scene.only = Some(ids.iter().copied().collect());
+    }
     if let Some(d) = &args.dump_passes {
         let _ = std::fs::create_dir_all(d);
         scene.dump_dir = Some(d.clone());
@@ -244,7 +262,7 @@ fn record_video(
         scene.render(
             gl,
             FrameInput {
-                time: n as f32 / args.fps as f32,
+                time: args.start + n as f32 / args.fps as f32,
                 pointer: args.pointer,
                 ..Default::default()
             },

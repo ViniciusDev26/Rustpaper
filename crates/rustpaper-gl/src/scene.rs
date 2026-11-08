@@ -24,8 +24,9 @@ use glow::HasContext;
 use serde_json::Value;
 
 use crate::assets::Assets;
-use crate::gpu::{Blend, QuadMesh, Target, Tex, solid_texture, upload_texture};
+use crate::gpu::{Blend, ParticleMesh, QuadMesh, Target, Tex, solid_texture, upload_texture};
 use crate::math::{self, Mat4};
+use crate::particles::{self, ChildEvent, Overrides, ParticleDef, ParticleSim, RendererKind};
 use crate::program::{Program, ShaderSource};
 use crate::value;
 
@@ -93,15 +94,45 @@ struct Layer {
     name: String,
     visible: bool,
     kind: LayerKind,
-    origin: [f32; 3],
-    angle: f32,
-    scale: [f32; 3],
+    /// parent transforms * own transform (objects can be parented).
+    world: Mat4,
     size: [f32; 2],
     color: [f32; 3],
     alpha: f32,
     brightness: f32,
     material: Pass,
     effects: Vec<Effect>,
+}
+
+/// Scene objects in draw order (WE draws objects in scene.json order).
+#[derive(Clone, Copy)]
+enum ObjRef {
+    Layer(usize),
+    Particles(usize),
+}
+
+/// One simulated system of a particle object (the root or a child).
+struct SystemRt {
+    sim: ParticleSim,
+    /// Index of the parent system (children react to its spawn/death events
+    /// or follow its particles).
+    parent: Option<(usize, ChildEvent, [f32; 3])>,
+    pass: Pass,
+    /// g_RenderVar0: trail (length scale, max, min, 0)
+    render_var0: [f32; 4],
+    /// g_RenderVar1: sprite sheet (frame w, frame h in uv, frames, h/w ratio)
+    render_var1: [f32; 4],
+}
+
+struct ParticleObject {
+    id: i64,
+    name: String,
+    visible: bool,
+    /// parent transforms * own transform (objects can be parented).
+    world: Mat4,
+    systems: Vec<SystemRt>,
+    /// Seconds simulated before t = 0 (`starttime`, so it starts "warm").
+    prewarm: f32,
 }
 
 pub struct SceneRenderer {
@@ -112,6 +143,8 @@ pub struct SceneRenderer {
     ambient: [f32; 3],
     skylight: [f32; 3],
     layers: Vec<Layer>,
+    particle_objs: Vec<ParticleObject>,
+    order: Vec<ObjRef>,
     /// Layers some other layer samples as `_rt_imageLayerComposite_<id>_a`.
     referenced: HashSet<i64>,
 
@@ -122,17 +155,25 @@ pub struct SceneRenderer {
     white: Tex,
 
     quad: QuadMesh,
+    pmesh: ParticleMesh,
+    pverts: Vec<f32>,
     blit: Program,
     scene: Target,
     fullframe: Target,
     composites: HashMap<i64, Target>,
     pool: HashMap<(u32, u32), Vec<Target>>,
 
+    /// Every object's world matrix by id (parent chains resolved).
+    worlds: HashMap<i64, Mat4>,
+
     /// Human-readable problems found while loading/rendering (deduplicated).
     pub warnings: Vec<String>,
     /// Debug: when set, every intermediate layer/effect target of the next
     /// `render` is written here as PNG (see `rustpaper-render --dump-passes`).
     pub dump_dir: Option<std::path::PathBuf>,
+    /// Debug: when set, only objects with these ids are drawn
+    /// (`rustpaper-render --only`).
+    pub only: Option<HashSet<i64>>,
 }
 
 const MAX_TARGET: u32 = 8192;
@@ -183,6 +224,8 @@ impl SceneRenderer {
             ambient: value::get_vec3(&general, "ambientcolor", [0.3; 3]),
             skylight: value::get_vec3(&general, "skylightcolor", [0.3; 3]),
             layers: Vec::new(),
+            particle_objs: Vec::new(),
+            order: Vec::new(),
             referenced: HashSet::new(),
             sources: HashMap::new(),
             combos_by_key: HashMap::new(),
@@ -190,13 +233,17 @@ impl SceneRenderer {
             textures: HashMap::new(),
             white: solid_texture(gl, [255, 255, 255, 255]),
             quad: QuadMesh::new(gl),
+            pmesh: ParticleMesh::new(gl),
+            pverts: Vec::new(),
             blit,
             scene: Target::new(gl, width, height),
             fullframe: Target::new(gl, width, height),
             composites: HashMap::new(),
             pool: HashMap::new(),
             warnings: Vec::new(),
+            worlds: HashMap::new(),
             dump_dir: None,
+            only: None,
             assets,
         };
 
@@ -205,17 +252,31 @@ impl SceneRenderer {
             .get("objects")
             .and_then(|o| o.as_array())
             .unwrap_or(&empty);
+        r.worlds = world_matrices(objects);
         for obj in objects {
-            if obj.get("image").is_some() {
+            // `"image": null` is common on non-image objects: test for a string
+            if obj.get("image").and_then(|i| i.as_str()).is_some() {
                 match r.load_layer(gl, obj) {
-                    Ok(layer) => r.layers.push(layer),
+                    Ok(layer) => {
+                        r.order.push(ObjRef::Layer(r.layers.len()));
+                        r.layers.push(layer);
+                    }
                     Err(e) => r.warn(format!(
                         "layer {:?} skipped: {e}",
                         obj.get("name").and_then(|n| n.as_str()).unwrap_or("?")
                     )),
                 }
-            } else if obj.get("particle").is_some() {
-                r.warn("particle systems are not rendered by rustpaper-gl yet".into());
+            } else if obj.get("particle").and_then(|p| p.as_str()).is_some() {
+                match r.load_particles(gl, obj) {
+                    Ok(p) => {
+                        r.order.push(ObjRef::Particles(r.particle_objs.len()));
+                        r.particle_objs.push(p);
+                    }
+                    Err(e) => r.warn(format!(
+                        "particles {:?} skipped: {e}",
+                        obj.get("name").and_then(|n| n.as_str()).unwrap_or("?")
+                    )),
+                }
             } else if obj.get("text").is_some() {
                 r.warn("text objects are not rendered yet".into());
             }
@@ -316,10 +377,6 @@ impl SceneRenderer {
                 .or_else(|| first_tex.map(|t| [t.width as f32, t.height as f32]))
                 .unwrap_or([w, h]),
         };
-        let origin = match kind {
-            LayerKind::Passthrough { fullscreen: true } => [w / 2.0, h / 2.0, 0.0],
-            _ => value::get_vec3(obj, "origin", [w / 2.0, h / 2.0, 0.0]),
-        };
 
         let mut effects = Vec::new();
         for fx in obj
@@ -349,9 +406,12 @@ impl SceneRenderer {
                 .to_string(),
             visible: value::get_bool(obj, "visible", true),
             kind,
-            origin,
-            angle: value::get_vec3(obj, "angles", [0.0; 3])[2],
-            scale: value::get_vec3(obj, "scale", [1.0; 3]),
+            world: match kind {
+                LayerKind::Passthrough { fullscreen: true } => {
+                    math::model([w / 2.0, h / 2.0, 0.0], 0.0, [1.0; 3])
+                }
+                _ => self.world_of(obj),
+            },
             size,
             color: value::get_vec3(obj, "color", [1.0; 3]),
             alpha: value::get_f32(obj, "alpha", 1.0),
@@ -527,8 +587,15 @@ impl SceneRenderer {
             if let Some(src) = source {
                 if let TexSource::Named(n) = &src
                     && !n.starts_with("_rt_")
+                    && !n.starts_with("_alias_")
                 {
-                    self.texture(gl, n);
+                    // WE tells shaders each texture's storage format through
+                    // TEXnFORMAT (e.g. R8 sprites become white + alpha in
+                    // ConvertTexture0Format).
+                    let t = self.texture(gl, n);
+                    combos
+                        .entry(format!("TEX{unit}FORMAT"))
+                        .or_insert(t.format as i64);
                 }
                 slots.push((unit, src));
             }
@@ -640,8 +707,28 @@ impl SceneRenderer {
             }
         }
 
-        for i in 0..self.layers.len() {
-            if !self.layers[i].visible {
+        for k in 0..self.order.len() {
+            let i = match self.order[k] {
+                ObjRef::Layer(i) => i,
+                ObjRef::Particles(i) => {
+                    if let Some(only) = &self.only
+                        && !only.contains(&self.particle_objs[i].id)
+                    {
+                        continue;
+                    }
+                    self.simulate_particles(i, frame);
+                    if self.particle_objs[i].visible {
+                        self.draw_particles(gl, i);
+                    }
+                    continue;
+                }
+            };
+            if !self.layers[i].visible
+                || self
+                    .only
+                    .as_ref()
+                    .is_some_and(|o| !o.contains(&self.layers[i].id))
+            {
                 continue;
             }
             let needs_target = !self.layers[i].effects.is_empty()
@@ -686,7 +773,7 @@ impl SceneRenderer {
     /// Layer without effects: material straight onto the scene.
     fn draw_direct(&mut self, gl: &glow::Context, i: usize, frame: FrameInput) {
         let l = &self.layers[i];
-        let model = math::model(l.origin, l.angle, l.scale);
+        let model = l.world;
         let proj = math::scene_ortho(self.width as f32, self.height as f32);
         let mvp = math::mul(&proj, &model);
         let verts = math::quad(l.size[0], l.size[1], 1.0, 1.0);
@@ -734,7 +821,7 @@ impl SceneRenderer {
             // "which part of the screen is behind me".
             LayerKind::Passthrough { fullscreen } => {
                 let l = &self.layers[i];
-                let model = math::model(l.origin, l.angle, l.scale);
+                let model = l.world;
                 let proj = math::scene_ortho(self.width as f32, self.height as f32);
                 let verts = if fullscreen {
                     math::quad(2.0, -2.0, 1.0, 1.0) // already in clip space
@@ -844,10 +931,7 @@ impl SceneRenderer {
                 ),
                 math::quad(self.width as f32, self.height as f32, 1.0, 1.0),
             ),
-            _ => (
-                math::model(l.origin, l.angle, l.scale),
-                math::quad(l.size[0], l.size[1], 1.0, 1.0),
-            ),
+            _ => (l.world, math::quad(l.size[0], l.size[1], 1.0, 1.0)),
         };
         let mvp = math::mul(
             &math::scene_ortho(self.width as f32, self.height as f32),
@@ -965,23 +1049,7 @@ impl SceneRenderer {
         }
 
         // 2) annotated material parameters: default, overridden by constants
-        for p in &prog.params {
-            let v = p
-                .material
-                .as_deref()
-                .and_then(|m| {
-                    constants.get(m).or_else(|| {
-                        constants
-                            .iter()
-                            .find(|(k, _)| k.eq_ignore_ascii_case(m))
-                            .map(|(_, v)| v)
-                    })
-                })
-                .map(value::floats)
-                .filter(|v| !v.is_empty())
-                .unwrap_or_else(|| p.default.clone());
-            prog.set(gl, &p.uniform, &v);
-        }
+        set_params(gl, prog, &constants);
 
         // 3) the object's own properties (image pass only)
         if is_material {
@@ -1023,6 +1091,9 @@ impl SceneRenderer {
                 self.scene.blit_to(gl, &self.fullframe);
                 self.fullframe.tex
             }
+            // engine-provided aliases (light cookies, shadow atlases...) only
+            // exist with scene lighting, which we don't render
+            n if n.starts_with("_alias_") => self.white,
             n if n.starts_with("_rt_") => {
                 self.warn(format!("render target {n} not supported"));
                 self.white
@@ -1061,6 +1132,314 @@ impl SceneRenderer {
             .push(t);
     }
 
+    fn world_of(&self, obj: &Value) -> Mat4 {
+        obj.get("id")
+            .and_then(|i| i.as_i64())
+            .and_then(|id| self.worlds.get(&id).copied())
+            .unwrap_or_else(|| local_matrix(obj))
+    }
+
+    // -------------------------------------------------------------- particles
+
+    fn load_particles(
+        &mut self,
+        gl: &glow::Context,
+        obj: &Value,
+    ) -> Result<ParticleObject, String> {
+        let file = obj["particle"].as_str().ok_or("particle is not a string")?;
+        let id = obj.get("id").and_then(|i| i.as_i64()).unwrap_or(0);
+        let ov = Overrides::parse(obj.get("instanceoverride"));
+        let mut systems = Vec::new();
+        self.load_system(gl, file, None, ov, id as u64, &mut systems, 0)?;
+        let prewarm = systems.first().map(|s| s.sim.def.start_time).unwrap_or(0.0);
+        Ok(ParticleObject {
+            id,
+            name: obj
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("")
+                .to_string(),
+            visible: value::get_bool(obj, "visible", true),
+            world: self.world_of(obj),
+            systems,
+            prewarm: prewarm.min(60.0),
+        })
+    }
+
+    /// Loads one system and, recursively, its children (flattened, parents
+    /// first so a single forward pass can feed children their parent events).
+    #[allow(clippy::too_many_arguments)]
+    fn load_system(
+        &mut self,
+        gl: &glow::Context,
+        file: &str,
+        parent: Option<(usize, ChildEvent, [f32; 3], Option<u32>)>,
+        ov: Overrides,
+        seed: u64,
+        out: &mut Vec<SystemRt>,
+        depth: u32,
+    ) -> Result<(), String> {
+        let json = self
+            .assets
+            .read_json(file)
+            .ok_or_else(|| format!("{file} not found"))?;
+        let mut def = ParticleDef::parse(&json);
+        for u in def.unsupported.clone() {
+            self.warn(format!("particles: {u} not supported"));
+        }
+        if let Some((_, _, _, Some(max))) = parent {
+            def.max_count = max;
+        }
+        if def.renderer == RendererKind::Rope {
+            self.warn("particles: rope renderer not supported yet".into());
+            return Ok(());
+        }
+        let mat = self
+            .assets
+            .read_json(&def.material)
+            .ok_or_else(|| format!("material {} not found", def.material))?;
+        let pass_json = mat
+            .get("passes")
+            .and_then(|p| p.get(0))
+            .cloned()
+            .ok_or("particle material has no passes")?;
+
+        // Sprite sheet: embedded in the .tex (Workshop sprites) or described by
+        // a companion .tex-json (base assets).
+        let sprite = pass_json
+            .get("textures")
+            .and_then(|t| t.get(0))
+            .and_then(|t| t.as_str())
+            .map(String::from);
+        let mut render_var1 = [0.0; 4];
+        let mut sheet = false;
+        if let Some(name) = &sprite {
+            let tex = self.texture(gl, name);
+            let frames = self
+                .assets
+                .read(&format!("materials/{name}.tex"))
+                .and_then(|b| rustpaper_core::tex::embedded_sheet(&b))
+                .map(|e| (e.frames, e.frame_w, e.frame_h))
+                .or_else(|| {
+                    let j = self
+                        .assets
+                        .read_json(&format!("materials/{name}.tex-json"))?;
+                    let seq = j.get("spritesheetsequences")?.get(0)?;
+                    Some((
+                        seq.get("frames")?.as_u64()? as u32,
+                        seq.get("width")?.as_u64()? as u32,
+                        seq.get("height")?.as_u64()? as u32,
+                    ))
+                });
+            if let Some((frames, fw, fh)) = frames
+                && frames > 1
+                && fw > 0
+                && fh > 0
+            {
+                sheet = true;
+                render_var1 = [
+                    fw as f32 / tex.width as f32,
+                    fh as f32 / tex.height as f32,
+                    frames as f32,
+                    fh as f32 / fw as f32,
+                ];
+            }
+        }
+        let trail = matches!(def.renderer, RendererKind::Trail { .. });
+        let render_var0 = match def.renderer {
+            RendererKind::Trail { length, max, min } => [length, max, min, 0.0],
+            _ => [0.0; 4],
+        };
+        let mut combos = BTreeMap::new();
+        if sheet || trail {
+            combos.insert("THICKFORMAT".to_string(), 1);
+        }
+        if trail {
+            combos.insert("TRAILRENDERER".to_string(), 1);
+        }
+        if sheet {
+            combos.insert("SPRITESHEET".to_string(), 1);
+        }
+        let pass = self.resolve_pass(gl, &pass_json, None, &[], &combos, false)?;
+
+        let children = def.children.clone();
+        let index = out.len();
+        out.push(SystemRt {
+            sim: ParticleSim::new(def, ov, seed.wrapping_mul(31).wrapping_add(index as u64)),
+            parent: parent.map(|(i, e, o, _)| (i, e, o)),
+            pass,
+            render_var0,
+            render_var1,
+        });
+        if depth < 4 {
+            for c in children {
+                if let Err(e) = self.load_system(
+                    gl,
+                    &c.file,
+                    Some((index, c.event, c.origin, c.max_count)),
+                    Overrides::NONE,
+                    seed.wrapping_add(1000 + out.len() as u64),
+                    out,
+                    depth + 1,
+                ) {
+                    self.warn(format!("particle child {}: {e}", c.file));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Advances an object's systems to `frame.time` (+ prewarm) in fixed steps.
+    /// Going back in time restarts the simulation (deterministic replay).
+    fn simulate_particles(&mut self, i: usize, frame: FrameInput) {
+        let (w, h) = (self.width as f32, self.height as f32);
+        let o = &mut self.particle_objs[i];
+        let target = o.prewarm + frame.time.max(0.0);
+        let Some(first) = o.systems.first() else {
+            return;
+        };
+        if target + particles::STEP < first.sim.time {
+            o.systems.iter_mut().for_each(|s| s.sim.reset());
+        }
+        // cursor (scene space, y-up) -> object space, for control points that
+        // follow the mouse
+        let inv = math::invert(&o.world);
+        let (px, py) = (frame.pointer[0] * w, (1.0 - frame.pointer[1]) * h);
+        let pointer = [
+            inv[0] * px + inv[4] * py + inv[12],
+            inv[1] * px + inv[5] * py + inv[13],
+            0.0,
+        ];
+        let max_steps = ((o.prewarm + 1.0) / particles::STEP) as usize + 120;
+        let mut steps = 0;
+        while o.systems[0].sim.time + particles::STEP <= target + 1e-4 && steps < max_steps {
+            steps += 1;
+            for k in 0..o.systems.len() {
+                let (before, rest) = o.systems.split_at_mut(k);
+                let sys = &mut rest[0];
+                let cps = particles::control_points(&sys.sim.def, pointer);
+                match sys.parent {
+                    None => sys.sim.step(particles::STEP, &cps, true),
+                    Some((pi, event, origin)) => {
+                        let parent = &mut before[pi].sim;
+                        match event {
+                            ChildEvent::Follow => {
+                                let rate = sys.sim.rate();
+                                let mut spawns = Vec::new();
+                                for (pos, acc) in parent.positions_with_acc() {
+                                    *acc += rate * particles::STEP;
+                                    while *acc >= 1.0 {
+                                        *acc -= 1.0;
+                                        spawns.push(pos);
+                                    }
+                                }
+                                for pos in spawns {
+                                    sys.sim.burst_at(
+                                        [
+                                            pos[0] + origin[0],
+                                            pos[1] + origin[1],
+                                            pos[2] + origin[2],
+                                        ],
+                                        1,
+                                        &cps,
+                                    );
+                                }
+                            }
+                            ChildEvent::Spawn | ChildEvent::Death => {
+                                let n = sys.sim.burst_size();
+                                let events: Vec<_> = parent
+                                    .events
+                                    .iter()
+                                    .filter(|e| e.kind == event)
+                                    .map(|e| e.pos)
+                                    .collect();
+                                for pos in events {
+                                    sys.sim.burst_at(
+                                        [
+                                            pos[0] + origin[0],
+                                            pos[1] + origin[1],
+                                            pos[2] + origin[2],
+                                        ],
+                                        n,
+                                        &cps,
+                                    );
+                                }
+                            }
+                        }
+                        sys.sim.step(particles::STEP, &cps, false);
+                    }
+                }
+            }
+        }
+    }
+
+    fn draw_particles(&mut self, gl: &glow::Context, i: usize) {
+        let (w, h) = (self.width as f32, self.height as f32);
+        let o = &self.particle_objs[i];
+        let model = o.world;
+        let proj = math::scene_ortho(w, h);
+        let mvp = math::mul(&proj, &model);
+        let inverse = math::invert(&model);
+        for k in 0..self.particle_objs[i].systems.len() {
+            let sys = &self.particle_objs[i].systems[k];
+            if sys.sim.is_empty() {
+                continue;
+            }
+            let key = sys.pass.program_key.clone();
+            let slots = sys.pass.slots.clone();
+            let constants = sys.pass.constants.clone();
+            let blend = sys.pass.blend;
+            let (rv0, rv1) = (sys.render_var0, sys.render_var1);
+            let mut verts = std::mem::take(&mut self.pverts);
+            sys.sim.vertices(&mut verts);
+
+            let mut bound = Vec::new();
+            for (unit, src) in &slots {
+                let tex = match src {
+                    TexSource::Previous => self.white,
+                    TexSource::Named(n) => self.named_texture(gl, n, &HashMap::new()),
+                };
+                bound.push((*unit, tex));
+            }
+            if self.program(gl, &key).is_none() {
+                self.pverts = verts;
+                continue;
+            }
+            let prog = self.programs[&key].as_ref().expect("checked above");
+            self.scene.bind(gl);
+            blend.apply(gl);
+            unsafe {
+                gl.use_program(Some(prog.id));
+                for (unit, tex) in &bound {
+                    gl.active_texture(glow::TEXTURE0 + unit);
+                    gl.bind_texture(glow::TEXTURE_2D, Some(tex.id));
+                }
+            }
+            prog.set(gl, "g_ModelViewProjectionMatrix", &mvp);
+            prog.set(gl, "g_ModelMatrix", &model);
+            prog.set(gl, "g_ModelMatrixInverse", &inverse);
+            prog.set(gl, "g_ViewProjectionMatrix", &proj);
+            prog.set(gl, "g_OrientationRight", &[1.0, 0.0, 0.0]);
+            prog.set(gl, "g_OrientationUp", &[0.0, 1.0, 0.0]);
+            prog.set(gl, "g_OrientationForward", &[0.0, 0.0, 1.0]);
+            prog.set(gl, "g_ViewRight", &[1.0, 0.0, 0.0]);
+            prog.set(gl, "g_ViewUp", &[0.0, 1.0, 0.0]);
+            // far "in front" of the scene plane: trails get right = cross(view, velocity)
+            prog.set(gl, "g_EyePosition", &[w / 2.0, h / 2.0, 100_000.0]);
+            prog.set(gl, "g_RenderVar0", &rv0);
+            prog.set(gl, "g_RenderVar1", &rv1);
+            prog.set(gl, "g_LightAmbientColor", &self.ambient);
+            prog.set(gl, "g_LightSkylightColor", &self.skylight);
+            for (unit, tex) in &bound {
+                prog.set(gl, &format!("g_Texture{unit}"), &[*unit as f32]);
+                prog.set(gl, &format!("g_Texture{unit}Resolution"), &tex.resolution());
+            }
+            set_params(gl, prog, &constants);
+            self.pmesh.draw(gl, &verts);
+            self.pverts = verts;
+        }
+    }
+
     /// One line per layer, for `--describe`.
     pub fn describe(&self) -> Vec<String> {
         self.layers
@@ -1081,6 +1460,20 @@ impl SceneRenderer {
                     l.material.program_key
                 )
             })
+            .chain(self.particle_objs.iter().map(|p| {
+                format!(
+                    "#{:<5} {:<28} {:>5} particles prewarm={}s {}",
+                    p.id,
+                    p.name.chars().take(28).collect::<String>(),
+                    if p.visible { "shown" } else { "HIDDEN" },
+                    p.prewarm,
+                    p.systems
+                        .iter()
+                        .map(|s| format!("[max={} {}]", s.sim.max_count(), s.pass.program_key))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                )
+            }))
             .collect()
     }
 }
@@ -1103,6 +1496,74 @@ struct DrawCall<'a> {
     verts: [f32; 20],
     blend: Blend,
     frame: FrameInput,
+}
+
+/// Sets the shader's annotated material parameters (`uniform float g_Speed;
+/// // {"material":"speed","default":1}`): the annotated default, overridden by
+/// the pass constants (exact name first, then case-insensitive).
+fn set_params(gl: &glow::Context, prog: &Program, constants: &HashMap<String, Value>) {
+    for p in &prog.params {
+        let v = p
+            .material
+            .as_deref()
+            .and_then(|m| {
+                constants.get(m).or_else(|| {
+                    constants
+                        .iter()
+                        .find(|(k, _)| k.eq_ignore_ascii_case(m))
+                        .map(|(_, v)| v)
+                })
+            })
+            .map(value::floats)
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| p.default.clone());
+        prog.set(gl, &p.uniform, &v);
+    }
+}
+
+/// An object's own transform: translate(origin) * rotZ(angle) * scale.
+fn local_matrix(obj: &Value) -> Mat4 {
+    math::model(
+        value::get_vec3(obj, "origin", [0.0; 3]),
+        value::get_vec3(obj, "angles", [0.0; 3])[2],
+        value::get_vec3(obj, "scale", [1.0; 3]),
+    )
+}
+
+/// World matrix of every object: objects can have a `parent` (any object,
+/// including plain groups) and their origin/angles/scale are relative to it.
+fn world_matrices(objects: &[Value]) -> HashMap<i64, Mat4> {
+    let by_id: HashMap<i64, &Value> = objects
+        .iter()
+        .filter_map(|o| Some((o.get("id")?.as_i64()?, o)))
+        .collect();
+    fn resolve(
+        id: i64,
+        by_id: &HashMap<i64, &Value>,
+        out: &mut HashMap<i64, Mat4>,
+        depth: u32,
+    ) -> Mat4 {
+        if let Some(m) = out.get(&id) {
+            return *m;
+        }
+        let Some(obj) = by_id.get(&id) else {
+            return math::IDENTITY;
+        };
+        let local = local_matrix(obj);
+        let world = match obj.get("parent").and_then(|p| p.as_i64()) {
+            Some(pid) if depth < 32 && pid != id => {
+                math::mul(&resolve(pid, by_id, out, depth + 1), &local)
+            }
+            _ => local,
+        };
+        out.insert(id, world);
+        world
+    }
+    let mut out = HashMap::new();
+    for &id in by_id.keys() {
+        resolve(id, &by_id, &mut out, 0);
+    }
+    out
 }
 
 /// "g_Texture3" -> 3

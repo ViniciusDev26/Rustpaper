@@ -28,14 +28,20 @@ pub fn mul(a: &Mat4, b: &Mat4) -> Mat4 {
     out
 }
 
+/// Depth scale of the orthographic projections. Scenes place things at large
+/// z (particle emitters spread hundreds of units in depth, e.g. "directions":
+/// "1 0.1 1"); passing z through unscaled clipped everything outside [-1, 1].
+/// We never depth-test, so z only has to stay inside the clip volume.
+const DEPTH_Z: f32 = 1.0 / 100_000.0;
+
 /// Scene projection: x in [0,W] -> [-1,1]; y in [0,H] -> [+1,-1] (top = row 0).
 #[rustfmt::skip]
 pub fn scene_ortho(w: f32, h: f32) -> Mat4 {
     [
-        2.0 / w, 0.0,      0.0, 0.0,
-        0.0,     -2.0 / h, 0.0, 0.0,
-        0.0,     0.0,      1.0, 0.0,
-        -1.0,    1.0,      0.0, 1.0,
+        2.0 / w, 0.0,      0.0,     0.0,
+        0.0,     -2.0 / h, 0.0,     0.0,
+        0.0,     0.0,      DEPTH_Z, 0.0,
+        -1.0,    1.0,      0.0,     1.0,
     ]
 }
 
@@ -44,10 +50,10 @@ pub fn scene_ortho(w: f32, h: f32) -> Mat4 {
 #[rustfmt::skip]
 pub fn centered_ortho(w: f32, h: f32) -> Mat4 {
     [
-        2.0 / w, 0.0,      0.0, 0.0,
-        0.0,     -2.0 / h, 0.0, 0.0,
-        0.0,     0.0,      1.0, 0.0,
-        0.0,     0.0,      0.0, 1.0,
+        2.0 / w, 0.0,      0.0,     0.0,
+        0.0,     -2.0 / h, 0.0,     0.0,
+        0.0,     0.0,      DEPTH_Z, 0.0,
+        0.0,     0.0,      0.0,     1.0,
     ]
 }
 
@@ -62,6 +68,81 @@ pub fn model(origin: [f32; 3], angle_z: f32, scale: [f32; 3]) -> Mat4 {
         0.0,           0.0,          scale[2], 0.0,
         origin[0],     origin[1],    origin[2], 1.0,
     ]
+}
+
+/// Inverse of a general 4x4 (cofactor expansion). Used for
+/// `g_ModelMatrixInverse`; returns identity for a singular matrix.
+pub fn invert(m: &Mat4) -> Mat4 {
+    let mut inv = [0.0f32; 16];
+    inv[0] = m[5] * m[10] * m[15] - m[5] * m[11] * m[14] - m[9] * m[6] * m[15]
+        + m[9] * m[7] * m[14]
+        + m[13] * m[6] * m[11]
+        - m[13] * m[7] * m[10];
+    inv[4] = -m[4] * m[10] * m[15] + m[4] * m[11] * m[14] + m[8] * m[6] * m[15]
+        - m[8] * m[7] * m[14]
+        - m[12] * m[6] * m[11]
+        + m[12] * m[7] * m[10];
+    inv[8] = m[4] * m[9] * m[15] - m[4] * m[11] * m[13] - m[8] * m[5] * m[15]
+        + m[8] * m[7] * m[13]
+        + m[12] * m[5] * m[11]
+        - m[12] * m[7] * m[9];
+    inv[12] = -m[4] * m[9] * m[14] + m[4] * m[10] * m[13] + m[8] * m[5] * m[14]
+        - m[8] * m[6] * m[13]
+        - m[12] * m[5] * m[10]
+        + m[12] * m[6] * m[9];
+    inv[1] = -m[1] * m[10] * m[15] + m[1] * m[11] * m[14] + m[9] * m[2] * m[15]
+        - m[9] * m[3] * m[14]
+        - m[13] * m[2] * m[11]
+        + m[13] * m[3] * m[10];
+    inv[5] = m[0] * m[10] * m[15] - m[0] * m[11] * m[14] - m[8] * m[2] * m[15]
+        + m[8] * m[3] * m[14]
+        + m[12] * m[2] * m[11]
+        - m[12] * m[3] * m[10];
+    inv[9] = -m[0] * m[9] * m[15] + m[0] * m[11] * m[13] + m[8] * m[1] * m[15]
+        - m[8] * m[3] * m[13]
+        - m[12] * m[1] * m[11]
+        + m[12] * m[3] * m[9];
+    inv[13] = m[0] * m[9] * m[14] - m[0] * m[10] * m[13] - m[8] * m[1] * m[14]
+        + m[8] * m[2] * m[13]
+        + m[12] * m[1] * m[10]
+        - m[12] * m[2] * m[9];
+    inv[2] = m[1] * m[6] * m[15] - m[1] * m[7] * m[14] - m[5] * m[2] * m[15]
+        + m[5] * m[3] * m[14]
+        + m[13] * m[2] * m[7]
+        - m[13] * m[3] * m[6];
+    inv[6] = -m[0] * m[6] * m[15] + m[0] * m[7] * m[14] + m[4] * m[2] * m[15]
+        - m[4] * m[3] * m[14]
+        - m[12] * m[2] * m[7]
+        + m[12] * m[3] * m[6];
+    inv[10] = m[0] * m[5] * m[15] - m[0] * m[7] * m[13] - m[4] * m[1] * m[15]
+        + m[4] * m[3] * m[13]
+        + m[12] * m[1] * m[7]
+        - m[12] * m[3] * m[5];
+    inv[14] = -m[0] * m[5] * m[14] + m[0] * m[6] * m[13] + m[4] * m[1] * m[14]
+        - m[4] * m[2] * m[13]
+        - m[12] * m[1] * m[6]
+        + m[12] * m[2] * m[5];
+    inv[3] = -m[1] * m[6] * m[11] + m[1] * m[7] * m[10] + m[5] * m[2] * m[11]
+        - m[5] * m[3] * m[10]
+        - m[9] * m[2] * m[7]
+        + m[9] * m[3] * m[6];
+    inv[7] = m[0] * m[6] * m[11] - m[0] * m[7] * m[10] - m[4] * m[2] * m[11]
+        + m[4] * m[3] * m[10]
+        + m[8] * m[2] * m[7]
+        - m[8] * m[3] * m[6];
+    inv[11] = -m[0] * m[5] * m[11] + m[0] * m[7] * m[9] + m[4] * m[1] * m[11]
+        - m[4] * m[3] * m[9]
+        - m[8] * m[1] * m[7]
+        + m[8] * m[3] * m[5];
+    inv[15] = m[0] * m[5] * m[10] - m[0] * m[6] * m[9] - m[4] * m[1] * m[10]
+        + m[4] * m[2] * m[9]
+        + m[8] * m[1] * m[6]
+        - m[8] * m[2] * m[5];
+    let det = m[0] * inv[0] + m[1] * inv[4] + m[2] * inv[8] + m[3] * inv[12];
+    if det.abs() < 1e-12 {
+        return IDENTITY;
+    }
+    inv.map(|v| v / det)
 }
 
 /// Quad of `w`x`h` centered at the origin, as 4 vertices of (x, y, z, u, v)
@@ -93,7 +174,16 @@ mod tests {
     fn scene_top_maps_to_row_zero() {
         let p = scene_ortho(1920.0, 1080.0);
         assert_eq!(apply(&p, [0.0, 1080.0, 0.0, 1.0]), [-1.0, -1.0, 0.0, 1.0]);
+        // deep particles stay inside the clip volume
+        assert!(apply(&p, [0.0, 0.0, 5000.0, 1.0])[2].abs() < 1.0);
         assert_eq!(apply(&p, [1920.0, 0.0, 0.0, 1.0]), [1.0, 1.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn invert_undoes_model() {
+        let m = model([100.0, 50.0, 0.0], 0.7, [2.0, 3.0, 1.0]);
+        let p = apply(&invert(&m), apply(&m, [5.0, -7.0, 0.0, 1.0]));
+        assert!((p[0] - 5.0).abs() < 1e-4 && (p[1] + 7.0).abs() < 1e-4);
     }
 
     #[test]

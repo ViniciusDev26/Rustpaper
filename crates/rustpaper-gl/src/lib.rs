@@ -5,6 +5,7 @@
 //   assets   file lookup: scene.pkg -> wallpaper folder -> base WE assets
 //   value    scene.json value helpers ({"user":..,"value":..} wrappers)
 //   math     column-major matrices + the coordinate conventions
+//   particles particle systems: definition, deterministic simulation, vertices
 //   gpu      textures, render targets, blending, the shared quad
 //   program  a WE shader compiled for one set of combos; uniforms by name
 //   scene    the render graph: layers, effect chains, compositing
@@ -12,6 +13,7 @@ pub mod assets;
 pub mod context;
 pub mod gpu;
 pub mod math;
+pub mod particles;
 pub mod program;
 pub mod scene;
 pub mod value;

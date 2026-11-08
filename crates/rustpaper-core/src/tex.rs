@@ -19,6 +19,86 @@ const FIF_UNKNOWN: u32 = 0xFFFF_FFFF; // FreeImage: sem formato = -1
 
 /// Sprite sheet (flipbook) de uma textura: N frames numa grade cols×rows. Muitas
 /// partículas do WE (bolhas, faíscas) animam por esses frames ao longo da vida.
+/// Sprite sheet stored INSIDE a .tex (block `TEXS000x` after the images), as
+/// used by Workshop particle sprites: `frames` cells of `frame_w`x`frame_h` px,
+/// laid out left-to-right, top-to-bottom over the image content.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EmbeddedSheet {
+    pub frames: u32,
+    pub frame_w: u32,
+    pub frame_h: u32,
+}
+
+/// Reads the embedded sprite sheet of a .tex, if it has one. Walks every
+/// image/mipmap to reach the `TEXS` block:
+///   TEXS0002: u32 count
+///   TEXS0003: u32 frame_w, u32 frame_h, u32 count
+///   per frame: u32 image, f32 frametime, f32 x, f32 y, f32 w, f32 _, f32 _, f32 h
+pub fn embedded_sheet(data: &[u8]) -> Option<EmbeddedSheet> {
+    let mut c = Cursor { data, pos: 0 };
+    c.magic8().ok()?;
+    c.magic8().ok()?;
+    for _ in 0..7 {
+        c.u32().ok()?;
+    }
+    let container = c.magic8().ok()?;
+    let images = c.u32().ok()?;
+    let mut is_mp4 = false;
+    match container.as_str() {
+        "TEXB0004" => {
+            c.u32().ok()?;
+            is_mp4 = c.u32().ok()? == 1;
+        }
+        "TEXB0003" => {
+            c.u32().ok()?;
+        }
+        _ => {}
+    }
+    let has_comp = container != "TEXB0001";
+    for _ in 0..images {
+        for _ in 0..c.u32().ok()? {
+            if container == "TEXB0004" && is_mp4 {
+                c.u32().ok()?;
+                c.u32().ok()?;
+                c.null_string().ok()?;
+                c.u32().ok()?;
+            }
+            c.u32().ok()?; // w
+            c.u32().ok()?; // h
+            if has_comp {
+                c.u32().ok()?;
+                c.u32().ok()?;
+            }
+            let size = c.u32().ok()? as usize;
+            c.take(size).ok()?;
+        }
+    }
+    let magic = c.magic8().ok()?;
+    let (mut frame_w, mut frame_h) = (0, 0);
+    if magic == "TEXS0003" {
+        frame_w = c.u32().ok()?;
+        frame_h = c.u32().ok()?;
+    } else if magic != "TEXS0002" {
+        return None;
+    }
+    let frames = c.u32().ok()?;
+    if frames == 0 {
+        return None;
+    }
+    // first frame: image, frametime, x, y, w, _, _, h
+    let raw = c.take(32).ok()?;
+    let f = |i: usize| f32::from_le_bytes(raw[i * 4..i * 4 + 4].try_into().unwrap());
+    if frame_w == 0 || frame_h == 0 {
+        frame_w = f(4) as u32;
+        frame_h = f(7) as u32;
+    }
+    (frame_w > 0 && frame_h > 0).then_some(EmbeddedSheet {
+        frames,
+        frame_w,
+        frame_h,
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SpriteSheet {
     pub frames: u32,
@@ -50,6 +130,9 @@ pub struct DecodedTexture {
     pub rgba: Vec<u8>, // width*height*4
     /// Header flags: bit 0 = no interpolation (nearest filter), bit 1 = clamp UVs.
     pub flags: u32,
+    /// WE texture format id (0 = RGBA8888, 4/6/7 = DXT5/3/1, 8 = RG88, 9 = R8;
+    /// embedded JPEG/PNG count as 0). Shaders get it as the TEXnFORMAT combo.
+    pub format: u32,
 }
 
 struct Cursor<'a> {
@@ -164,6 +247,7 @@ pub fn parse(data: &[u8]) -> Result<DecodedTexture, String> {
         let (w, h) = img.dimensions();
         return Ok(DecodedTexture {
             flags,
+            format: 0,
             width: w,
             height: h,
             real_width: width,
@@ -175,6 +259,7 @@ pub fn parse(data: &[u8]) -> Result<DecodedTexture, String> {
     let make = |rgba: Vec<u8>| {
         Ok(DecodedTexture {
             flags,
+            format,
             width: mip_w,
             height: mip_h,
             real_width: width,

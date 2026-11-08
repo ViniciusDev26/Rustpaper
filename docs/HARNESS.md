@@ -41,5 +41,13 @@ headless output):
 - **motion** — average |frame − previous frame|: where and how much it moves.
 - **SSIM** of both (1 = identical), plus `side_by_side.mp4` to judge timing.
 
-First result, Yor Forger (2824109832, 17 effects incl. multi-pass): mean SSIM
-0.94, motion SSIM 0.88.
+Rustpaper's video starts at t = 10 s (`--start 10`) because WE has been running
+for a while when its capture starts: particles are compared at steady state.
+For random particles the motion SSIM is a weak signal (positions never match);
+compare the zoomed motion maps and measure sizes/brightness of features.
+
+| Scene | What it exercises | mean SSIM | motion SSIM |
+|---|---|---|---|
+| Yor Forger 2824109832 | 17 effects, multi-pass, layer refs | 0.976 | 0.915 |
+| Ayanami Rei 3571376089 | 10 particle systems, hierarchy | 0.958 | 0.738 |
+| Akame ga Kill 1827211233 | fog/fire particles, children | 0.957 | 0.553 |
