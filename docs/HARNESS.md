@@ -96,11 +96,12 @@ scene's unsupported features / warnings).
 
 100 Workshop items (75 scene, 15 video, 10 web; "Everyone" rating, ~5.8 GB),
 chosen to cover effects, particles, text, audio, puppets and properties.
-`download-testset.sh` fetches them with `steamcmd` into
-`~/.local/share/rustpaper-testset` (override: `RUSTPAPER_TESTSET_DIR`), which
-`rustpaper_core::paths` and the harness pick up automatically. `steamcmd`
-needs a Steam login once (`steamcmd +login <user> +quit`), then
-`STEAM_USER=<user> harness/download-testset.sh`. Web items are kept to verify
+`download-testset.sh` asks the RUNNING Steam client to download each item
+without subscribing (`steam "+workshop_download_item 431960 <id>"`, your
+logged-in session) and copies it into `~/.local/share/rustpaper-testset`
+(override: `RUSTPAPER_TESTSET_DIR`) — Steam may later delete unsubscribed
+items from its own folder. With `STEAM_USER` set it uses `steamcmd` instead.
+`rustpaper_core::paths` and the harness pick the corpus up automatically. Web items are kept to verify
 they are listed but refused.
 
 ## Calibration scenes (`harness/calibration/`)

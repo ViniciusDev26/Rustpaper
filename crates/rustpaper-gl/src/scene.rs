@@ -179,6 +179,8 @@ pub struct SceneRenderer {
     clear: [f32; 4],
     ambient: [f32; 3],
     skylight: [f32; 3],
+    /// `general.fov` (degrees), for perspective particle systems.
+    fov: f32,
     layers: Vec<Layer>,
     particle_objs: Vec<ParticleObject>,
     texts: Vec<TextRt>,
@@ -283,6 +285,7 @@ impl SceneRenderer {
             clear: [cc[0], cc[1], cc[2], 1.0],
             ambient: value::get_vec3(&general, "ambientcolor", [0.3; 3]),
             skylight: value::get_vec3(&general, "skylightcolor", [0.3; 3]),
+            fov: value::get_f32(&general, "fov", 50.0),
             layers: Vec::new(),
             particle_objs: Vec::new(),
             texts: Vec::new(),
@@ -1924,7 +1927,9 @@ impl SceneRenderer {
         let o = &self.particle_objs[i];
         let model = o.world;
         let proj = self.view_proj_at(o.parallax);
-        let mvp = math::mul(&proj, &model);
+        let mvp_flat = math::mul(&proj, &model);
+        let (persp, eye) = math::scene_perspective(w, h, self.fov);
+        let mvp_persp = math::mul(&persp, &model);
         let inverse = math::invert(&model);
         for k in 0..self.particle_objs[i].systems.len() {
             let sys = &self.particle_objs[i].systems[k];
@@ -1936,6 +1941,7 @@ impl SceneRenderer {
             let constants = sys.pass.constants.clone();
             let blend = sys.pass.blend;
             let (rv0, rv1) = (sys.render_var0, sys.render_var1);
+            let sys_perspective = sys.sim.def.perspective;
             let rope = matches!(
                 sys.sim.def.renderer,
                 RendererKind::Rope | RendererKind::RopeTrail { .. }
@@ -1969,10 +1975,19 @@ impl SceneRenderer {
                     gl.bind_texture(glow::TEXTURE_2D, Some(tex.id));
                 }
             }
+            // `perspective` systems (flags & 4) get a real camera: depth makes
+            // near particles bigger and faster (Kakashi 2811157144 motion
+            // energy ratio 0.77 -> 0.88, Luffy 0.50 -> 0.56).
+            let perspective = sys_perspective;
+            let mvp = if perspective { mvp_persp } else { mvp_flat };
             prog.set(gl, "g_ModelViewProjectionMatrix", &mvp);
             prog.set(gl, "g_ModelMatrix", &model);
             prog.set(gl, "g_ModelMatrixInverse", &inverse);
-            prog.set(gl, "g_ViewProjectionMatrix", &proj);
+            prog.set(
+                gl,
+                "g_ViewProjectionMatrix",
+                if perspective { &persp } else { &proj },
+            );
             // Camera axes in WORLD space (identity for the front-facing ortho
             // camera), so sprites rotate with their object. The sprite
             // `orientation` modes (screen / upright / fixed) coincide here;
@@ -1984,7 +1999,12 @@ impl SceneRenderer {
             prog.set(gl, "g_ViewRight", &[1.0, 0.0, 0.0]);
             prog.set(gl, "g_ViewUp", &[0.0, 1.0, 0.0]);
             // far "in front" of the scene plane: trails get right = cross(view, velocity)
-            prog.set(gl, "g_EyePosition", &[w / 2.0, h / 2.0, 100_000.0]);
+            let eye_pos = if perspective {
+                eye
+            } else {
+                [w / 2.0, h / 2.0, 100_000.0]
+            };
+            prog.set(gl, "g_EyePosition", &eye_pos);
             prog.set(gl, "g_RenderVar0", &rv0);
             prog.set(gl, "g_RenderVar1", &rv1);
             prog.set(gl, "g_LightAmbientColor", &self.ambient);

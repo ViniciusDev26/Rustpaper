@@ -331,6 +331,9 @@ pub struct ChildRef {
 pub struct ParticleDef {
     pub material: String,
     pub max_count: u32,
+    /// `flags & 4`: drawn with a perspective camera (depth makes particles
+    /// bigger/faster), see `math::scene_perspective`.
+    pub perspective: bool,
     pub start_time: f32,
     emitters: Vec<Emitter>,
     inits: Vec<Init>,
@@ -581,6 +584,7 @@ impl ParticleDef {
                 .unwrap_or("")
                 .to_string(),
             max_count: f(j, "maxcount", 100.0).max(0.0) as u32,
+            perspective: (f(j, "flags", 0.0) as u32) & 4 != 0,
             start_time: f(j, "starttime", 0.0).max(0.0),
             emitters,
             inits,
