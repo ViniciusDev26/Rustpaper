@@ -14,7 +14,7 @@ export RUSTPAPER_CLOCK; RUSTPAPER_CLOCK=$(capture_clock "$out" "$secs")
 "$bin" "$id" --out "$out/rp.png" --time 10 --screen 1920x1080 2>"$out/rp_warnings.txt"
 # Start well into the animation: WE has been running for a while when its
 # capture starts (particles at steady state, not spawning from empty).
-"$bin" "$id" --video "$out/rp.mp4" --duration "$secs" --fps 30 --screen 1920x1080 --start "$(capture_time "$out")" 2>>"$out/rp_warnings.txt"
+"$bin" "$id" --video "$out/rp.mp4" --duration "$secs" --fps 30 --screen 1920x1080 --start "$(capture_time "$out")" --pointer "$(capture_pointer "$out")" 2>>"$out/rp_warnings.txt"
 "$(dirname "$0")/we-capture.sh" "$id" "$out" "$secs"
 "$(dirname "$0")/compare.sh" "$out/rp.mp4" "$out/we.mp4" "$out"
 sort -u "$out/rp_warnings.txt" | sed 's/^/  /'

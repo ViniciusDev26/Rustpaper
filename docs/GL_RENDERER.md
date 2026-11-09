@@ -317,6 +317,9 @@ customization panel (`docs/SELECTOR.md`).
   `mapsequence*` initializers are reported as unsupported. Sprite
   `orientation` modes coincide for the front-facing ortho camera (WE passes
   world camera axes; compensating object rotation broke White Angel).
+- `g_ParallaxPosition` follows the (smoothed) cursor like the camera
+  parallax (it was fixed at the center): `depthparallax` effects shift layers
+  with it.
 - Camera parallax is implemented (`Parallax` in scene.rs): cursor offset
   from the center x `amount` x `mouseinfluence` x `parallaxDepth` x scene
   size, content moving away from the cursor. Only one data point so far: in

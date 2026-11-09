@@ -171,6 +171,10 @@ capture_clock() { # capture_clock <capture dir> <seconds>
 # before it was recorded used a 6 s warm-up.
 capture_time() { cat "$1/we_time.txt" 2>/dev/null || echo 6; }
 
+# Cursor position WE saw during a capture (0..1 inside its window, clamped);
+# older captures did not record it: center.
+capture_pointer() { cat "$1/we_pointer.txt" 2>/dev/null || echo 0.5,0.5; }
+
 close_window() { hyprctl dispatch "hl.dsp.window.close({ window = 'address:$1' })" >/dev/null 2>&1 || true; }
 # refocus <window address> [monitor]: back to the user's window, or at least
 # their monitor when nothing was focused (empty workspace).
