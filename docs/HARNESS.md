@@ -13,6 +13,14 @@ Fidelity is measured against the real WE (running under Proton), not by eye.
 Output in `harness-out/<id>/` (git-ignored): `sheet.png`, `side_by_side.mp4`,
 `summary.txt`, the raw `rp.*` / `we.*` captures and `rp_warnings.txt`.
 
+## Fidelity target
+
+The goal is more than 95% of scenes passing. It is measured only on **scene
+wallpapers that use no SceneScript**. Web wallpapers and scenes that rely on
+SceneScript are out of scope for now. They will come later, once JS can run
+in a sandbox (Rustpaper never executes wallpaper JS today). `score.py` reports
+this subset separately from the full corpus.
+
 ## Requirements
 
 - Hyprland (uses `hyprctl` Lua dispatchers, `grim`), `ffmpeg`, `nsenter`.
