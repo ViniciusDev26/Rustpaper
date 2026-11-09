@@ -182,6 +182,32 @@ motion. Calibrating one feature at a time is what found the real
 turbulentvelocityrandom model (GL_RENDERER.md). Dark captures are allowed
 there (`WE_ALLOW_DARK=1`).
 
+## Audio calibration (`harness/calibration/run_audio.sh`)
+
+`make_audio.py` builds a scene whose shader draws `g_AudioSpectrum64Left`,
+`64Right` and `16Left` as gray cells (0.25 + 0.75 * value: the gray floor
+proves the shader runs in silence). `make_audio_track.py` writes a 31 s
+track: a 30 Hz .. 16 kHz sweep, 1 kHz at seven levels, silence, and a
+left-only tone. `run_audio.sh` captures the scene in WE **while the track
+plays on the default output (audible)**, renders it with Rustpaper from the
+recording, and `measure_audio.py` prints both per segment; `fit_audio.py`
+fits the analyzer model (GL_RENDERER.md, Audio).
+
+WE quirks found on the way:
+- WE only feeds `g_AudioSpectrum*` to projects with
+  `general.supportsaudioprocessing: true`.
+- a `general` object without `properties` makes WE show a black window.
+
+## Audio during captures
+
+`we-capture.sh` records the monitor of the default output with `pw-record`
+during the video (`we_audio.wav`, t = 0 = first frame) and `batch.sh` passes
+it to `rustpaper-render --audio`, so audio-reactive scenes see the same
+sound in both. Captures run one at a time (one WE, one headless output), so
+each file holds only its own scene's audio. `WE_PLAY_AUDIO=<file>` plays a
+file during the capture (calibration only). Background jobs of the script
+ignore SIGINT: the recorder is stopped with SIGTERM.
+
 ## Exclusions (`harness/excluded.tsv`)
 
 Scenes that cannot be compared are listed with the reason and skipped by
@@ -200,7 +226,7 @@ eye/center ignored) was established.
 - 35/56 PASS; 43/56 reach mean SSIM >= 0.95; average mean SSIM 0.957.
 - Remaining failures are mostly motion-energy mismatches of random particle
   systems (turbulence noise differs from WE's), plus harness limits: audio
-  visualizers (WE hears real system audio), parallax scenes (no cursor in
+  visualizers (before 2026-11-09 captures did not record the audio WE heard), parallax scenes (no cursor in
   WE's window), clocks (captured at a different time), media integration
   (album art), fast flicker effects aliased by the 60 -> 30 fps resampling.
 - `--update` re-runs only the given ids and keeps the other rows.

@@ -147,7 +147,7 @@ quad, the trail (`TRAILRENDERER`) or the sprite-sheet frame (`SPRITESHEET`,
   own 21-float vertex layout; `ropetrail` keeps 16 history samples per
   particle.
 - **Audio response** (`audioprocessingmode` on emitters) scales the rate by the
-  band average (see Audio below).
+  band values (see Audio below).
 
 ## More WE behaviours found while adding particles
 
@@ -206,10 +206,28 @@ drawn by a synthetic image layer (so effects and blend modes apply).
 
 - Live engine: `pw-record` captures the default sink monitor
   (`stream.capture.sink=true`), 48 kHz stereo f32, on a thread.
-- 2048-sample Hann FFT -> 64 log bands (30 Hz .. 16 kHz), -60..0 dB -> 0..1,
-  instant attack and 0.85 decay per frame. `g_AudioSpectrum16/32/64Left/Right`
-  are averages of the 64 bands.
-- `rustpaper-render` and the harness use silence (what WE hears there too).
+- 2048-sample Hann FFT, fitted to WE (`harness/calibration/run_audio.sh`,
+  2026-11-09: a scene showing `g_AudioSpectrum*` as gray cells, captured
+  while a known sweep plays; `fit_audio.py` fits the model frame by frame):
+  - band k is a fixed frequency, log-interpolated between measured anchors:
+    45 Hz -> 0, 250 Hz -> 8, 1 kHz -> 32, 4 kHz -> 47, 11 kHz -> 61; 16 kHz
+    lights nothing. Bass bands narrower than an FFT bin read the spectrum
+    interpolated at their center.
+  - LINEAR magnitude (not dB): after a full-scale tone, amplitudes 0.5 / 0.25
+    / 0.0625 show 0.47 / 0.25 / 0.08.
+  - divided by one adaptive reference for all bands (rises toward the loudest
+    band by 0.05 per 60 Hz step, decays by 0.9995): the same tone shows ~1.0
+    after silence and ~0.5 after a tone twice as loud.
+  - no smoothing of the bands: 1 -> 0 within ~70 ms when a tone stops.
+  - a tone also lights its neighbours: 0.3 / 0.1 of it one / two bands below,
+    0.4 / 0.15 above.
+  - `g_AudioSpectrum16/32` are the MAXIMUM of each group of the 64 (RMSE vs
+    WE 0.10, the average gives 0.15).
+  - WE shows it ~0.167 s late; `AudioTrack` (replayed files) adds that delay.
+  RMSE per band vs WE: 0.12 (the previous dB + 0.85-decay analyzer: 0.22).
+  Known gap: WE lights 2-3x more bands than the model for tones below ~700 Hz.
+- `rustpaper-render --audio file` replays a recording (the harness passes
+  `we_audio.wav`, recorded during the WE capture); without it, silence.
 - `--no-audio` disables capture.
 
 ## Puppet warp (`puppet.rs`, `rustpaper_core::mdl`)
