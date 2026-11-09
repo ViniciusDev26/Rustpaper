@@ -265,8 +265,11 @@ per component (`c0`, `c1`, `c2`) of `{frame, value}` keys, linear or cubic
 Bezier when a key's `front`/`back` handle is enabled, `options.fps`,
 `options.length` (frames) and `mode` loop / mirror / single. Layers evaluate
 alpha, color, brightness, origin, angles and scale every frame (blinking
-crossing lights, flashes in Summer Feeling 2477602742). Particle objects and
-effect constants with timelines are not animated yet.
+crossing lights, flashes in Summer Feeling 2477602742). Effect constants
+with a timeline (`constantshadervalues` entries carrying `animation`) are
+kept whole and evaluated every frame (13 scenes use them; こきん 3146507587
+0.915 -> 0.928). Particle objects with timelines (1 scene) are not animated
+yet.
 
 ## Bloom
 
@@ -323,10 +326,13 @@ customization panel (`docs/SELECTOR.md`).
   executing Workshop code is a security risk. Properties driven only by a
   script keep their static value.
 - Scene lights (`LIGHTING=1` materials use ambient only); timelines on
-  particle objects and effect constants.
+  particle objects.
 - Particles: `remapvalue` only for `output: velocity` + `operation: remap`
-  (unverified: no captured scene shows its rain); other outputs and the
-  `mapsequence*` initializers are reported as unsupported. Sprite
+  (unverified: no captured scene shows its rain); other outputs are reported
+  as unsupported. `mapsequencearoundcontrolpoint` (N even directions,
+  velocity rotated per particle) and `mapsequencebetweencontrolpoints`
+  (evenly spaced between control points 0 and 1) are implemented but not
+  calibrated (only heavily scripted scenes use them). Sprite
   `orientation` modes coincide for the front-facing ortho camera (WE passes
   world camera axes; compensating object rotation broke White Angel).
 - `g_ParallaxPosition` follows the (smoothed) cursor like the camera
