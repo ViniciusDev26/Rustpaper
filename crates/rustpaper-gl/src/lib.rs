@@ -16,6 +16,7 @@ pub mod assets;
 pub mod audio;
 pub mod context;
 pub mod gpu;
+pub mod keyframes;
 pub mod math;
 pub mod particles;
 pub mod program;

@@ -106,6 +106,8 @@ struct Layer {
     color: [f32; 3],
     alpha: f32,
     brightness: f32,
+    /// Keyframed properties (timeline animations), applied every frame.
+    anim: Option<LayerAnim>,
     material: Pass,
     /// Puppet warp: skeletal animation + its mesh (replaces the quad).
     puppet: Option<(crate::puppet::PuppetRt, crate::gpu::MeshGpu)>,
@@ -562,6 +564,7 @@ impl SceneRenderer {
             color: value::get_vec3(obj, "color", [1.0; 3]),
             alpha: value::get_f32(obj, "alpha", 1.0),
             brightness: value::get_f32(obj, "brightness", 1.0),
+            anim: LayerAnim::parse(obj, self.world_of(obj)),
             material,
             puppet,
             composite,
@@ -849,6 +852,15 @@ impl SceneRenderer {
             p.follow(frame.pointer, frame.time);
         }
         for l in &mut self.layers {
+            if let Some(a) = &l.anim {
+                a.apply(
+                    frame.time,
+                    &mut l.world,
+                    &mut l.color,
+                    &mut l.alpha,
+                    &mut l.brightness,
+                );
+            }
             if let Some((rt, mesh)) = &mut l.puppet {
                 rt.update(frame.time);
                 mesh.upload(gl, &rt.vertices);
@@ -2254,6 +2266,81 @@ impl Parallax {
             -self.offset[0] * k * depth[0] * width,
             self.offset[1] * k * depth[1] * height,
         ]
+    }
+}
+
+/// Timeline animations of a layer's object properties (see `keyframes`).
+struct LayerAnim {
+    alpha: Option<crate::keyframes::Track>,
+    color: Option<crate::keyframes::Track>,
+    brightness: Option<crate::keyframes::Track>,
+    origin: Option<crate::keyframes::Track>,
+    angles: Option<crate::keyframes::Track>,
+    scale: Option<crate::keyframes::Track>,
+    /// Static origin / angle z / scale, for components without a curve.
+    base: ([f32; 3], f32, [f32; 3]),
+    /// parent world matrix (world = parent * local)
+    parent: Mat4,
+}
+
+impl LayerAnim {
+    fn parse(obj: &Value, world: Mat4) -> Option<LayerAnim> {
+        use crate::keyframes::Track;
+        let track = |k: &str| obj.get(k).and_then(Track::parse);
+        let a = LayerAnim {
+            alpha: track("alpha"),
+            color: track("color"),
+            brightness: track("brightness"),
+            origin: track("origin"),
+            angles: track("angles"),
+            scale: track("scale"),
+            base: (
+                value::get_vec3(obj, "origin", [0.0; 3]),
+                value::get_vec3(obj, "angles", [0.0; 3])[2],
+                value::get_vec3(obj, "scale", [1.0; 3]),
+            ),
+            parent: math::mul(&world, &math::invert(&local_matrix(obj))),
+        };
+        let any = a.alpha.is_some()
+            || a.color.is_some()
+            || a.brightness.is_some()
+            || a.origin.is_some()
+            || a.angles.is_some()
+            || a.scale.is_some();
+        any.then_some(a)
+    }
+
+    fn apply(
+        &self,
+        t: f32,
+        world: &mut Mat4,
+        color: &mut [f32; 3],
+        alpha: &mut f32,
+        brightness: &mut f32,
+    ) {
+        let v3 = |tr: &Option<crate::keyframes::Track>, base: [f32; 3]| match tr {
+            Some(tr) => {
+                let v = tr.eval(t);
+                [0, 1, 2].map(|i| v.get(i).copied().unwrap_or(base[i]))
+            }
+            None => base,
+        };
+        if let Some(tr) = &self.alpha {
+            *alpha = tr.eval(t).first().copied().unwrap_or(*alpha);
+        }
+        if let Some(tr) = &self.brightness {
+            *brightness = tr.eval(t).first().copied().unwrap_or(*brightness);
+        }
+        if self.color.is_some() {
+            *color = v3(&self.color, *color);
+        }
+        if self.origin.is_some() || self.angles.is_some() || self.scale.is_some() {
+            let (o, a, s) = self.base;
+            let origin = v3(&self.origin, o);
+            let angle = v3(&self.angles, [0.0, 0.0, a])[2];
+            let scale = v3(&self.scale, s);
+            *world = math::mul(&self.parent, &math::model(origin, angle, scale));
+        }
     }
 }
 

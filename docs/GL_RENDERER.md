@@ -202,10 +202,26 @@ unchanged WE material shader draws it.
 - Animations can be followed by extra bytes (9 zero bytes between
   animations); the parser resyncs on the next header (`u32 id, u32, name,
   mode` with a known mode) instead of failing (Dome 3113287126: 0.45 -> 0.90).
+- **MDLV0013** has no vertex-layout field: a fixed 52-byte vertex
+  (position, 4 bone indices, 4 weights, uv) follows the size.
+- Animations may carry an **event list** after their tracks (u32 count, then
+  f32 frame + JSON per event, e.g. `{"name":"flashStart"}`); it is skipped.
+- **MDLA0001** stores a playback rate over 30 fps (Summer Feeling 2477602742:
+  360-frame trains at rate 1.0); MDLA0003+ store frames per second:
 - The MDLA per-animation float is read as **frames per second**. Reading it as
   a duration (fps = frames / value) matched WE worse (2900431360: motion SSIM
   0.57 vs 0.60).
 - Play modes `loop`, `mirror` (ping-pong), `single` (hold last frame).
+
+## Timeline animations (`keyframes.rs`)
+
+Object properties can carry an `animation` (the editor timeline): one curve
+per component (`c0`, `c1`, `c2`) of `{frame, value}` keys, linear or cubic
+Bezier when a key's `front`/`back` handle is enabled, `options.fps`,
+`options.length` (frames) and `mode` loop / mirror / single. Layers evaluate
+alpha, color, brightness, origin, angles and scale every frame (blinking
+crossing lights, flashes in Summer Feeling 2477602742). Particle objects and
+effect constants with timelines are not animated yet.
 
 ## Bloom
 
@@ -245,8 +261,8 @@ customization panel (`docs/SELECTOR.md`).
 - **Not supported by design:** SceneScript (JavaScript) and `web` wallpapers —
   executing Workshop code is a security risk. Properties driven only by a
   script keep their static value.
-- Scene lights (`LIGHTING=1` materials use ambient only), keyframed property
-  animations (`animation` blocks on object properties).
+- Scene lights (`LIGHTING=1` materials use ambient only); timelines on
+  particle objects and effect constants.
 - Particles: `remapvalue` only for `output: velocity` + `operation: remap`
   (unverified: no captured scene shows its rain); other outputs and the
   `mapsequence*` initializers are reported as unsupported. Sprite
