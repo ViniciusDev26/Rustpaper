@@ -109,7 +109,15 @@ we_control() {
 wine_path() { printf 'Z:%s' "${1//\//\\}"; }
 
 # Creates the headless output (1920x1080, scale 1) if it does not exist yet.
+# The session lock covers every output, the headless one included: captures
+# would record the password prompt. Hyprland reports an active
+# ext-session-lock as "LOCK" in a monitor's solitaryBlockedBy.
+session_locked() {
+    hyprctl -j monitors 2>/dev/null | python3 -c "import json,sys; sys.exit(0 if any('LOCK' in (m.get('solitaryBlockedBy') or []) for m in json.load(sys.stdin)) else 1)"
+}
+
 ensure_headless() {
+    session_locked && die "the session is locked: WE captures would record the lock screen"
     if ! hyprctl monitors -j | python3 -c "import json,sys; sys.exit(0 if any(m['name']=='$HEADLESS' for m in json.load(sys.stdin)) else 1)"; then
         hyprctl output create headless "$HEADLESS" >/dev/null
         sleep 1
