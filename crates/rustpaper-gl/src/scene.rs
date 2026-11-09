@@ -187,6 +187,10 @@ pub struct SceneRenderer {
     fov: f32,
     /// `general.zoom`: the camera zooms in around the scene center.
     zoom: f32,
+    /// `general.camerashake`: (amplitude, speed, roughness).
+    shake: Option<(f32, f32, f32)>,
+    /// Scene time of the frame being rendered (camera shake).
+    time: f32,
     layers: Vec<Layer>,
     particle_objs: Vec<ParticleObject>,
     texts: Vec<TextRt>,
@@ -317,6 +321,14 @@ impl SceneRenderer {
             skylight: value::get_vec3(&general, "skylightcolor", [0.3; 3]),
             fov: value::get_f32(&general, "fov", 50.0),
             zoom: value::get_f32(&general, "zoom", 1.0).max(0.01),
+            shake: value::get_bool(&general, "camerashake", false).then(|| {
+                (
+                    value::get_f32(&general, "camerashakeamplitude", 0.5),
+                    value::get_f32(&general, "camerashakespeed", 1.0),
+                    value::get_f32(&general, "camerashakeroughness", 0.0),
+                )
+            }),
+            time: 0.0,
             layers: Vec::new(),
             particle_objs: Vec::new(),
             texts: Vec::new(),
@@ -912,6 +924,7 @@ impl SceneRenderer {
             gl.disable(glow::CULL_FACE);
         }
         self.update_texts(gl);
+        self.time = frame.time;
         if let Some(p) = &mut self.parallax {
             p.follow(frame.pointer, frame.time);
         }
@@ -991,12 +1004,35 @@ impl SceneRenderer {
     /// (67, -37), aligns with WE at offset 0 and scale 1).
     fn view_proj(&self) -> Mat4 {
         let (w, h) = (self.width as f32, self.height as f32);
-        let ortho = math::scene_ortho(w, h);
-        if (self.zoom - 1.0).abs() < 1e-4 {
+        let mut ortho = math::scene_ortho(w, h);
+        if let Some((amp, speed, rough)) = self.shake {
+            // Smooth wandering offset: sum of incommensurate sines, more of
+            // the faster ones with roughness. Magnitude measured on Ice
+            // Princess 2800248288 (amplitude 0.35 -> ~0.4% of the width).
+            // Not calibrated on a dedicated capture yet.
+            let t = self.time * speed;
+            let n = |a: f32, b: f32| {
+                ((t * 0.71 + a).sin()
+                    + (t * 1.13 + b).sin() * 0.6
+                    + (t * 2.9 + a + b).sin() * 0.4 * rough)
+                    / (1.6 + 0.4 * rough)
+            };
+            let k = amp * 0.012;
+            let shake = math::model(
+                [n(0.3, 1.7) * k * w, n(2.1, 0.4) * k * w, 0.0],
+                0.0,
+                [1.0; 3],
+            );
+            ortho = math::mul(&ortho, &shake);
+        }
+        // camera shake also zooms in, so its offset never shows the edges
+        // (Ice Princess 2800248288, amplitude 0.35: best fit at zoom 1.02)
+        let zoom_total = self.zoom * self.shake.map_or(1.0, |(amp, _, _)| 1.0 + amp * 0.06);
+        if (zoom_total - 1.0).abs() < 1e-4 {
             return ortho;
         }
         // zoom around the center: translate(c) * scale(z) * translate(-c)
-        let z = self.zoom;
+        let z = zoom_total;
         let zoom = math::model(
             [w / 2.0 * (1.0 - z), h / 2.0 * (1.0 - z), 0.0],
             0.0,
