@@ -305,6 +305,18 @@ the larger type at link time. `RUSTPAPER_NO_FIX=1` disables it;
 reads them from `rustpaper <dir> --props file.json`, written by the selector's
 customization panel (`docs/SELECTOR.md`).
 
+## Rejected hypotheses (measured, kept out)
+
+- Constants keyed by the editor label (`ui_editor_properties_*`) applied to
+  their uniform: rain 1444077782 got worse (0.81 -> 0.76); WE uses the
+  defaults for those.
+- `shake` effect running at 2x speed: fixed Evangelion 3835770368 but on the
+  52 scenes using `shake` PASS fell from 29 to 14.
+- Default bloom strength/threshold changes: no effect on Water effect
+  820654165 (its color mismatch comes from elsewhere).
+- Turbulentvelocityrandom defaults other than speed 100..250: Akame
+  1215952856 passes only with 100..250.
+
 ## Known gaps
 
 - **Not supported by design:** SceneScript (JavaScript) and `web` wallpapers —
