@@ -18,6 +18,14 @@ fn main() {
                     &b.local[12..15]
                 );
             }
+            for a in &p.attachments {
+                println!(
+                    "  attachment {:?} on bone {} at {:?}",
+                    a.name,
+                    a.bone,
+                    &a.local[12..14]
+                );
+            }
             let verbose = std::env::var_os("MDL_KEYS").is_some();
             for a in &p.animations {
                 println!(

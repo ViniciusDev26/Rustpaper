@@ -28,6 +28,10 @@ pub struct PuppetRt {
     layers: Vec<AnimLayer>,
     /// Interleaved (x, y, z, u, v) of the current pose, for the mesh buffer.
     pub vertices: Vec<f32>,
+    /// World (model-space) matrix of every bone in the current pose; the
+    /// bind pose when nothing animates. Attachments hang from these.
+    pub bone_world: Vec<Mat4>,
+    bind_world: Vec<Mat4>,
 }
 
 /// Multiplier from an animation's stored rate to frames per second. The
@@ -37,9 +41,21 @@ pub struct PuppetRt {
 pub const FPS_SCALE: f32 = 1.0;
 
 impl PuppetRt {
+    /// Model-space matrix of the attachment named `name` in the current pose.
+    pub fn attachment(&self, name: &str) -> Option<Mat4> {
+        let a = self.puppet.attachments.iter().find(|a| a.name == name)?;
+        let bone = self
+            .bone_world
+            .get(a.bone)
+            .copied()
+            .unwrap_or(math::IDENTITY);
+        Some(math::mul(&bone, &a.local))
+    }
+
     pub fn new(puppet: Puppet, animation_layers: Option<&Value>) -> PuppetRt {
         let bind_world = world_poses(&puppet, |b| puppet.bones[b].local);
         let bind_inv = bind_world.iter().map(math::invert).collect();
+        let bone_world = bind_world.clone();
         let layers = animation_layers
             .and_then(|l| l.as_array())
             .into_iter()
@@ -60,6 +76,8 @@ impl PuppetRt {
             bind_inv,
             layers,
             vertices: Vec::new(),
+            bone_world,
+            bind_world,
         };
         rt.update(0.0);
         rt
@@ -92,6 +110,8 @@ impl PuppetRt {
                 None => p.bones[b].local,
             }))
         };
+        self.bone_world = poses.clone().unwrap_or_else(|| self.bind_world.clone());
+        let p = &self.puppet;
         let skins: Vec<Mat4> = match &poses {
             Some(w) => w
                 .iter()

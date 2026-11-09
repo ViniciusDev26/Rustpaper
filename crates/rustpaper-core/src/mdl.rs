@@ -63,12 +63,23 @@ pub struct Animation {
     pub tracks: Vec<Vec<Key>>,
 }
 
+/// Named point on a bone (MDAT block): scene objects with
+/// `"attachment": name` and this model as `parent` follow it.
+#[derive(Debug, Clone)]
+pub struct Attachment {
+    pub name: String,
+    pub bone: usize,
+    /// Transform relative to the bone (column-major 4x4).
+    pub local: [f32; 16],
+}
+
 #[derive(Debug, Clone)]
 pub struct Puppet {
     pub material: String,
     pub mesh: Mesh,
     pub bones: Vec<Bone>,
     pub animations: Vec<Animation>,
+    pub attachments: Vec<Attachment>,
 }
 
 struct Cursor<'a> {
@@ -186,6 +197,12 @@ impl Puppet {
 
         let mut bones = Vec::new();
         let mut animations = Vec::new();
+        let mut attachments = Vec::new();
+        // Newer versions (MDLV0023) put extra blocks between the indices and
+        // the skeleton: look for the MDLS magic instead of assuming it follows.
+        if let Some(k) = d[c.p..].windows(4).position(|w| w == b"MDLS") {
+            c.p += k;
+        }
         if c.p + 9 <= d.len() && c.magic()?.starts_with("MDLS") {
             let anim_at = c.u32()? as usize;
             for _ in 0..c.u32()? {
@@ -205,6 +222,36 @@ impl Puppet {
                 });
             }
             c.p = anim_at;
+            // MDAT0001: u32, u16 count, per attachment u16 bone, name, f32x16
+            if d.get(c.p..c.p + 4).is_some_and(|m| m == b"MDAT") {
+                let mut a = Cursor { d, p: c.p + 9 };
+                let parsed = (|| -> Result<Vec<Attachment>, String> {
+                    a.u32()?;
+                    let u16 = |a: &mut Cursor| -> Result<u16, String> {
+                        Ok(u16::from_le_bytes(a.take(2)?.try_into().unwrap()))
+                    };
+                    let n = u16(&mut a)?;
+                    let mut out = Vec::new();
+                    for _ in 0..n {
+                        let bone = u16(&mut a)? as usize;
+                        let name = a.cstr()?;
+                        let local = a.f32s::<16>()?;
+                        out.push(Attachment { name, bone, local });
+                    }
+                    Ok(out)
+                })();
+                if let Ok(v) = parsed {
+                    attachments = v;
+                }
+            }
+            // MDLS0004 points at an MDAT block (attachments) that precedes MDLA
+            if !d.get(c.p..c.p + 4).is_some_and(|m| m == b"MDLA")
+                && let Some(k) = d
+                    .get(c.p..)
+                    .and_then(|r| r.windows(4).position(|w| w == b"MDLA"))
+            {
+                c.p += k;
+            }
             let mdla = if c.p + 9 <= d.len() {
                 c.magic()?
             } else {
@@ -272,6 +319,7 @@ impl Puppet {
             mesh,
             bones,
             animations,
+            attachments,
         })
     }
 }
