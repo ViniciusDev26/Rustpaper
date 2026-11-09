@@ -168,6 +168,8 @@ struct TextRt {
     style: text::TextStyle,
     shown: Option<String>,
     tex: Option<Tex>,
+    /// The layer's world matrix as loaded (alignment shifts start from it).
+    world0: Option<Mat4>,
 }
 
 pub struct SceneRenderer {
@@ -1614,6 +1616,7 @@ impl SceneRenderer {
             },
             shown: None,
             tex: None,
+            world0: None,
         })
     }
 
@@ -1641,6 +1644,19 @@ impl SceneRenderer {
             crate::gpu::write_texture(gl, &tex, &px);
             if let Some(l) = self.layers.iter_mut().find(|l| l.id == t.id) {
                 l.size = [w as f32, h as f32];
+                let world0 = *t.world0.get_or_insert(l.world);
+                // Left/right aligned text starts/ends AT the object's origin
+                // (not at the edge of a box centered on it): Toyota 3560329032's
+                // right-aligned clock at x = 3785 of 3840 ends there in WE
+                // (we drew it ~400 units off-screen); Asuna 3239767814 (left)
+                // 0.973 -> 0.976.
+                let edge = w as f32 / 2.0 - t.style.padding;
+                let dx = match t.style.halign.as_str() {
+                    "right" => -edge,
+                    "left" => edge,
+                    _ => 0.0,
+                };
+                l.world = math::mul(&world0, &math::model([dx, 0.0, 0.0], 0.0, [1.0; 3]));
             }
             t.shown = Some(now);
         }

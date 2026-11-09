@@ -6,7 +6,7 @@ Fidelity is measured against the real WE (running under Proton), not by eye.
 ./harness/run.sh <workshop id> [seconds=8]     # everything below, in one go
 ./harness/we-capture.sh <id> <out dir> [secs]  # real WE -> we.png + we.mp4
 ./harness/compare.sh rp.mp4 we.mp4 <out dir>   # metrics + sheet + side-by-side
-./harness/batch.sh [--recapture] [id...]       # every scene -> results.tsv + report.md
+./harness/batch.sh [--recapture] [--update] [id...]  # every scene -> results.tsv + report.md
 ./harness/download-testset.sh                  # the 100-wallpaper test corpus
 ```
 
@@ -109,3 +109,13 @@ they are listed but refused.
 coordinates as colors (TEXB0002 .tex writer included); `measure.py` reads the
 WE capture back into coordinates. That is how the camera behaviour (cover crop,
 eye/center ignored) was established.
+
+## Current results (2026-11-08, 56 scenes of the local library)
+
+- 35/56 PASS; 43/56 reach mean SSIM >= 0.95; average mean SSIM 0.957.
+- Remaining failures are mostly motion-energy mismatches of random particle
+  systems (turbulence noise differs from WE's), plus harness limits: audio
+  visualizers (WE hears real system audio), parallax scenes (no cursor in
+  WE's window), clocks (captured at a different time), media integration
+  (album art), fast flicker effects aliased by the 60 -> 30 fps resampling.
+- `--update` re-runs only the given ids and keeps the other rows.
