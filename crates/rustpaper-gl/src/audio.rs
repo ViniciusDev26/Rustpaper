@@ -3,8 +3,8 @@
 //
 // The analysis is pure (samples in, bands out) so it can be tested; capturing
 // the system audio is the live engine's job (PipeWire monitor of the default
-// output). Without audio (CLI, harness) every band is 0 — silence, which is
-// also what the reference WE captures hear.
+// output). The CLI replays a recorded file instead (`AudioTrack`,
+// `rustpaper-render --audio`); without one every band is 0 (silence).
 
 use rustfft::{FftPlanner, num_complex::Complex};
 
@@ -125,6 +125,83 @@ impl Analyzer {
     }
 }
 
+/// A recorded audio file replayed in step with the scene clock (the harness
+/// records what WE heard, `we_audio.wav`, and renders Rustpaper with it).
+/// The analyzer advances in fixed 1/60 s steps, like the live capture
+/// (`audio_capture.rs` analyzes every 800 frames at 48 kHz), so the decay
+/// smoothing behaves the same.
+pub struct AudioTrack {
+    samples: Vec<f32>,
+    rate: f32,
+    analyzer: Analyzer,
+    /// Audio time of the last analysis step, seconds.
+    pos: f32,
+}
+
+impl AudioTrack {
+    pub const STEP: f32 = 1.0 / 60.0;
+
+    /// Interleaved stereo samples at `rate` Hz.
+    pub fn new(samples: Vec<f32>, rate: f32) -> AudioTrack {
+        AudioTrack {
+            samples,
+            rate,
+            analyzer: Analyzer::new(rate),
+            pos: -1.0,
+        }
+    }
+
+    /// Decodes any file ffmpeg reads to 48 kHz stereo f32.
+    pub fn load(path: &std::path::Path) -> Result<AudioTrack, String> {
+        let out = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-i"])
+            .arg(path)
+            .args(["-f", "f32le", "-ac", "2", "-ar", "48000", "-"])
+            .output()
+            .map_err(|e| format!("starting ffmpeg: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "ffmpeg could not decode {}: {}",
+                path.display(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+        let samples = out
+            .stdout
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_le_bytes(*b))
+            .collect();
+        Ok(AudioTrack::new(samples, 48_000.0))
+    }
+
+    /// Spectrum at audio time `t` seconds (before the start or after the end
+    /// of the recording counts as silence). Times must not go backwards by
+    /// more than a step; going back restarts the analysis.
+    pub fn frame_at(&mut self, t: f32) -> AudioFrame {
+        if t + Self::STEP < self.pos {
+            self.analyzer = Analyzer::new(self.rate);
+            self.pos = -1.0;
+        }
+        if self.pos < 0.0 {
+            // warm up from a second before, enough for the decay to settle
+            self.pos = (t - 1.0).max(0.0) - Self::STEP;
+        }
+        while self.pos + Self::STEP <= t {
+            self.pos += Self::STEP;
+            let end = (self.pos * self.rate) as usize * 2;
+            let start = end.saturating_sub(WINDOW * 2);
+            let mut window = vec![0.0f32; WINDOW * 2];
+            let have = &self.samples[start.min(self.samples.len())..end.min(self.samples.len())];
+            let off = WINDOW * 2 - (end - start);
+            window[off..off + have.len()].copy_from_slice(have);
+            self.analyzer.analyze(&window);
+        }
+        self.analyzer.frame
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,5 +231,30 @@ mod tests {
         );
         assert_eq!(silent.bands(false, 16).len(), 16);
         assert!(silent.response(3, 8, 12, (0.0, 1.0), 1.0) > 0.0);
+    }
+
+    #[test]
+    fn a_track_is_silent_before_its_tone_and_lit_during_it() {
+        let rate = 48_000.0;
+        // 1 s of silence, then 1 s of 1 kHz
+        let samples: Vec<f32> = (0..(2.0 * rate) as usize)
+            .flat_map(|i| {
+                let v = if i < rate as usize {
+                    0.0
+                } else {
+                    (std::f32::consts::TAU * 1000.0 * i as f32 / rate).sin() * 0.5
+                };
+                [v, v]
+            })
+            .collect();
+        let mut t = AudioTrack::new(samples, rate);
+        let quiet = t.frame_at(0.5).left.iter().fold(0.0f32, |a, &b| a.max(b));
+        let loud = t.frame_at(1.5).left.iter().fold(0.0f32, |a, &b| a.max(b));
+        assert!(quiet < 0.05 && loud > 0.7, "{quiet} {loud}");
+        // jumping back restarts the analysis instead of keeping the tone
+        let again = t.frame_at(0.5).left.iter().fold(0.0f32, |a, &b| a.max(b));
+        assert!(again < 0.05, "{again}");
+        // past the end: silence, decaying
+        assert!(t.frame_at(10.0).left.iter().all(|&v| v < 0.05));
     }
 }

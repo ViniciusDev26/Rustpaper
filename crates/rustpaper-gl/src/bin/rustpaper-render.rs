@@ -1,7 +1,7 @@
 // rustpaper-render: renders a WE scene offscreen to PNG (one file per time).
 //
 //   rustpaper-render <workshop id | folder> [--time 0,1.5,3] [--out shot.png]
-//                    [--pointer 0.5,0.5] [--describe]
+//                    [--pointer 0.5,0.5] [--describe] [--audio file.wav]
 //
 // With several times, files are named <out stem>_t<time>.png. `--describe` prints
 // the layer list and every load/compile warning — the first thing to look at
@@ -10,6 +10,7 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use rustpaper_gl::audio::{AudioFrame, AudioTrack};
 use rustpaper_gl::context::GlContext;
 use rustpaper_gl::scene::{FrameInput, SceneRenderer};
 
@@ -29,6 +30,9 @@ struct Args {
     only: Option<Vec<i64>>,
     /// Emulate a screen: cover-crop the scene into WxH like the live wallpaper.
     screen: Option<(u32, u32)>,
+    /// Recorded audio replayed as the system audio; its t = 0 is scene
+    /// time `--start` (the harness records it alongside the WE capture).
+    audio: Option<PathBuf>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -46,6 +50,7 @@ fn parse_args() -> Result<Args, String> {
     let mut start = 0.0;
     let mut only = None;
     let mut screen = None;
+    let mut audio = None;
     let floats = |s: String| -> Result<Vec<f32>, String> {
         s.split(',')
             .map(|t| t.trim().parse::<f32>().map_err(|e| format!("{t:?}: {e}")))
@@ -79,6 +84,7 @@ fn parse_args() -> Result<Args, String> {
                     h.parse().map_err(|_| "bad height")?,
                 ));
             }
+            "--audio" => audio = Some(PathBuf::from(it.next().ok_or("--audio needs a file")?)),
             "--start" => start = floats(it.next().ok_or("--start needs seconds")?)?[0],
             "--width" => width = Some(floats(it.next().ok_or("--width needs pixels")?)?[0] as u32),
             "--dump-passes" => {
@@ -117,6 +123,7 @@ fn parse_args() -> Result<Args, String> {
         start,
         only,
         screen,
+        audio,
     })
 }
 
@@ -134,6 +141,11 @@ fn frame_pixels(
         }
         None => (scene.output().read_rgba(gl), scene.width, scene.height),
     }
+}
+
+/// Spectrum of the replayed recording at audio time `t` (silence without one).
+fn audio_at(audio: &mut Option<AudioTrack>, t: f32) -> AudioFrame {
+    audio.as_mut().map(|a| a.frame_at(t)).unwrap_or_default()
 }
 
 fn out_path(base: &Path, time: f32, many: bool) -> PathBuf {
@@ -155,7 +167,7 @@ fn main() -> ExitCode {
                 eprintln!("error: {e}");
             }
             eprintln!(
-                "usage: rustpaper-render <workshop id | folder> [--time 0,1.5] [--out x.png] [--pointer x,y] [--describe] [--dump-passes dir] [--only id,id]\n       [--video out.mp4 --duration 10 --fps 30 --start 0] [--width 1920] [--screen 1920x1080]"
+                "usage: rustpaper-render <workshop id | folder> [--time 0,1.5] [--out x.png] [--pointer x,y] [--describe] [--dump-passes dir] [--only id,id]\n       [--video out.mp4 --duration 10 --fps 30 --start 0] [--width 1920] [--screen 1920x1080] [--audio file.wav]"
             );
             return ExitCode::from(2);
         }
@@ -199,8 +211,15 @@ fn main() -> ExitCode {
         let _ = std::fs::create_dir_all(d);
         scene.dump_dir = Some(d.clone());
     }
+    let mut audio = match args.audio.as_deref().map(AudioTrack::load).transpose() {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("error: audio: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     if let Some(v) = &args.video {
-        return match record_video(gl, &mut scene, &args, v) {
+        return match record_video(gl, &mut scene, &args, &mut audio, v) {
             Ok(()) => {
                 for w in &scene.warnings {
                     eprintln!("warning: {w}");
@@ -223,6 +242,7 @@ fn main() -> ExitCode {
             FrameInput {
                 time,
                 pointer: args.pointer,
+                audio: audio_at(&mut audio, time - args.start),
                 ..Default::default()
             },
         );
@@ -257,6 +277,7 @@ fn record_video(
     gl: &glow::Context,
     scene: &mut SceneRenderer,
     args: &Args,
+    audio: &mut Option<AudioTrack>,
     out: &Path,
 ) -> Result<(), String> {
     use std::io::Write;
@@ -301,6 +322,7 @@ fn record_video(
             FrameInput {
                 time: args.start + n as f32 / args.fps as f32,
                 pointer: args.pointer,
+                audio: audio_at(audio, n as f32 / args.fps as f32),
                 ..Default::default()
             },
         );
