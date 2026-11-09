@@ -31,6 +31,23 @@ use crate::program::{Program, ShaderSource};
 use crate::text;
 use crate::value;
 
+/// A scene `sound` object: audio files the wallpaper plays.
+#[derive(Clone, Debug)]
+pub struct SceneSound {
+    pub name: String,
+    /// (path inside the wallpaper, bytes), in playlist order.
+    pub files: Vec<(String, Vec<u8>)>,
+    /// `loop` (the playlist over and over), `single` (once) or `random`
+    /// (a random file, then a pause of `min_time`..`max_time` seconds).
+    pub mode: String,
+    /// 0..1, after user properties.
+    pub volume: f32,
+    pub min_time: f32,
+    pub max_time: f32,
+    /// `startsilent`: WE keeps it muted until a script starts it.
+    pub start_silent: bool,
+}
+
 /// Inputs that change every frame.
 #[derive(Clone, Copy, Debug)]
 pub struct FrameInput {
@@ -217,6 +234,8 @@ pub struct SceneRenderer {
     combos_by_key: HashMap<String, (String, BTreeMap<String, i64>)>,
     programs: HashMap<String, Option<Program>>,
     textures: HashMap<String, Tex>,
+    /// Sound objects, for the live engine to play.
+    pub sounds: Vec<SceneSound>,
     /// Padded uploads for image material passes (None: no padding).
     padded_textures: HashMap<String, Option<Tex>>,
     white: Tex,
@@ -360,6 +379,7 @@ impl SceneRenderer {
             combos_by_key: HashMap::new(),
             programs: HashMap::new(),
             textures: HashMap::new(),
+            sounds: Vec::new(),
             padded_textures: HashMap::new(),
             white: solid_texture(gl, [255, 255, 255, 255]),
             quad: QuadMesh::new(gl),
@@ -412,6 +432,36 @@ impl SceneRenderer {
                         "particles {:?} skipped: {e}",
                         obj.get("name").and_then(|n| n.as_str()).unwrap_or("?")
                     )),
+                }
+            } else if let Some(files) = obj.get("sound").and_then(|s| s.as_array()) {
+                // Sound objects: the live engine plays them (WE does, and its
+                // audio-reactive layers then react to that music).
+                if !value::get_bool(obj, "visible", true) {
+                    continue;
+                }
+                let files: Vec<(String, Vec<u8>)> = files
+                    .iter()
+                    .filter_map(|f| f.as_str())
+                    .filter_map(|f| r.assets.read(f).map(|b| (f.to_string(), b.into_owned())))
+                    .collect();
+                if !files.is_empty() {
+                    r.sounds.push(SceneSound {
+                        name: obj
+                            .get("name")
+                            .and_then(|n| n.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        files,
+                        mode: obj
+                            .get("playbackmode")
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("loop")
+                            .to_string(),
+                        volume: value::get_f32(obj, "volume", 1.0).clamp(0.0, 1.0),
+                        min_time: value::get_f32(obj, "mintime", 1.0).max(0.0),
+                        max_time: value::get_f32(obj, "maxtime", 5.0).max(0.0),
+                        start_silent: value::get_bool(obj, "startsilent", false),
+                    });
                 }
             } else if obj.get("text").is_some_and(|t| !t.is_null()) {
                 match r.load_text(obj) {

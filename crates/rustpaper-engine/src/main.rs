@@ -3,23 +3,25 @@ use rustpaper_engine::{gl_wallpaper, wallpaper};
 use std::path::PathBuf;
 
 fn main() {
-    // rustpaper <wallpaper folder> [--fps N] [--props properties.json] [--no-audio]
+    // rustpaper <wallpaper folder> [--fps N] [--props properties.json] [--no-audio] [--mute]
     let mut args = std::env::args().skip(1);
     let mut dir = None;
     let mut fps = 30;
     let mut props_file: Option<PathBuf> = None;
     let mut audio = true;
+    let mut sound = true;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--fps" => fps = args.next().and_then(|v| v.parse().ok()).unwrap_or(30),
             "--props" => props_file = args.next().map(PathBuf::from),
             "--no-audio" => audio = false,
+            "--mute" => sound = false,
             _ => dir = Some(PathBuf::from(a)),
         }
     }
     let Some(dir) = dir else {
         eprintln!(
-            "usage: rustpaper <wallpaper folder> [--fps N] [--props properties.json] [--no-audio]"
+            "usage: rustpaper <wallpaper folder> [--fps N] [--props properties.json] [--no-audio] [--mute]"
         );
         std::process::exit(2);
     };
@@ -43,6 +45,7 @@ fn main() {
                 fps,
                 properties,
                 audio,
+                sound,
             },
         );
     } else {

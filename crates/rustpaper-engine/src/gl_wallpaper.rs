@@ -52,6 +52,8 @@ pub struct Options {
     pub properties: serde_json::Map<String, serde_json::Value>,
     /// Capture system audio for audio-reactive wallpapers.
     pub audio: bool,
+    /// Play the scene's own sound objects (music); `--mute` turns it off.
+    pub sound: bool,
 }
 
 /// How often (in frames) fullscreen state is re-read from the compositor.
@@ -88,6 +90,7 @@ struct GlWallpaper {
     hypr: Vec<crate::hyprland::Monitor>,
     pointer: [f32; 2],
     audio: Option<crate::audio_capture::AudioCapture>,
+    sound: Option<crate::sound::SoundPlayer>,
 }
 
 pub fn run(dir: &Path, opts: Options) {
@@ -142,7 +145,11 @@ pub fn run(dir: &Path, opts: Options) {
         } else {
             None
         },
+        sound: None,
     };
+    if opts.sound {
+        state.sound = crate::sound::SoundPlayer::start(&state.scene.sounds);
+    }
     let interval = Duration::from_secs_f64(1.0 / opts.fps.clamp(1, 240) as f64);
 
     let mut event_loop: EventLoop<GlWallpaper> = EventLoop::try_new().expect("event loop");
@@ -183,6 +190,9 @@ impl GlWallpaper {
         let now = Instant::now();
         let dt = now.duration_since(self.last_tick).as_secs_f32().min(0.1);
         self.last_tick = now;
+        if let Some(s) = &self.sound {
+            s.set_paused(ready.is_empty());
+        }
         let Some(&(first, _, _)) = ready.first() else {
             return; // nothing visible: paused (the clock doesn't advance)
         };
