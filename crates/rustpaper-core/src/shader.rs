@@ -318,6 +318,11 @@ pub fn fix_glsl_from_log(source: &str, log: &str) -> Option<String> {
                 .or_else(|| wrap_rhs(&line, &to))
         } else if err.contains('%') && (err.contains("integral") || err.contains("integer")) {
             integer_or_float_modulo(&line)
+        } else if err.contains("invalid operands to") {
+            bool_arithmetic(&line)
+        } else if err.contains("unexpected '('") {
+            // a function named like one of our prelude macros (log10...)
+            shadowed_macro(&line, &lines[..base]).map(|name| format!("#undef {name}\n{line}"))
         } else {
             None
         };
@@ -328,7 +333,133 @@ pub fn fix_glsl_from_log(source: &str, log: &str) -> Option<String> {
             changed = true;
         }
     }
-    changed.then(|| lines.join("\n") + "\n")
+    // whole-source rewrites
+    let mut text = lines.join("\n") + "\n";
+    for err in log.lines() {
+        if let Some(name) = quoted_after(err, "assignment to varying '") {
+            if let Some(t) = varying_to_local(&text, &name) {
+                text = t;
+                changed = true;
+            }
+        } else if err.contains("reserves names containing '__'") {
+            let t = rename_double_underscores(&text);
+            if t != text {
+                text = t;
+                changed = true;
+            }
+        }
+    }
+    changed.then_some(text)
+}
+
+fn quoted_after(err: &str, prefix: &str) -> Option<String> {
+    let rest = &err[err.find(prefix)? + prefix.len()..];
+    Some(rest[..rest.find('\'')?].to_string())
+}
+
+/// HLSL converts bools in arithmetic: `(a < b) * 6.0` -> `float(a < b) * 6.0`.
+fn bool_arithmetic(line: &str) -> Option<String> {
+    let b = line.as_bytes();
+    let mut i = 0;
+    while let Some(k) = line[i..].find('(') {
+        let open = i + k;
+        let prev = line[..open].trim_end().chars().last();
+        let is_call = prev.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+        let mut depth = 0;
+        let mut close = None;
+        for (j, &ch) in b.iter().enumerate().skip(open) {
+            match ch {
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = Some(j);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let close = close?;
+        let inner = &line[open + 1..close];
+        let cmp = ["<=", ">=", "==", "!=", "<", ">"]
+            .iter()
+            .any(|o| inner.contains(o));
+        if !is_call && cmp && !inner.contains('(') && !inner.contains('?') {
+            return Some(format!("{}float{}", &line[..open], &line[open..]));
+        }
+        i = open + 1;
+    }
+    None
+}
+
+/// `float log10(float x) {` while the prelude has `#define log10(x) ...`:
+/// returns the macro name so it can be #undef'd first.
+fn shadowed_macro(line: &str, prelude: &[String]) -> Option<String> {
+    let toks: Vec<&str> = line
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|t| !t.is_empty())
+        .collect();
+    let name = toks.get(1)?;
+    let def = format!("#define {name}(");
+    (GLSL_TYPES.contains(toks.first()?) && prelude.iter().any(|l| l.trim_start().starts_with(&def)))
+        .then(|| name.to_string())
+}
+
+/// Fragment shaders may write to their inputs in HLSL. Rename the input and
+/// copy it into a global of the original name at the start of `main`.
+fn varying_to_local(src: &str, name: &str) -> Option<String> {
+    let mut out = String::with_capacity(src.len() + 128);
+    let mut declared = None;
+    for l in src.lines() {
+        let t = l.trim_start();
+        let words: Vec<&str> = t.trim_end_matches(';').split_whitespace().collect();
+        if declared.is_none()
+            && words.len() == 3
+            && (words[0] == "in" || words[0] == "varying")
+            && words[2] == name
+        {
+            declared = Some(words[1].to_string());
+            out.push_str(&format!(
+                "in {} _rp_in_{name};\n{} {name};\n",
+                words[1], words[1]
+            ));
+            continue;
+        }
+        out.push_str(l);
+        out.push('\n');
+    }
+    declared?;
+    let main = out.find("void main(")?;
+    let brace = main + out[main..].find('{')?;
+    out.insert_str(brace + 1, &format!("\n\t{name} = _rp_in_{name};"));
+    Some(out)
+}
+
+/// GLSL reserves identifiers containing `__` (Workshop shaders use them).
+fn rename_double_underscores(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut word = String::new();
+    let flush = |word: &mut String, out: &mut String| {
+        if word.contains("__") && !word.starts_with("__") && !word.ends_with("__") {
+            out.push_str(&word.replace("__", "_rpu_"));
+        } else if word.contains("__") && word.chars().all(|c| c == '_') {
+            out.push_str(&"_rpu".repeat(word.len()));
+        } else {
+            out.push_str(word);
+        }
+        word.clear();
+    };
+    for c in src.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' {
+            word.push(c);
+        } else {
+            flush(&mut word, &mut out);
+            out.push(c);
+        }
+    }
+    flush(&mut word, &mut out);
+    out
 }
 
 /// Type of `name` from its nearest declaration above line `idx` (shaders
@@ -518,6 +649,7 @@ fn swizzle_operands(
     let mut changed = false;
     let mut i = 0;
     let b = line.as_bytes();
+    let mut prev_ident = "";
     while i < line.len() {
         let c = b[i] as char;
         if i < code_end
@@ -534,7 +666,11 @@ fn swizzle_operands(
             let ident = &line[start..i];
             out.push_str(ident);
             let next = line[i..].trim_start().chars().next();
-            if ty_of(ident).as_deref() == Some(from)
+            // `vec4 x = ...` declares x: swizzling it gave `vec4 x.xy`
+            let declared = GLSL_TYPES.contains(&prev_ident);
+            prev_ident = ident;
+            if !declared
+                && ty_of(ident).as_deref() == Some(from)
                 && !matches!(next, Some('.') | Some('(') | Some('['))
             {
                 out.push('.');
@@ -1154,5 +1290,33 @@ mod tests {
         // incluído uma vez só
         assert_eq!(out.matches("float helper()").count(), 1);
         assert!(out.contains("void main()"));
+    }
+
+    #[test]
+    fn fixer_hlsl_leftovers() {
+        assert_eq!(
+            bool_arithmetic("\tdepth *= (depth < limit) * 6.0;").as_deref(),
+            Some("\tdepth *= float(depth < limit) * 6.0;")
+        );
+        assert_eq!(bool_arithmetic("x = max(a, b) * 2.0;"), None);
+        let prelude = vec!["#define log10(x) (log2(x) * 0.3)".to_string()];
+        assert_eq!(
+            shadowed_macro("float log10(float x) { return 0.0; }", &prelude).as_deref(),
+            Some("log10")
+        );
+        let src = "in vec4 v_TexCoord;\nvoid main() {\n\tv_TexCoord.y = 1.0;\n}\n";
+        let fixed = varying_to_local(src, "v_TexCoord").unwrap();
+        assert!(fixed.contains("in vec4 _rp_in_v_TexCoord;\nvec4 v_TexCoord;"));
+        assert!(fixed.contains("{\n\tv_TexCoord = _rp_in_v_TexCoord;"));
+        assert_eq!(
+            rename_double_underscores("float a__b = __LINE__;"),
+            "float a_rpu_b = __LINE__;"
+        );
+        // a declared name is never swizzled
+        let ty = |n: &str| (n == "uv" || n == "c").then(|| "vec4".to_string());
+        assert_eq!(
+            swizzle_operands("vec4 c = tex(uv);", "vec4", "vec2", &ty).as_deref(),
+            Some("vec4 c = tex(uv.xy);")
+        );
     }
 }
