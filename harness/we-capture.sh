@@ -17,13 +17,22 @@ title="rpref_$(basename "$id")"
 
 ensure_headless
 user_focus=$(active_address) # WE's new window grabs focus: give it back
-we_control -control openWallpaper -file "$(wine_path "$project")" \
-    -playInWindow "$title" -width 1920 -height 1080
-addr=""
-for _ in $(seq 1 60); do
-    addr=$(window_address "$title"); [ -n "$addr" ] && break; sleep 0.5
-done
-[ -n "$addr" ] || die "Wallpaper Engine did not open a window for $id"
+open_window() {
+    we_control -control openWallpaper -file "$(wine_path "$project")" \
+        -playInWindow "$title" -width 1920 -height 1080
+    addr=""
+    for _ in $(seq 1 60); do
+        addr=$(window_address "$title"); [ -n "$addr" ] && return 0; sleep 0.5
+    done
+    return 1
+}
+# A crashed WE keeps its process alive behind a crash dialog: restart it.
+we_crashed && restart_we
+if ! open_window; then
+    echo "no window for $id: restarting Wallpaper Engine and retrying" >&2
+    restart_we
+    open_window || die "Wallpaper Engine did not open a window for $id"
+fi
 park_window "$addr" "rpref" "$user_focus"
 trap 'close_window "$addr"; refocus "$user_focus"' EXIT
 
