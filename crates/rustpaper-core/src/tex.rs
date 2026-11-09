@@ -25,15 +25,19 @@ const FIF_UNKNOWN: u32 = 0xFFFF_FFFF; // FreeImage: sem formato = -1
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EmbeddedSheet {
     pub frames: u32,
-    pub frame_w: u32,
-    pub frame_h: u32,
+    /// Frame size in texels; fractional sizes exist (5 frames in 512 px).
+    pub frame_w: f32,
+    pub frame_h: f32,
 }
 
 /// Reads the embedded sprite sheet of a .tex, if it has one. Walks every
 /// image/mipmap to reach the `TEXS` block:
 ///   TEXS0002: u32 count
-///   TEXS0003: u32 frame_w, u32 frame_h, u32 count
+///   TEXS0003: u32 count, u32 frame_w, u32 frame_h (sizes truncated)
 ///   per frame: u32 image, f32 frametime, f32 x, f32 y, f32 w, f32 _, f32 _, f32 h
+/// (Verified against the `.tex-json` of the base particle sheets: fog1 =
+/// 64 x 128x128, rosepetals = 5 x 102.5x128. The frame records carry the
+/// exact, possibly fractional, size.)
 pub fn embedded_sheet(data: &[u8]) -> Option<EmbeddedSheet> {
     let mut c = Cursor { data, pos: 0 };
     c.magic8().ok()?;
@@ -74,25 +78,27 @@ pub fn embedded_sheet(data: &[u8]) -> Option<EmbeddedSheet> {
         }
     }
     let magic = c.magic8().ok()?;
-    let (mut frame_w, mut frame_h) = (0, 0);
-    if magic == "TEXS0003" {
-        frame_w = c.u32().ok()?;
-        frame_h = c.u32().ok()?;
-    } else if magic != "TEXS0002" {
+    if magic != "TEXS0002" && magic != "TEXS0003" {
         return None;
     }
     let frames = c.u32().ok()?;
+    let (mut frame_w, mut frame_h) = (0.0, 0.0);
+    if magic == "TEXS0003" {
+        frame_w = c.u32().ok()? as f32;
+        frame_h = c.u32().ok()? as f32;
+    }
     if frames == 0 {
         return None;
     }
-    // first frame: image, frametime, x, y, w, _, _, h
-    let raw = c.take(32).ok()?;
-    let f = |i: usize| f32::from_le_bytes(raw[i * 4..i * 4 + 4].try_into().unwrap());
-    if frame_w == 0 || frame_h == 0 {
-        frame_w = f(4) as u32;
-        frame_h = f(7) as u32;
+    // first frame: image, frametime, x, y, w, _, _, h (exact sizes)
+    if let Ok(raw) = c.take(32) {
+        let f = |i: usize| f32::from_le_bytes(raw[i * 4..i * 4 + 4].try_into().unwrap());
+        if f(4) > 0.0 && f(7) > 0.0 {
+            frame_w = f(4);
+            frame_h = f(7);
+        }
     }
-    (frame_w > 0 && frame_h > 0).then_some(EmbeddedSheet {
+    (frame_w > 0.0 && frame_h > 0.0).then_some(EmbeddedSheet {
         frames,
         frame_w,
         frame_h,
@@ -308,5 +314,43 @@ pub fn parse(data: &[u8]) -> Result<DecodedTexture, String> {
         other => Err(format!(
             "formato de textura {other} ainda não suportado (ARGB8888/RG88/R8/DXT/free-image)"
         )),
+    }
+}
+
+#[cfg(test)]
+mod sheet_tests {
+    use super::*;
+
+    /// TEXV/TEXI header, one 1-mip TEXB0001 image, then `sheet`.
+    fn tex_with(sheet: &[u8]) -> Vec<u8> {
+        let mut d = Vec::new();
+        let u = |d: &mut Vec<u8>, v: u32| d.extend_from_slice(&v.to_le_bytes());
+        d.extend_from_slice(b"TEXV0005\0TEXI0001\0");
+        for _ in 0..7 {
+            u(&mut d, 0);
+        }
+        d.extend_from_slice(b"TEXB0001\0");
+        u(&mut d, 1); // images
+        u(&mut d, 1); // mips
+        u(&mut d, 4); // w
+        u(&mut d, 4); // h
+        u(&mut d, 2); // byte size
+        d.extend_from_slice(&[0, 0]);
+        d.extend_from_slice(sheet);
+        d
+    }
+
+    #[test]
+    fn texs0003_is_count_then_size_with_exact_frame_records() {
+        let mut s = b"TEXS0003\0".to_vec();
+        for v in [5u32, 102, 128] {
+            s.extend_from_slice(&v.to_le_bytes());
+        }
+        s.extend_from_slice(&0u32.to_le_bytes());
+        for v in [0.2f32, 0.0, 0.0, 102.5, 0.0, 0.0, 128.0] {
+            s.extend_from_slice(&v.to_le_bytes());
+        }
+        let e = embedded_sheet(&tex_with(&s)).unwrap();
+        assert_eq!((e.frames, e.frame_w, e.frame_h), (5, 102.5, 128.0));
     }
 }

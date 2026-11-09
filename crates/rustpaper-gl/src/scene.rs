@@ -100,6 +100,8 @@ struct Layer {
     kind: LayerKind,
     /// parent transforms * own transform (objects can be parented).
     world: Mat4,
+    /// `parallaxDepth`: how much the object follows the camera parallax.
+    parallax: [f32; 2],
     size: [f32; 2],
     color: [f32; 3],
     alpha: f32,
@@ -138,6 +140,7 @@ struct ParticleObject {
     visible: bool,
     /// parent transforms * own transform (objects can be parented).
     world: Mat4,
+    parallax: [f32; 2],
     systems: Vec<SystemRt>,
     /// Seconds simulated before t = 0 (`starttime`, so it starts "warm").
     prewarm: f32,
@@ -200,6 +203,8 @@ pub struct SceneRenderer {
 
     /// Every object's world matrix by id (parent chains resolved).
     worlds: HashMap<i64, Mat4>,
+    /// `general.cameraparallax*` and the smoothed pointer offset it follows.
+    parallax: Option<Parallax>,
 
     /// Human-readable problems found while loading/rendering (deduplicated).
     pub warnings: Vec<String>,
@@ -298,6 +303,7 @@ impl SceneRenderer {
             pool: HashMap::new(),
             warnings: Vec::new(),
             worlds: HashMap::new(),
+            parallax: Parallax::from_general(&general),
             dump_dir: None,
             only: None,
             assets,
@@ -532,6 +538,7 @@ impl SceneRenderer {
         };
 
         Ok(Layer {
+            parallax: value::get_vec2(obj, "parallaxDepth", [1.0, 1.0]),
             id: obj.get("id").and_then(|i| i.as_i64()).unwrap_or(-1),
             name: obj
                 .get("name")
@@ -833,6 +840,9 @@ impl SceneRenderer {
             gl.disable(glow::CULL_FACE);
         }
         self.update_texts(gl);
+        if let Some(p) = &mut self.parallax {
+            p.follow(frame.pointer, frame.time);
+        }
         for l in &mut self.layers {
             if let Some((rt, mesh)) = &mut l.puppet {
                 rt.update(frame.time);
@@ -900,6 +910,18 @@ impl SceneRenderer {
     /// (67, -37), aligns with WE at offset 0 and scale 1).
     fn view_proj(&self) -> Mat4 {
         math::scene_ortho(self.width as f32, self.height as f32)
+    }
+
+    /// `view_proj` shifted by the camera parallax for an object at `depth`.
+    fn view_proj_at(&self, depth: [f32; 2]) -> Mat4 {
+        let proj = self.view_proj();
+        match &self.parallax {
+            Some(p) => {
+                let [dx, dy] = p.shift(depth, self.width as f32, self.height as f32);
+                math::mul(&proj, &math::model([dx, dy, 0.0], 0.0, [1.0; 3]))
+            }
+            None => proj,
+        }
     }
 
     /// The finished frame (scene resolution).
@@ -1142,7 +1164,7 @@ impl SceneRenderer {
     fn draw_direct(&mut self, gl: &glow::Context, i: usize, frame: FrameInput) {
         let l = &self.layers[i];
         let model = l.world;
-        let proj = self.view_proj();
+        let proj = self.view_proj_at(l.parallax);
         let mvp = math::mul(&proj, &model);
         let verts = math::quad(l.size[0], l.size[1], 1.0, 1.0);
         let blend = l.material.blend;
@@ -1301,7 +1323,7 @@ impl SceneRenderer {
             ),
             _ => (l.world, math::quad(l.size[0], l.size[1], 1.0, 1.0)),
         };
-        let proj = self.view_proj();
+        let proj = self.view_proj_at(l.parallax);
         let mvp = math::mul(&proj, &model);
         if let Some(blend) = l.composite.as_ref().map(|c| c.blend) {
             let scene = self.scene;
@@ -1638,6 +1660,7 @@ impl SceneRenderer {
         self.load_system(gl, file, None, ov, id as u64, &mut systems, 0)?;
         let prewarm = systems.first().map(|s| s.sim.def.start_time).unwrap_or(0.0);
         Ok(ParticleObject {
+            parallax: value::get_vec2(obj, "parallaxDepth", [1.0, 1.0]),
             id,
             name: obj
                 .get("name")
@@ -1714,23 +1737,26 @@ impl SceneRenderer {
                         .assets
                         .read_json(&format!("materials/{name}.tex-json"))?;
                     let seq = j.get("spritesheetsequences")?.get(0)?;
+                    // sizes can be fractional ("width": 102.5 = 512 / 5):
+                    // reading them as integers dropped the sheet and drew all
+                    // frames as one stretched sprite (rosepetals, Luffy)
                     Some((
-                        seq.get("frames")?.as_u64()? as u32,
-                        seq.get("width")?.as_u64()? as u32,
-                        seq.get("height")?.as_u64()? as u32,
+                        seq.get("frames")?.as_f64()? as u32,
+                        seq.get("width")?.as_f64()? as f32,
+                        seq.get("height")?.as_f64()? as f32,
                     ))
                 });
             if let Some((frames, fw, fh)) = frames
                 && frames > 1
-                && fw > 0
-                && fh > 0
+                && fw > 0.0
+                && fh > 0.0
             {
                 sheet = true;
                 render_var1 = [
-                    fw as f32 / tex.width as f32,
-                    fh as f32 / tex.height as f32,
+                    fw / tex.width as f32,
+                    fh / tex.height as f32,
                     frames as f32,
-                    fh as f32 / fw as f32,
+                    fh / fw,
                 ];
             }
         }
@@ -1881,7 +1907,7 @@ impl SceneRenderer {
         let (w, h) = (self.width as f32, self.height as f32);
         let o = &self.particle_objs[i];
         let model = o.world;
-        let proj = self.view_proj();
+        let proj = self.view_proj_at(o.parallax);
         let mvp = math::mul(&proj, &model);
         let inverse = math::invert(&model);
         for k in 0..self.particle_objs[i].systems.len() {
@@ -1931,6 +1957,11 @@ impl SceneRenderer {
             prog.set(gl, "g_ModelMatrix", &model);
             prog.set(gl, "g_ModelMatrixInverse", &inverse);
             prog.set(gl, "g_ViewProjectionMatrix", &proj);
+            // Camera axes in WORLD space (identity for the front-facing ortho
+            // camera), so sprites rotate with their object. The sprite
+            // `orientation` modes (screen / upright / fixed) coincide here;
+            // compensating the object rotation made rotated emitters wrong
+            // (White Angel 2382081769: mean SSIM 0.952 -> 0.947).
             prog.set(gl, "g_OrientationRight", &[1.0, 0.0, 0.0]);
             prog.set(gl, "g_OrientationUp", &[0.0, 1.0, 0.0]);
             prog.set(gl, "g_OrientationForward", &[0.0, 0.0, 1.0]);
@@ -2140,6 +2171,55 @@ const BLIT_VERT: &str = "uniform mat4 g_ModelViewProjectionMatrix;\n\
     void main() {\n  gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);\n  v_TexCoord = a_TexCoord;\n}\n";
 const BLIT_FRAG: &str = "uniform sampler2D g_Texture0;\nvarying vec2 v_TexCoord;\n\
     void main() {\n  gl_FragColor = texSample2D(g_Texture0, v_TexCoord);\n}\n";
+
+/// Camera parallax (`general.cameraparallax`): the camera leans toward the
+/// cursor, so objects shift the opposite way, each scaled by its
+/// `parallaxDepth`. Not calibrated against WE yet (the harness can't move the
+/// cursor without taking the user's); shift at the screen edge =
+/// `amount * mouseinfluence * depth * scene size / 2`.
+struct Parallax {
+    amount: f32,
+    influence: f32,
+    /// Seconds to catch up with the cursor (`cameraparallaxdelay`).
+    delay: f32,
+    /// Smoothed cursor offset from the center, -0.5..0.5, y down.
+    offset: [f32; 2],
+    last_time: f32,
+}
+
+impl Parallax {
+    fn from_general(general: &Value) -> Option<Parallax> {
+        value::get_bool(general, "cameraparallax", false).then(|| Parallax {
+            amount: value::get_f32(general, "cameraparallaxamount", 0.5),
+            influence: value::get_f32(general, "cameraparallaxmouseinfluence", 0.5),
+            delay: value::get_f32(general, "cameraparallaxdelay", 0.1).max(0.0),
+            offset: [0.0; 2],
+            last_time: 0.0,
+        })
+    }
+
+    fn follow(&mut self, pointer: [f32; 2], time: f32) {
+        let dt = (time - self.last_time).clamp(0.0, 0.5);
+        self.last_time = time;
+        let k = if self.delay <= 0.0 {
+            1.0
+        } else {
+            1.0 - (-dt / self.delay).exp()
+        };
+        for (o, p) in self.offset.iter_mut().zip(pointer) {
+            *o += ((p - 0.5) - *o) * k;
+        }
+    }
+
+    /// Scene-space translation (Y up) for an object at `depth`.
+    fn shift(&self, depth: [f32; 2], width: f32, height: f32) -> [f32; 2] {
+        let k = self.amount * self.influence;
+        [
+            -self.offset[0] * k * depth[0] * width,
+            self.offset[1] * k * depth[1] * height,
+        ]
+    }
+}
 
 #[cfg(test)]
 mod tests {

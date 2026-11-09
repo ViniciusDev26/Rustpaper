@@ -257,6 +257,14 @@ enum Op {
     AngularMovement {
         force: V3,
     },
+    /// `remapvalue` with `output: velocity` and `operation: remap`: the
+    /// velocity is SET to a noise value over the particle's life, mapped into
+    /// outputrangemin..max (rain streaks changing speed/direction).
+    RemapVelocity {
+        min: V3,
+        max: V3,
+        input_scale: f32,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -498,6 +506,21 @@ impl ParticleDef {
                     "angularmovement" => Op::AngularMovement {
                         force: v3(o, "force", [0.0; 3]),
                     },
+                    "remapvalue"
+                        if o.get("output").and_then(|x| x.as_str()) == Some("velocity")
+                            && o.get("operation").and_then(|x| x.as_str()) == Some("remap") =>
+                    {
+                        Op::RemapVelocity {
+                            min: v3(o, "outputrangemin", [0.0; 3]),
+                            max: v3(o, "outputrangemax", [0.0; 3]),
+                            input_scale: f(o, "transforminputscale", 1.0),
+                        }
+                    }
+                    "remapvalue" => {
+                        let out = o.get("output").and_then(|x| x.as_str()).unwrap_or("?");
+                        unsupported.push(format!("operator remapvalue -> {out}"));
+                        return None;
+                    }
                     other => {
                         unsupported.push(format!("operator {other}"));
                         return None;
@@ -834,18 +857,17 @@ impl ParticleSim {
                     forward,
                 } => {
                     // Direction from a noise field sampled at the spawn point
-                    // (neighbours move alike), biased along `forward` by
-                    // `offset`. Measured on Luffy/Akame (sakura with offset 3
-                    // over a downward velocityrandom): in WE about half of the
-                    // petals rise and half fall, i.e. offset pushes along
-                    // forward. (An earlier "noise phase" reading was a
-                    // misdiagnosis of the z-clipping bug fixed in math.rs.)
-                    // The sign of `offset` does not reverse the push: the
-                    // stock "ember" preset (offset -0.5) rises in WE (Akame
-                    // 1215952856, motion energy ratio 0.21 -> 0.90 with |offset|).
-                    // Flattened to the scene plane when forward.z = 0.
-                    let n = noise_vec(add(scale(p.pos, s * 0.01), [self.time * timescale; 3]));
-                    let mut d = add(n, scale(forward, offset.abs()));
+                    // (neighbours move alike). `offset` shifts the noise
+                    // sample (a phase), it does not push along `forward`:
+                    // re-measured after the sprite-sheet fix on 6 scenes
+                    // (Luffy, White Angel, Re:zero, Akame x2, 3366882745),
+                    // phase passes 3 vs 2 for a push by |offset| and 0 for a
+                    // push by -offset. Flattened to the plane when forward.z = 0.
+                    let n = noise_vec(add(
+                        scale(p.pos, s * 0.01),
+                        [self.time * timescale + offset; 3],
+                    ));
+                    let mut d = n;
                     if forward[2] == 0.0 {
                         d[2] = 0.0;
                     }
@@ -1048,6 +1070,18 @@ impl ParticleSim {
                     Op::AngularMovement { force } => {
                         p.ang_vel = add(p.ang_vel, scale(force, dt));
                         p.rot = add(p.rot, scale(p.ang_vel, dt));
+                    }
+                    Op::RemapVelocity {
+                        min,
+                        max,
+                        input_scale,
+                    } => {
+                        // input = life fraction, decorrelated per particle
+                        let x = life * input_scale + hash01(p.seed, slot) * 97.0;
+                        let n = noise_vec([x, 0.5, 0.5]);
+                        for c in 0..3 {
+                            p.vel[c] = lerp(min[c], max[c], (n[c] * 0.5 + 0.5).clamp(0.0, 1.0));
+                        }
                     }
                 }
             }

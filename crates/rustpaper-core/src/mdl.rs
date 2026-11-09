@@ -205,7 +205,15 @@ impl Puppet {
             c.p = anim_at;
             if c.p + 9 <= d.len() && c.magic()?.starts_with("MDLA") {
                 c.u32()?;
-                for _ in 0..c.u32()? {
+                let count = c.u32()?;
+                for n in 0..count {
+                    // Animations can be followed by extra bytes (9 zero
+                    // bytes seen between animations: likely an empty event
+                    // list); find the next header instead of trusting the
+                    // previous one ended where its tracks did.
+                    if n > 0 {
+                        c.p = next_animation(d, c.p).ok_or("animation header not found")?;
+                    }
                     let id = c.u32()?;
                     c.u32()?;
                     let name = c.cstr()?;
@@ -251,6 +259,19 @@ impl Puppet {
             animations,
         })
     }
+}
+
+/// Offset of the next MDLA animation header at or after `from` (within a
+/// few bytes): `u32 id, u32, name\0, mode\0` with a known play mode.
+fn next_animation(d: &[u8], from: usize) -> Option<usize> {
+    let is_header = |at: usize| {
+        let rest = d.get(at + 8..)?;
+        let name_end = rest.iter().take(256).position(|&b| b == 0)?;
+        let mode = rest.get(name_end + 1..)?;
+        let mode_end = mode.iter().take(16).position(|&b| b == 0)?;
+        matches!(&mode[..mode_end], b"loop" | b"mirror" | b"single").then_some(())
+    };
+    (from..from + 64).find(|&at| is_header(at).is_some())
 }
 
 #[cfg(test)]
