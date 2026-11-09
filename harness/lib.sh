@@ -28,11 +28,32 @@ wallpaper_dir() {
 die() { echo "error: $*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null || die "$1 not installed"; }
 
+# Starts WE through Steam when it died (some wallpapers crash it) and prints
+# its pid once wallpaper64.exe is up. WE_AUTOSTART=0 disables this.
+start_we() {
+    [ "${WE_AUTOSTART:-1}" = 1 ] || return 1
+    echo "Wallpaper Engine is not running: starting it through Steam" >&2
+    steam -applaunch 431960 >/dev/null 2>&1 &
+    local pid
+    for _ in $(seq 1 120); do
+        pid=$(pgrep -x wallpaper64.exe | head -1) && {
+            sleep 15
+            # keep WE's own windows (UI, dialogs) off the user's monitors
+            hyprctl clients -j | python3 -c "import json,sys; [print(c['address']) for c in json.load(sys.stdin) if c['class'] == 'steam_app_431960' and not c['title'].startswith('rpref_')]" |
+                while read -r a; do
+                    hyprctl dispatch "hl.dsp.window.move({ window = 'address:$a', workspace = 'name:rpref', follow = false })" >/dev/null 2>&1
+                done
+            echo "$pid"; return 0; }
+        sleep 1
+    done
+    return 1
+}
+
 # we_control <args for wallpaper64.exe...>
 we_control() {
     local pid
-    pid=$(pgrep -x wallpaper64.exe | head -1) ||
-        die "Wallpaper Engine is not running (start it from Steam first)"
+    pid=$(pgrep -x wallpaper64.exe | head -1) || pid=$(start_we) ||
+        die "Wallpaper Engine is not running and could not be started"
     local env=() e
     while IFS= read -r -d '' e; do
         case "$e" in WINESERVERSOCKET=* | WINELOADERNOEXEC=* | WINEPRELOADRESERVE=*) ;; *) env+=("$e") ;; esac
@@ -51,6 +72,10 @@ ensure_headless() {
         sleep 1
     fi
     hyprctl eval "hl.monitor({ output = '$HEADLESS', mode = '1920x1080@60', position = 'auto', scale = 1 })" >/dev/null
+    # When the idle daemon powers the monitors off (DPMS), the headless output
+    # stops rendering too: grim hangs and WE's window captures black. Wake
+    # only the headless output; the user's monitors stay off.
+    hyprctl dispatch "hl.dsp.dpms({ action = 'on', monitor = '$HEADLESS' })" >/dev/null 2>&1 || true
 }
 
 remove_headless() { hyprctl output remove "$HEADLESS" >/dev/null 2>&1 || true; }

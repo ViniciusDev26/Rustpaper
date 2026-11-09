@@ -54,6 +54,7 @@ for id in "${ids[@]}"; do
     if [ $recapture = 1 ] || [ ! -s "$o/we.mp4" ]; then
         "$HARNESS_DIR/we-capture.sh" "$id" "$o" "$secs" || { echo "  capture failed"; continue; }
     fi
+    export RUSTPAPER_CLOCK; RUSTPAPER_CLOCK=$(capture_clock "$o" "$secs")
     "$bin" "$dir" --out "$o/rp.png" --time 10 --screen 1920x1080 2>"$o/rp_warnings.txt" || true
     "$bin" "$dir" --video "$o/rp.mp4" --duration "$secs" --fps 30 --screen 1920x1080 --start 10 2>>"$o/rp_warnings.txt" || {
         echo "  render failed"; printf '%s\t\t\t\t\t\tERROR\t%s\n' "$id" "$title" >> "$results"; continue; }

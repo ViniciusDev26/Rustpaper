@@ -37,6 +37,17 @@ Focus: a freshly opened WE window grabs focus, so `we-capture.sh` records the
 focused window BEFORE asking WE to open the wallpaper and restores it after
 parking and on exit (otherwise the keyboard ends up on the invisible output).
 
+### Unattended runs
+
+- **DPMS:** when the idle daemon powers the monitors off, the headless
+  output stops rendering too (grim hangs, WE captures black).
+  `ensure_headless` switches only `RPREF` back on before every capture.
+- **Black captures** (WE failed to load the wallpaper in its window) are
+  rejected instead of being used as a reference.
+- **WE crashes** (some wallpapers take it down): `we_control` restarts it via
+  `steam -applaunch 431960` and moves its own windows (UI, dialogs) to the
+  `rpref` workspace (`WE_AUTOSTART=0` disables this).
+
 ### Recovering a stuck WE
 
 If every capture fails with "did not open a window", WE is wedged (a leftover
