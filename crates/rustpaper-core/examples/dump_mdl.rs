@@ -11,6 +11,14 @@ fn main() {
                 p.mesh.indices.len() / 3,
                 p.bones.len()
             );
+            for (i, b) in p.bones.iter().enumerate() {
+                println!(
+                    "  bone {i} parent {:?} bind translation {:?}",
+                    b.parent,
+                    &b.local[12..15]
+                );
+            }
+            let verbose = std::env::var_os("MDL_KEYS").is_some();
             for a in &p.animations {
                 println!(
                     "  animation #{} {:?} {:?} rate {} frames {} tracks {}x{}",
@@ -22,6 +30,16 @@ fn main() {
                     a.tracks.len(),
                     a.tracks.first().map_or(0, |t| t.len())
                 );
+                if verbose {
+                    for (b, t) in a.tracks.iter().enumerate() {
+                        for k in t.iter().step_by((t.len() / 6).max(1)) {
+                            println!(
+                                "    bone {b} pos {:?} rot {:?} scale {:?}",
+                                k.position, k.rotation, k.scale
+                            );
+                        }
+                    }
+                }
             }
         }
         Err(e) => println!("error: {e}"),

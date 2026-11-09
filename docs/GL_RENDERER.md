@@ -206,8 +206,8 @@ unchanged WE material shader draws it.
   (position, 4 bone indices, 4 weights, uv) follows the size.
 - Animations may carry an **event list** after their tracks (u32 count, then
   f32 frame + JSON per event, e.g. `{"name":"flashStart"}`); it is skipped.
-- **MDLA0001** stores a playback rate over 30 fps (Summer Feeling 2477602742:
-  360-frame trains at rate 1.0); MDLA0003+ store frames per second:
+- MDLA0001 uses the same per-animation fps as 0003/0004 (a wrong "rate x 30"
+  reading made Summer Feeling 2477602742's train cross in one 1/30 s frame):
 - The MDLA per-animation float is read as **frames per second**. Reading it as
   a duration (fps = frames / value) matched WE worse (2900431360: motion SSIM
   0.57 vs 0.60).
