@@ -168,6 +168,12 @@ coordinates). `view_proj()` is therefore the plain scene ortho. Earlier
 misalignments blamed on the camera were the harness stretching non-16:9
 scenes; `--screen WxH` renders through the same cover crop as a monitor.
 
+`general.camerashake` (amplitude, speed, roughness) moves the camera along a
+smooth random path of about `amplitude x 1.2%` of the width and zooms in by
+`1 + amplitude x 0.06` so the edges never show. Fitted on the captures of
+Ice Princess 2800248288/2802243144 (motion energy ratio 0.25 -> 1.2, mean
+SSIM 0.54 -> 0.70); not yet calibrated on a dedicated scene.
+
 `general.zoom` zooms the camera around the scene center (CITRUS 2704773569,
 zoom 1.1: mean SSIM 0.43 -> 0.98).
 
