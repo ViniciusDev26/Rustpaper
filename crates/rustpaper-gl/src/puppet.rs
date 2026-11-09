@@ -266,6 +266,7 @@ mod tests {
     fn one_bone(keys: Vec<Key>, mode: PlayMode) -> Puppet {
         let rest = key_matrix(&keys[0]);
         Puppet {
+            attachments: Vec::new(),
             material: String::new(),
             mesh: Mesh {
                 positions: vec![[10.0, 0.0, 0.0]],
