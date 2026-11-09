@@ -10,10 +10,10 @@ mkdir -p "$out"
 bin="$REPO_DIR/target/release/rustpaper-render"
 (cd "$REPO_DIR" && cargo build -q --release -p rustpaper-gl --bin rustpaper-render)
 
-"$bin" "$id" --out "$out/rp.png" --time 0 2>"$out/rp_warnings.txt"
+"$bin" "$id" --out "$out/rp.png" --time 10 --screen 1920x1080 2>"$out/rp_warnings.txt"
 # Start well into the animation: WE has been running for a while when its
 # capture starts (particles at steady state, not spawning from empty).
-"$bin" "$id" --video "$out/rp.mp4" --duration "$secs" --fps 30 --width 1920 --start 10 2>>"$out/rp_warnings.txt"
+"$bin" "$id" --video "$out/rp.mp4" --duration "$secs" --fps 30 --screen 1920x1080 --start 10 2>>"$out/rp_warnings.txt"
 "$(dirname "$0")/we-capture.sh" "$id" "$out" "$secs"
 "$(dirname "$0")/compare.sh" "$out/rp.mp4" "$out/we.mp4" "$out"
 sort -u "$out/rp_warnings.txt" | sed 's/^/  /'

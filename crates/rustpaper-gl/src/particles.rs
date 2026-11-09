@@ -177,7 +177,14 @@ struct Emitter {
     speed: (f32, f32),
     rate: f32,
     instantaneous: u32,
+    /// `audioprocessingmode` != 0: the rate follows the audio spectrum
+    /// (mode, first band, last band, bounds, exponent).
+    audio: Option<AudioResponse>,
 }
+
+/// (mode, first band, last band, bounds, exponent) of an audio-reactive
+/// emitter, as `AudioFrame::response` takes them.
+type AudioResponse = (u32, usize, usize, (f32, f32), f32);
 
 #[derive(Clone, Debug)]
 enum Init {
@@ -296,6 +303,9 @@ pub enum RendererKind {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ChildEvent {
+    /// No `type`: an independent system emitting on its own from the parent
+    /// system's origin (e.g. a few big glows around a fire).
+    Static,
     Follow,
     Spawn,
     Death,
@@ -358,6 +368,19 @@ impl ParticleDef {
                     speed: (f(e, "speedmin", 0.0), f(e, "speedmax", 0.0)),
                     rate: f(e, "rate", 5.0),
                     instantaneous: f(e, "instantaneous", 0.0).max(0.0) as u32,
+                    audio: {
+                        let mode = f(e, "audioprocessingmode", 0.0) as u32;
+                        let b = value::get_vec2(e, "audioprocessingbounds", [0.0, 1.0]);
+                        (mode != 0).then(|| {
+                            (
+                                mode,
+                                f(e, "audioprocessingfrequencystart", 0.0) as usize,
+                                f(e, "audioprocessingfrequencyend", 15.0) as usize,
+                                (b[0], b[1]),
+                                f(e, "audioprocessingexponent", 1.0),
+                            )
+                        })
+                    },
                 })
             })
             .collect();
@@ -514,10 +537,15 @@ impl ParticleDef {
             .filter_map(|c| {
                 Some(ChildRef {
                     file: c.get("name")?.as_str()?.to_string(),
-                    event: match c.get("type").and_then(|t| t.as_str()).unwrap_or("") {
+                    // Legacy presets (e.g. the stock "ember" -> "emberglow")
+                    // list children without a `type`; WE does not draw them
+                    // (Akame 1215952856: no trace of the 1000 px halos in the
+                    // capture), so they are dropped. See GL_RENDERER.md.
+                    event: match c.get("type")?.as_str()? {
                         "eventspawn" => ChildEvent::Spawn,
                         "eventdeath" => ChildEvent::Death,
-                        _ => ChildEvent::Follow,
+                        "eventfollow" => ChildEvent::Follow,
+                        _ => ChildEvent::Static,
                     },
                     origin: v3(c, "origin", [0.0; 3]),
                     max_count: c.get("maxcount").and_then(|m| m.as_u64()).map(|m| m as u32),
@@ -642,6 +670,8 @@ pub struct ParticleSim {
     next_seed: u32,
     /// Spawn/death events of the last step (consumed by child systems).
     pub events: Vec<Event>,
+    /// Current audio spectrum (audio-reactive emitters).
+    pub audio: crate::audio::AudioFrame,
 }
 
 /// See `spawn`: WE's rendered particle size relative to `sizerandom`.
@@ -668,6 +698,7 @@ impl ParticleSim {
             started: false,
             next_seed: 1,
             events: Vec::new(),
+            audio: crate::audio::AudioFrame::default(),
         }
     }
 
@@ -803,13 +834,18 @@ impl ParticleSim {
                     forward,
                 } => {
                     // Direction from a noise field sampled at the spawn point
-                    // (neighbours move alike). `offset` shifts the noise in
-                    // time (a phase), it is NOT a push along `forward`: read as
-                    // a push, Akame's sakura (offset 3) flew up and never
-                    // entered the screen, while in WE they fall into view.
+                    // (neighbours move alike), biased along `forward` by
+                    // `offset`. Measured on Luffy/Akame (sakura with offset 3
+                    // over a downward velocityrandom): in WE about half of the
+                    // petals rise and half fall, i.e. offset pushes along
+                    // forward. (An earlier "noise phase" reading was a
+                    // misdiagnosis of the z-clipping bug fixed in math.rs.)
+                    // The sign of `offset` does not reverse the push: the
+                    // stock "ember" preset (offset -0.5) rises in WE (Akame
+                    // 1215952856, motion energy ratio 0.21 -> 0.90 with |offset|).
                     // Flattened to the scene plane when forward.z = 0.
-                    let t = self.time * timescale + offset;
-                    let mut d = noise_vec(add(scale(p.pos, s * 0.01), [t, t * 0.7, t * 1.3]));
+                    let n = noise_vec(add(scale(p.pos, s * 0.01), [self.time * timescale; 3]));
+                    let mut d = add(n, scale(forward, offset.abs()));
                     if forward[2] == 0.0 {
                         d[2] = 0.0;
                     }
@@ -878,7 +914,12 @@ impl ParticleSim {
                 }
             }
             for ei in 0..self.def.emitters.len() {
-                self.emit_acc[ei] += self.def.emitters[ei].rate * self.ov.rate * dt;
+                let em = &self.def.emitters[ei];
+                let gain = em
+                    .audio
+                    .map(|(mode, s, e, b, x)| self.audio.response(mode, s, e, b, x))
+                    .unwrap_or(1.0);
+                self.emit_acc[ei] += em.rate * self.ov.rate * gain * dt;
                 while self.emit_acc[ei] >= 1.0 {
                     self.emit_acc[ei] -= 1.0;
                     self.spawn(Some(ei), None, cps);

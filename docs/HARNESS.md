@@ -6,6 +6,8 @@ Fidelity is measured against the real WE (running under Proton), not by eye.
 ./harness/run.sh <workshop id> [seconds=8]     # everything below, in one go
 ./harness/we-capture.sh <id> <out dir> [secs]  # real WE -> we.png + we.mp4
 ./harness/compare.sh rp.mp4 we.mp4 <out dir>   # metrics + sheet + side-by-side
+./harness/batch.sh [--recapture] [id...]       # every scene -> results.tsv + report.md
+./harness/download-testset.sh                  # the 100-wallpaper test corpus
 ```
 
 Output in `harness-out/<id>/` (git-ignored): `sheet.png`, `side_by_side.mp4`,
@@ -31,6 +33,18 @@ Output in `harness-out/<id>/` (git-ignored): `sheet.png`, `side_by_side.mp4`,
 The headless output stays around between runs; remove it with
 `hyprctl output remove RPREF`.
 
+Focus: a freshly opened WE window grabs focus, so `we-capture.sh` records the
+focused window BEFORE asking WE to open the wallpaper and restores it after
+parking and on exit (otherwise the keyboard ends up on the invisible output).
+
+### Recovering a stuck WE
+
+If every capture fails with "did not open a window", WE is wedged (a leftover
+`rpref_*` window that ignores close requests). Restart it:
+`pkill -f wallpaper_engine/launcher.exe; pkill -f wallpaper64.exe;
+steam -applaunch 431960`. After a crash WE shows a "Safe Start" dialog; the
+`-control` commands work regardless.
+
 ## What the comparison measures
 
 WE's clock can't be controlled, so per-frame diffs are meaningless for
@@ -40,6 +54,15 @@ headless output):
 - **mean** — temporal average of all frames: what the scene looks like.
 - **motion** — average |frame − previous frame|: where and how much it moves.
 - **SSIM** of both (1 = identical), plus `side_by_side.mp4` to judge timing.
+
+Rustpaper renders with `--screen 1920x1080`: the scene goes through the same
+centered cover crop as the 1920x1080 WE window. (Comparing the scene's own
+aspect stretched to 16:9 made every non-16:9 scene look misaligned.)
+
+**Verdict** (`compare.sh`, column `verdict` of `metrics.tsv`): PASS when mean
+SSIM >= 0.95 AND the motion energy ratio (mean |frame - previous| of RP over
+WE) is within 0.7..1.4 — the scene looks the same and moves about as much.
+Motion SSIM is reported but not gated (random particles never line up).
 
 Rustpaper's video starts at t = 10 s (`--start 10`) because WE has been running
 for a while when its capture starts: particles are compared at steady state.
@@ -51,3 +74,29 @@ compare the zoomed motion maps and measure sizes/brightness of features.
 | Yor Forger 2824109832 | 17 effects, multi-pass, layer refs | 0.976 | 0.915 |
 | Ayanami Rei 3571376089 | 10 particle systems, hierarchy | 0.958 | 0.738 |
 | Akame ga Kill 1827211233 | fog/fire particles, children | 0.957 | 0.553 |
+
+## Batch and report
+
+`batch.sh` runs every `scene` wallpaper of the Steam Workshop folder and the
+test corpus (or the ids given). WE captures are cached in
+`harness-out/<id>/we.mp4` (`--recapture` redoes them). Output:
+`harness-out/results.tsv` and `harness-out/report.md` (worst first, with each
+scene's unsupported features / warnings).
+
+## Test corpus (`harness/testset.tsv`)
+
+100 Workshop items (75 scene, 15 video, 10 web; "Everyone" rating, ~5.8 GB),
+chosen to cover effects, particles, text, audio, puppets and properties.
+`download-testset.sh` fetches them with `steamcmd` into
+`~/.local/share/rustpaper-testset` (override: `RUSTPAPER_TESTSET_DIR`), which
+`rustpaper_core::paths` and the harness pick up automatically. `steamcmd`
+needs a Steam login once (`steamcmd +login <user> +quit`), then
+`STEAM_USER=<user> harness/download-testset.sh`. Web items are kept to verify
+they are listed but refused.
+
+## Calibration scenes (`harness/calibration/`)
+
+`make_scene.py` writes a synthetic scene whose texture encodes scene
+coordinates as colors (TEXB0002 .tex writer included); `measure.py` reads the
+WE capture back into coordinates. That is how the camera behaviour (cover crop,
+eye/center ignored) was established.

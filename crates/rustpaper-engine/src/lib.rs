@@ -1,5 +1,6 @@
 // Biblioteca do engine: expõe os módulos pra serem reutilizados pelo binário
 // (main.rs) e pelos examples/testes (ex.: render offscreen de cenas).
+pub mod audio_capture;
 pub mod compositor;
 pub mod gl_wallpaper;
 pub mod gpu;

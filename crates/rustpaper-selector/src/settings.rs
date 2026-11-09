@@ -1,9 +1,11 @@
-// Persistência do selector: guarda o último wallpaper aplicado e a preferência
-// de autostart, e gerencia o arquivo .desktop de autostart (padrão XDG).
+// Selector persistence (XDG): the last applied wallpaper, the autostart
+// preference and its .desktop file, and the per-wallpaper property values the
+// user picked in the customization panel.
 
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct Settings {
@@ -12,14 +14,14 @@ pub struct Settings {
 }
 
 fn config_home() -> PathBuf {
-    if let Some(x) = std::env::var_os("XDG_CONFIG_HOME") {
-        PathBuf::from(x)
-    } else {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_default();
-        home.join(".config")
-    }
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let home = std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_default();
+            home.join(".config")
+        })
 }
 
 fn state_path() -> PathBuf {
@@ -46,25 +48,90 @@ pub fn save(s: &Settings) {
     }
 }
 
-// Escreve o .desktop de autostart apontando pro engine + a pasta do wallpaper.
-// Aspas nos caminhos (a spec do .desktop pede pra caminhos com caracteres especiais).
-pub fn write_autostart(engine: &Path, wallpaper_dir: &Path) -> std::io::Result<()> {
+/// `~/.config/rustpaper/properties/<id>.json`: `{ "name": value, ... }`, the
+/// format `rustpaper --props` reads.
+pub fn properties_file(id: &str) -> Option<PathBuf> {
+    let safe = !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    safe.then(|| {
+        config_home()
+            .join("rustpaper")
+            .join("properties")
+            .join(format!("{id}.json"))
+    })
+}
+
+pub fn load_properties(id: &str) -> Map<String, Value> {
+    properties_file(id)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+/// Writes the values; an empty map removes the file (wallpaper defaults).
+pub fn save_properties(id: &str, values: &Map<String, Value>) -> std::io::Result<()> {
+    let path = properties_file(id).ok_or_else(|| std::io::Error::other("invalid wallpaper id"))?;
+    if values.is_empty() {
+        return match std::fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        };
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(path, serde_json::to_string_pretty(values)?)
+}
+
+/// Quotes one argument for a .desktop `Exec=` line.
+fn desktop_quote(arg: &str) -> String {
+    let escaped: String = arg
+        .chars()
+        .flat_map(|c| match c {
+            '"' | '`' | '$' | '\\' => vec!['\\', c],
+            _ => vec![c],
+        })
+        .collect();
+    format!("\"{}\"", escaped.replace('%', "%%"))
+}
+
+/// Autostart .desktop running the engine with `args` (wallpaper folder and
+/// options) at the next login.
+pub fn write_autostart(engine: &Path, args: &[String]) -> std::io::Result<()> {
     if let Some(dir) = autostart_file().parent() {
         std::fs::create_dir_all(dir)?;
     }
+    let exec: Vec<String> = std::iter::once(engine.to_string_lossy().into_owned())
+        .chain(args.iter().cloned())
+        .map(|a| desktop_quote(&a))
+        .collect();
     let content = format!(
-        "[Desktop Entry]\n\
-         Type=Application\n\
-         Name=Rustpaper\n\
-         Exec=\"{}\" \"{}\"\n\
-         X-GNOME-Autostart-enabled=true\n\
-         NoDisplay=true\n",
-        engine.display(),
-        wallpaper_dir.display()
+        "[Desktop Entry]\nType=Application\nName=Rustpaper\nExec={}\nX-GNOME-Autostart-enabled=true\nNoDisplay=true\n",
+        exec.join(" ")
     );
     std::fs::write(autostart_file(), content)
 }
 
 pub fn remove_autostart() {
     let _ = std::fs::remove_file(autostart_file());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn property_files_only_for_plain_ids() {
+        assert!(properties_file("2068329709").is_some());
+        assert!(properties_file("../etc").is_none());
+        assert!(properties_file("").is_none());
+    }
+
+    #[test]
+    fn desktop_exec_quoting() {
+        assert_eq!(desktop_quote("/a b/c"), "\"/a b/c\"");
+        assert_eq!(desktop_quote("x\"$y%"), "\"x\\\"\\$y%%\"");
+    }
 }

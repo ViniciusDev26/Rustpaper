@@ -15,7 +15,9 @@ mkdir -p "$out"
 # tmix accumulates in 16 bits: keep frames * 255 < 65536 (<= ~250 frames).
 secs=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$rp" | cut -d. -f1)
 secs=$(( secs < 1 ? 1 : (secs > 16 ? 16 : secs) ))
-norm="scale=1920:1080:flags=lanczos,crop=1920:1048:0:32,format=rgb24"
+# both sides are 1920x1080 screens already (rustpaper-render --screen):
+# never stretch here, a non-16:9 scene would be distorted
+norm="scale=1920:1080:force_original_aspect_ratio=increase:flags=lanczos,crop=1920:1080,crop=1920:1048:0:32,format=rgb24"
 
 for side in rp we; do
     src=$rp; [ $side = we ] && src=$we

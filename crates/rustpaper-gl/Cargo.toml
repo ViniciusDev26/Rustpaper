@@ -13,6 +13,11 @@ glow = "0.18.0"
 khronos-egl = { version = "6.0.0", features = ["static", "1_5"] }
 serde_json = "1.0.150"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
+# text objects: glyph rasterization + local time for the native clock presets
+ab_glyph = "0.2"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# audio-reactive wallpapers: spectrum of the captured system audio
+rustfft = "6"
 
 [[bin]]
 name = "rustpaper-render"

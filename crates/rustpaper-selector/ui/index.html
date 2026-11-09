@@ -1,75 +1,60 @@
 <!doctype html>
-<html lang="pt-br">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Rustpaper</title>
     <style>
-      :root { color-scheme: dark; }
+      :root {
+        color-scheme: dark;
+        --bg: #1e1e2e; --bar: #181825; --card: #313244; --line: #313244;
+        --muted: #6c7086; --sub: #a6adc8; --fg: #cdd6f4; --accent: #89b4fa;
+      }
       * { box-sizing: border-box; }
-      body {
-        margin: 0;
-        font-family: system-ui, sans-serif;
-        background: #1e1e2e;
-        color: #cdd6f4;
-      }
-      header {
-        position: sticky; top: 0;
-        padding: 14px 20px;
-        background: #181825;
-        border-bottom: 1px solid #313244;
-        display: flex; align-items: center; gap: 12px;
-      }
+      body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--fg); height: 100vh; display: flex; flex-direction: column; }
+      header { padding: 12px 20px; background: var(--bar); border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 12px; }
       header h1 { font-size: 1rem; margin: 0; font-weight: 600; }
-      header .count { color: #6c7086; font-size: .85rem; }
+      header .count { color: var(--muted); font-size: .85rem; }
       header .spacer { flex: 1; }
-      header label { font-size: .85rem; color: #a6adc8; display: flex; align-items: center; gap: 6px; cursor: pointer; }
-      #status { padding: 20px; color: #a6adc8; }
-      .grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-        gap: 14px;
-        padding: 20px;
-      }
-      .card {
-        background: #313244;
-        border-radius: 10px;
-        overflow: hidden;
-        cursor: pointer;
-        border: 2px solid transparent;
-        transition: border-color .12s, transform .12s;
-      }
-      .card:hover { border-color: #89b4fa; transform: translateY(-2px); }
-      .card.unsupported { opacity: .5; cursor: not-allowed; }
-      .card.unsupported:hover { border-color: transparent; transform: none; }
-      .thumb {
-        width: 100%; aspect-ratio: 16 / 10;
-        object-fit: cover; display: block;
-        background: #45475a;
-      }
-      .no-thumb {
-        width: 100%; aspect-ratio: 16 / 10;
-        display: grid; place-items: center;
-        background: #45475a; color: #6c7086; font-size: .8rem;
-      }
+      header input[type=search] { background: var(--card); border: 1px solid #45475a; color: var(--fg); border-radius: 6px; padding: 5px 9px; width: 220px; }
+      label.check { font-size: .85rem; color: var(--sub); display: flex; align-items: center; gap: 6px; cursor: pointer; }
+      main { flex: 1; display: flex; min-height: 0; }
+      #gallery { flex: 1; overflow-y: auto; }
+      #status { padding: 20px; color: var(--sub); }
+      .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; padding: 20px; }
+      .card { background: var(--card); border-radius: 10px; overflow: hidden; cursor: pointer; border: 2px solid transparent; transition: border-color .12s, transform .12s; }
+      .card:hover { border-color: var(--accent); transform: translateY(-2px); }
+      .card.selected { border-color: #f5c2e7; }
+      .card.unsupported { opacity: .5; }
+      .thumb, .no-thumb { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; display: block; background: #45475a; }
+      .no-thumb { display: grid; place-items: center; color: var(--muted); font-size: .8rem; }
       .meta { padding: 8px 10px; }
-      .title {
-        font-size: .85rem; white-space: nowrap;
-        overflow: hidden; text-overflow: ellipsis;
-      }
-      .badge {
-        display: inline-block; margin-top: 4px;
-        font-size: .65rem; text-transform: uppercase; letter-spacing: .04em;
-        padding: 2px 6px; border-radius: 4px; background: #585b70; color: #cdd6f4;
-      }
+      .title { font-size: .85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .badge { display: inline-block; margin-top: 4px; font-size: .65rem; text-transform: uppercase; letter-spacing: .04em; padding: 2px 6px; border-radius: 4px; background: #585b70; color: var(--fg); }
       .badge.video { background: #a6e3a1; color: #11111b; }
-      .badge.scene { background: #89b4fa; color: #11111b; }
-      .toast {
-        position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
-        background: #89b4fa; color: #11111b; padding: 8px 16px;
-        border-radius: 8px; font-size: .85rem; opacity: 0;
-        transition: opacity .2s; pointer-events: none;
-      }
+      .badge.scene { background: var(--accent); color: #11111b; }
+
+      /* customization panel (like WE's right-hand "Properties" column) */
+      #panel { width: 340px; flex: none; background: var(--bar); border-left: 1px solid var(--line); overflow-y: auto; display: none; }
+      #panel.open { display: block; }
+      #panel .preview { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; display: block; background: #45475a; }
+      #panel .head { padding: 12px 16px 4px; }
+      #panel h2 { font-size: .95rem; margin: 0 0 8px; overflow-wrap: anywhere; }
+      #panel .actions { display: flex; gap: 8px; padding: 0 16px 12px; }
+      button { background: var(--accent); color: #11111b; border: 0; border-radius: 6px; padding: 6px 12px; font-weight: 600; cursor: pointer; }
+      button.secondary { background: #45475a; color: var(--fg); }
+      button:disabled { opacity: .5; cursor: default; }
+      .props { padding: 4px 16px 20px; }
+      .prop { padding: 7px 0; }
+      .prop .label { font-size: .8rem; color: var(--sub); margin-bottom: 4px; display: flex; justify-content: space-between; gap: 8px; }
+      .prop .label .val { color: var(--muted); font-variant-numeric: tabular-nums; }
+      .prop input[type=range] { width: 100%; }
+      .prop input[type=text], .prop select { width: 100%; background: var(--card); border: 1px solid #45475a; color: var(--fg); border-radius: 6px; padding: 5px 7px; }
+      .prop input[type=color] { width: 56px; height: 28px; border: 1px solid #45475a; background: var(--card); border-radius: 6px; padding: 2px; }
+      .prop.group { font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; color: var(--accent); padding-top: 14px; border-bottom: 1px solid var(--line); }
+      .prop.note { font-size: .78rem; color: var(--muted); }
+      .empty { color: var(--muted); font-size: .85rem; padding: 4px 16px 16px; }
+      .toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--accent); color: #11111b; padding: 8px 16px; border-radius: 8px; font-size: .85rem; opacity: 0; transition: opacity .2s; pointer-events: none; }
       .toast.show { opacity: 1; }
     </style>
   </head>
@@ -78,82 +63,166 @@
       <h1>Rustpaper</h1>
       <span class="count" id="count"></span>
       <span class="spacer"></span>
-      <label><input type="checkbox" id="autostart" /> Iniciar no login</label>
+      <input type="search" id="search" placeholder="Search" />
+      <label class="check"><input type="checkbox" id="autostart" /> Start on login</label>
     </header>
-    <div id="status">Carregando wallpapers…</div>
-    <div class="grid" id="grid"></div>
+    <main>
+      <div id="gallery">
+        <div id="status">Loading wallpapers…</div>
+        <div class="grid" id="grid"></div>
+      </div>
+      <aside id="panel"></aside>
+    </main>
     <div class="toast" id="toast"></div>
 
+    <script src="properties.js"></script>
     <script>
       const { invoke, convertFileSrc } = window.__TAURI__.core;
+      const $ = (id) => document.getElementById(id);
+      const el = (tag, props = {}, ...children) => {
+        const n = Object.assign(document.createElement(tag), props);
+        n.append(...children);
+        return n;
+      };
 
-      const grid = document.getElementById("grid");
-      const status = document.getElementById("status");
-      const count = document.getElementById("count");
-      const toast = document.getElementById("toast");
-      const autostartEl = document.getElementById("autostart");
-
+      let toastTimer;
       function showToast(msg) {
-        toast.textContent = msg;
-        toast.classList.add("show");
-        setTimeout(() => toast.classList.remove("show"), 1800);
+        $("toast").textContent = msg;
+        $("toast").classList.add("show");
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => $("toast").classList.remove("show"), 2000);
       }
 
-      async function apply(id, title) {
+      let wallpapers = [];
+      let selected = null;
+
+      async function apply(w) {
         try {
-          await invoke("apply", { id });
-          showToast(`Aplicado: ${title}`);
+          await invoke("apply", { id: w.id });
+          showToast(`Applied: ${w.title || w.id}`);
+          openPanel(w);
         } catch (e) {
-          showToast(`Erro: ${e}`);
+          showToast(`Error: ${e}`);
         }
       }
 
       function card(w) {
-        const el = document.createElement("div");
-        el.className = "card" + (w.supported ? "" : " unsupported");
-
         const thumb = w.preview
-          ? `<img class="thumb" loading="lazy" src="${convertFileSrc(w.preview)}" />`
-          : `<div class="no-thumb">sem preview</div>`;
-
-        el.innerHTML = `
-          ${thumb}
-          <div class="meta">
-            <div class="title" title="${w.title}">${w.title || w.id}</div>
-            <span class="badge ${w.kind}">${w.kind}</span>
-          </div>`;
-
-        if (w.supported) {
-          el.addEventListener("click", () => apply(w.id, w.title || w.id));
-        }
-        return el;
+          ? el("img", { className: "thumb", loading: "lazy", src: convertFileSrc(w.preview) })
+          : el("div", { className: "no-thumb", textContent: "no preview" });
+        const node = el("div", { className: "card" + (w.supported ? "" : " unsupported") },
+          thumb,
+          el("div", { className: "meta" },
+            el("div", { className: "title", title: w.title, textContent: w.title || w.id }),
+            el("span", { className: `badge ${w.kind}`, textContent: w.kind })));
+        node.dataset.id = w.id;
+        // Like WE: one click applies the wallpaper and shows its properties.
+        node.addEventListener("click", () => (w.supported ? apply(w) : openPanel(w)));
+        return node;
       }
 
-      autostartEl.addEventListener("change", async () => {
+      function renderGrid() {
+        const q = $("search").value.trim().toLowerCase();
+        const shown = wallpapers.filter((w) => !q || (w.title || "").toLowerCase().includes(q) || w.id.includes(q));
+        $("grid").replaceChildren(...shown.map(card));
+        $("count").textContent = `${shown.length} wallpapers`;
+        markSelected();
+      }
+
+      function markSelected() {
+        for (const c of $("grid").children) c.classList.toggle("selected", c.dataset.id === selected?.id);
+      }
+
+      // ---- customization panel ------------------------------------------
+      async function openPanel(w) {
+        selected = w;
+        markSelected();
+        const panel = $("panel");
+        panel.classList.add("open");
+        const head = el("div", { className: "head" }, el("h2", { textContent: w.title || w.id }),
+          el("span", { className: `badge ${w.kind}`, textContent: w.kind }));
+        const preview = w.preview ? el("img", { className: "preview", src: convertFileSrc(w.preview) }) : "";
+        panel.replaceChildren(preview, head);
+        if (!w.supported) {
+          panel.append(el("div", { className: "empty", textContent: w.kind === "web"
+            ? "Web wallpapers run the author's JavaScript and are not supported."
+            : "This wallpaper type is not supported." }));
+          return;
+        }
+        let view;
         try {
-          await invoke("set_autostart", { enabled: autostartEl.checked });
-          showToast(autostartEl.checked ? "Autostart ligado" : "Autostart desligado");
+          view = await invoke("get_properties", { id: w.id });
         } catch (e) {
-          autostartEl.checked = !autostartEl.checked; // reverte se falhou
+          panel.append(el("div", { className: "empty", textContent: `${e}` }));
+          return;
+        }
+        if (selected !== w) return; // another card was clicked meanwhile
+
+        const values = {}; // current value of every property (defaults + saved)
+        for (const p of view.properties) values[p.name] = p.name in view.saved ? view.saved[p.name] : p.value;
+        const changed = () => Object.fromEntries(Object.entries(values)
+          .filter(([k, v]) => { const p = view.properties.find((q) => q.name === k); return p && !sameValue(v, p.value); }));
+
+        const props = el("div", { className: "props" });
+        const reset = el("button", { className: "secondary", textContent: "Reset" });
+        const applyBtn = el("button", { textContent: "Apply" });
+        panel.append(el("div", { className: "actions" }, applyBtn, reset), props);
+        applyBtn.addEventListener("click", () => apply(w));
+
+        // Saving restarts the engine on the new values; debounce so dragging
+        // a slider produces one restart, not one per pixel.
+        let saveTimer;
+        const save = () => {
+          clearTimeout(saveTimer);
+          saveTimer = setTimeout(async () => {
+            try { await invoke("save_properties", { id: w.id, values: changed() }); }
+            catch (e) { showToast(`Error: ${e}`); }
+          }, 700);
+        };
+        reset.addEventListener("click", async () => {
+          for (const p of view.properties) values[p.name] = p.value;
+          await invoke("save_properties", { id: w.id, values: {} }).catch((e) => showToast(`Error: ${e}`));
+          draw();
+        });
+
+        function draw() {
+          const rows = view.properties
+            .filter((p) => !p.condition || RpProps.evalCondition(p.condition, values))
+            .map((p) => RpProps.control(p, values[p.name], (v) => { values[p.name] = v; save(); draw(); }))
+            .filter(Boolean);
+          props.replaceChildren(...(rows.length ? rows : [el("div", { className: "empty", textContent: "No customizable properties." })]));
+        }
+        draw();
+      }
+
+      function sameValue(a, b) {
+        return JSON.stringify(a) === JSON.stringify(b);
+      }
+
+      $("search").addEventListener("input", renderGrid);
+      $("autostart").addEventListener("change", async (ev) => {
+        try {
+          await invoke("set_autostart", { enabled: ev.target.checked });
+          showToast(ev.target.checked ? "Autostart on" : "Autostart off");
+        } catch (e) {
+          ev.target.checked = !ev.target.checked;
           showToast(`${e}`);
         }
       });
 
-      async function load() {
+      (async () => {
         try {
           const settings = await invoke("get_settings");
-          autostartEl.checked = settings.autostart;
-
-          const wallpapers = await invoke("list_wallpapers");
-          status.style.display = "none";
-          count.textContent = `${wallpapers.length} wallpapers`;
-          for (const w of wallpapers) grid.appendChild(card(w));
+          $("autostart").checked = settings.autostart;
+          wallpapers = await invoke("list_wallpapers");
+          $("status").style.display = "none";
+          renderGrid();
+          const last = wallpapers.find((w) => w.id === settings.last_id);
+          if (last) openPanel(last);
         } catch (e) {
-          status.textContent = `Erro ao carregar: ${e}`;
+          $("status").textContent = `Failed to load: ${e}`;
         }
-      }
-
-      load();
+      })();
     </script>
   </body>
 </html>

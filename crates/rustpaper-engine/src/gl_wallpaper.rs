@@ -50,6 +50,8 @@ pub struct Options {
     /// User property values (`general.properties` of project.json) chosen in
     /// the selector, overriding the wallpaper defaults.
     pub properties: serde_json::Map<String, serde_json::Value>,
+    /// Capture system audio for audio-reactive wallpapers.
+    pub audio: bool,
 }
 
 /// How often (in frames) fullscreen state is re-read from the compositor.
@@ -85,6 +87,7 @@ struct GlWallpaper {
     frame: u32,
     hypr: Vec<crate::hyprland::Monitor>,
     pointer: [f32; 2],
+    audio: Option<crate::audio_capture::AudioCapture>,
 }
 
 pub fn run(dir: &Path, opts: Options) {
@@ -134,6 +137,11 @@ pub fn run(dir: &Path, opts: Options) {
         frame: 0,
         hypr: Vec::new(),
         pointer: [0.5, 0.5],
+        audio: if opts.audio {
+            crate::audio_capture::AudioCapture::start()
+        } else {
+            None
+        },
     };
     let interval = Duration::from_secs_f64(1.0 / opts.fps.clamp(1, 240) as f64);
 
@@ -192,6 +200,7 @@ impl GlWallpaper {
         let frame = FrameInput {
             time: self.clock,
             pointer: self.pointer,
+            audio: self.audio.as_ref().map(|a| a.frame()).unwrap_or_default(),
             ..Default::default()
         };
         self.scene.render(&self.gl.gl, frame);

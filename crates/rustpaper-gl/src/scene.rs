@@ -28,6 +28,7 @@ use crate::gpu::{Blend, ParticleMesh, QuadMesh, Target, Tex, solid_texture, uplo
 use crate::math::{self, Mat4};
 use crate::particles::{self, ChildEvent, Overrides, ParticleDef, ParticleSim, RendererKind};
 use crate::program::{Program, ShaderSource};
+use crate::text;
 use crate::value;
 
 /// Inputs that change every frame.
@@ -39,6 +40,8 @@ pub struct FrameInput {
     pub pointer: [f32; 2],
     /// Fraction of the day in [0,1) (`g_Daytime`).
     pub daytime: f32,
+    /// Spectrum of the system audio (zeros when not captured).
+    pub audio: crate::audio::AudioFrame,
 }
 
 impl Default for FrameInput {
@@ -47,6 +50,7 @@ impl Default for FrameInput {
             time: 0.0,
             pointer: [0.5, 0.5],
             daytime: 0.5,
+            audio: crate::audio::AudioFrame::default(),
         }
     }
 }
@@ -101,6 +105,10 @@ struct Layer {
     alpha: f32,
     brightness: f32,
     material: Pass,
+    /// Puppet warp: skeletal animation + its mesh (replaces the quad).
+    puppet: Option<(crate::puppet::PuppetRt, crate::gpu::MeshGpu)>,
+    /// Composite pass with the object's colorBlendMode (layers with a target).
+    composite: Option<Pass>,
     effects: Vec<Effect>,
 }
 
@@ -149,6 +157,16 @@ struct Bloom {
     output: Option<Target>,
 }
 
+/// A text object's content source and its rasterized texture.
+struct TextRt {
+    id: i64,
+    source: text::TextSource,
+    font: ab_glyph::FontVec,
+    style: text::TextStyle,
+    shown: Option<String>,
+    tex: Option<Tex>,
+}
+
 pub struct SceneRenderer {
     assets: Assets,
     pub width: u32,
@@ -158,6 +176,7 @@ pub struct SceneRenderer {
     skylight: [f32; 3],
     layers: Vec<Layer>,
     particle_objs: Vec<ParticleObject>,
+    texts: Vec<TextRt>,
     order: Vec<ObjRef>,
     /// Layers some other layer samples as `_rt_imageLayerComposite_<id>_a`.
     referenced: HashSet<i64>,
@@ -259,6 +278,7 @@ impl SceneRenderer {
             skylight: value::get_vec3(&general, "skylightcolor", [0.3; 3]),
             layers: Vec::new(),
             particle_objs: Vec::new(),
+            texts: Vec::new(),
             order: Vec::new(),
             referenced: HashSet::new(),
             sources: HashMap::new(),
@@ -313,8 +333,23 @@ impl SceneRenderer {
                         obj.get("name").and_then(|n| n.as_str()).unwrap_or("?")
                     )),
                 }
-            } else if obj.get("text").is_some() {
-                r.warn("text objects are not rendered yet".into());
+            } else if obj.get("text").is_some_and(|t| !t.is_null()) {
+                match r.load_text(obj) {
+                    Ok(t) => {
+                        r.texts.push(t);
+                        match r.load_layer(gl, obj) {
+                            Ok(layer) => {
+                                r.order.push(ObjRef::Layer(r.layers.len()));
+                                r.layers.push(layer);
+                            }
+                            Err(e) => r.warn(format!("text layer skipped: {e}")),
+                        }
+                    }
+                    Err(e) => r.warn(format!(
+                        "text {:?} skipped: {e}",
+                        obj.get("name").and_then(|n| n.as_str()).unwrap_or("?")
+                    )),
+                }
             }
         }
 
@@ -362,28 +397,69 @@ impl SceneRenderer {
     // ---------------------------------------------------------------- loading
 
     fn load_layer(&mut self, gl: &glow::Context, obj: &Value) -> Result<Layer, String> {
-        let image = obj["image"].as_str().ok_or("image is not a string")?;
-        let model = self
-            .assets
-            .read_json(image)
-            .ok_or_else(|| format!("model {image} not found"))?;
-        let mat_path = model
-            .get("material")
-            .and_then(|m| m.as_str())
-            .ok_or("model has no material")?;
-        let mat = self
-            .assets
-            .read_json(mat_path)
-            .ok_or_else(|| format!("material {mat_path} not found"))?;
-        let pass_json = mat
-            .get("passes")
-            .and_then(|p| p.get(0))
-            .ok_or("material has no passes")?;
-        if model.get("puppet").is_some() {
-            self.warn(format!(
-                "{image}: puppet (skeletal) animation not supported, drawn static"
-            ));
-        }
+        let (image, model, pass_owned) = match obj.get("image").and_then(|i| i.as_str()) {
+            Some(image) => {
+                let model = self
+                    .assets
+                    .read_json(image)
+                    .ok_or_else(|| format!("model {image} not found"))?;
+                let mat_path = model
+                    .get("material")
+                    .and_then(|m| m.as_str())
+                    .ok_or("model has no material")?;
+                let mat = self
+                    .assets
+                    .read_json(mat_path)
+                    .ok_or_else(|| format!("material {mat_path} not found"))?;
+                let pass = mat
+                    .get("passes")
+                    .and_then(|p| p.get(0))
+                    .cloned()
+                    .ok_or("material has no passes")?;
+                (image.to_string(), model, pass)
+            }
+            // text objects: a plain image material over the rasterized text
+            // (VERSION 2 = tinted by the object's color + alpha)
+            None => {
+                let id = obj.get("id").and_then(|i| i.as_i64()).unwrap_or(0);
+                (
+                    format!("text #{id}"),
+                    Value::Null,
+                    serde_json::json!({
+                        "shader": "genericimage2",
+                        "blending": "translucent",
+                        "combos": { "VERSION": 2 },
+                        "textures": [format!("_text_{id}")]
+                    }),
+                )
+            }
+        };
+        let pass_json = &pass_owned;
+        // puppet warp: the quad becomes a skinned mesh
+        let puppet = match model.get("puppet").and_then(|p| p.as_str()) {
+            Some(path) => match self
+                .assets
+                .read(path)
+                .map(|b| rustpaper_core::mdl::Puppet::parse(&b))
+            {
+                Some(Ok(p)) => {
+                    let mesh = crate::gpu::MeshGpu::new(gl, &p.mesh.indices);
+                    Some((
+                        crate::puppet::PuppetRt::new(p, obj.get("animationlayers")),
+                        mesh,
+                    ))
+                }
+                Some(Err(e)) => {
+                    self.warn(format!("{image}: puppet {path}: {e}"));
+                    None
+                }
+                None => {
+                    self.warn(format!("{image}: puppet {path} not found"));
+                    None
+                }
+            },
+            None => None,
+        };
 
         let kind = if model.get("passthrough").and_then(|v| v.as_bool()) == Some(true) {
             LayerKind::Passthrough {
@@ -391,34 +467,6 @@ impl SceneRenderer {
             }
         } else {
             LayerKind::Image
-        };
-
-        // Object-level combo: colorBlendMode N selects the material's BLENDMODE
-        // code path (multiply, screen, ... against what is behind the object).
-        let mut extra_combos = BTreeMap::new();
-        let blend_mode = obj
-            .get("colorBlendMode")
-            .and_then(|v| value::plain(v).as_i64())
-            .unwrap_or(0);
-        if blend_mode != 0 {
-            extra_combos.insert("BLENDMODE".to_string(), blend_mode);
-        }
-        let material = self.resolve_pass(gl, pass_json, None, &[], &extra_combos, false)?;
-
-        let (w, h) = (self.width as f32, self.height as f32);
-        let first_tex = material.slots.iter().find_map(|(n, s)| match s {
-            TexSource::Named(name) if *n == 0 && !name.starts_with("_rt_") => {
-                self.textures.get(name).copied()
-            }
-            _ => None,
-        });
-        let size = match kind {
-            LayerKind::Passthrough { fullscreen: true } => [w, h],
-            _ => value::get_floats(obj, "size")
-                .filter(|s| s.len() >= 2 && s[0] > 0.0 && s[1] > 0.0)
-                .map(|s| [s[0], s[1]])
-                .or_else(|| first_tex.map(|t| [t.width as f32, t.height as f32]))
-                .unwrap_or([w, h]),
         };
 
         let mut effects = Vec::new();
@@ -440,6 +488,49 @@ impl SceneRenderer {
             }
         }
 
+        // Object-level combo: colorBlendMode N selects the material's BLENDMODE
+        // code path (multiply, screen, ... against what is behind the object).
+        // A layer drawn through its own target (effects, compose layers) is
+        // blended with the background when it is COMPOSITED, not inside its
+        // target (whose screen coordinates aren't the scene's).
+        let mut extra_combos = BTreeMap::new();
+        let blend_mode = obj
+            .get("colorBlendMode")
+            .and_then(|v| value::plain(v).as_i64())
+            .unwrap_or(0);
+        let via_target = !effects.is_empty() || matches!(kind, LayerKind::Passthrough { .. });
+        let mut composite = None;
+        if blend_mode != 0 {
+            if via_target {
+                let j = serde_json::json!({
+                    "shader": "genericimage2",
+                    "blending": "translucent",
+                    "combos": { "VERSION": 2, "BLENDMODE": blend_mode },
+                    "textures": ["_composite_"]
+                });
+                composite = Some(self.resolve_pass(gl, &j, None, &[], &BTreeMap::new(), false)?);
+            } else {
+                extra_combos.insert("BLENDMODE".to_string(), blend_mode);
+            }
+        }
+        let material = self.resolve_pass(gl, pass_json, None, &[], &extra_combos, false)?;
+
+        let (w, h) = (self.width as f32, self.height as f32);
+        let first_tex = material.slots.iter().find_map(|(n, s)| match s {
+            TexSource::Named(name) if *n == 0 && !name.starts_with("_rt_") => {
+                self.textures.get(name).copied()
+            }
+            _ => None,
+        });
+        let size = match kind {
+            LayerKind::Passthrough { fullscreen: true } => [w, h],
+            _ => value::get_floats(obj, "size")
+                .filter(|s| s.len() >= 2 && s[0] > 0.0 && s[1] > 0.0)
+                .map(|s| [s[0], s[1]])
+                .or_else(|| first_tex.map(|t| [t.width as f32, t.height as f32]))
+                .unwrap_or([w, h]),
+        };
+
         Ok(Layer {
             id: obj.get("id").and_then(|i| i.as_i64()).unwrap_or(-1),
             name: obj
@@ -447,7 +538,7 @@ impl SceneRenderer {
                 .and_then(|n| n.as_str())
                 .unwrap_or("")
                 .to_string(),
-            visible: value::get_bool(obj, "visible", true),
+            visible: object_visible(obj),
             kind,
             world: match kind {
                 LayerKind::Passthrough { fullscreen: true } => {
@@ -460,6 +551,8 @@ impl SceneRenderer {
             alpha: value::get_f32(obj, "alpha", 1.0),
             brightness: value::get_f32(obj, "brightness", 1.0),
             material,
+            puppet,
+            composite,
             effects,
         })
     }
@@ -631,6 +724,8 @@ impl SceneRenderer {
                 if let TexSource::Named(n) = &src
                     && !n.starts_with("_rt_")
                     && !n.starts_with("_alias_")
+                    && !n.starts_with("_text_")
+                    && n != "_composite_"
                 {
                     // WE tells shaders each texture's storage format through
                     // TEXnFORMAT (e.g. R8 sprites become white + alpha in
@@ -737,6 +832,13 @@ impl SceneRenderer {
             gl.disable(glow::DEPTH_TEST);
             gl.disable(glow::CULL_FACE);
         }
+        self.update_texts(gl);
+        for l in &mut self.layers {
+            if let Some((rt, mesh)) = &mut l.puppet {
+                rt.update(frame.time);
+                mesh.upload(gl, &rt.vertices);
+            }
+        }
         self.scene.clear(gl, self.clear);
 
         // Hidden-but-referenced layers first, so others can sample them.
@@ -791,6 +893,13 @@ impl SceneRenderer {
             }
         }
         self.post_process(gl);
+    }
+
+    /// Scene projection. Note: `camera.eye`/`center` are NOT applied — WE
+    /// ignores them when playing a wallpaper (measured: Yor, camera at
+    /// (67, -37), aligns with WE at offset 0 and scale 1).
+    fn view_proj(&self) -> Mat4 {
+        math::scene_ortho(self.width as f32, self.height as f32)
     }
 
     /// The finished frame (scene resolution).
@@ -1033,7 +1142,7 @@ impl SceneRenderer {
     fn draw_direct(&mut self, gl: &glow::Context, i: usize, frame: FrameInput) {
         let l = &self.layers[i];
         let model = l.world;
-        let proj = math::scene_ortho(self.width as f32, self.height as f32);
+        let proj = self.view_proj();
         let mvp = math::mul(&proj, &model);
         let verts = math::quad(l.size[0], l.size[1], 1.0, 1.0);
         let blend = l.material.blend;
@@ -1081,7 +1190,7 @@ impl SceneRenderer {
             LayerKind::Passthrough { fullscreen } => {
                 let l = &self.layers[i];
                 let model = l.world;
-                let proj = math::scene_ortho(self.width as f32, self.height as f32);
+                let proj = self.view_proj();
                 let verts = if fullscreen {
                     math::quad(2.0, -2.0, 1.0, 1.0) // already in clip space
                 } else {
@@ -1192,10 +1301,28 @@ impl SceneRenderer {
             ),
             _ => (l.world, math::quad(l.size[0], l.size[1], 1.0, 1.0)),
         };
-        let mvp = math::mul(
-            &math::scene_ortho(self.width as f32, self.height as f32),
-            &model,
-        );
+        let proj = self.view_proj();
+        let mvp = math::mul(&proj, &model);
+        if let Some(blend) = l.composite.as_ref().map(|c| c.blend) {
+            let scene = self.scene;
+            self.draw_pass(
+                gl,
+                DrawCall {
+                    layer: i,
+                    which: PassRef::Composite,
+                    target: scene,
+                    previous: Some(t.tex),
+                    effect_targets: &HashMap::new(),
+                    mvp,
+                    model,
+                    proj,
+                    verts,
+                    blend,
+                    frame: FrameInput::default(),
+                },
+            );
+            return;
+        }
         self.scene.bind(gl);
         l.material.blend.apply(gl);
         unsafe {
@@ -1212,6 +1339,10 @@ impl SceneRenderer {
         let pass = match call.which {
             PassRef::Material => &self.layers[call.layer].material,
             PassRef::Effect(e, p) => &self.layers[call.layer].effects[e].passes[p].pass,
+            PassRef::Composite => self.layers[call.layer]
+                .composite
+                .as_ref()
+                .expect("composite pass"),
         };
         let key = pass.program_key.clone();
         let slots = pass.slots.clone();
@@ -1224,6 +1355,7 @@ impl SceneRenderer {
             let own_id = self.layers[call.layer].id;
             let tex = match src {
                 TexSource::Previous => call.previous.unwrap_or(self.white),
+                TexSource::Named(n) if n == "_composite_" => call.previous.unwrap_or(self.white),
                 // a layer's own ping-pong buffers, by name, inside its own chain
                 TexSource::Named(n)
                     if call.previous.is_some() && composite_ref(n) == Some(own_id) =>
@@ -1246,6 +1378,7 @@ impl SceneRenderer {
                 match call.which {
                     PassRef::Material => "material".to_string(),
                     PassRef::Effect(e, p) => format!("fx{e}.p{p}"),
+                    PassRef::Composite => "composite".to_string(),
                 },
                 call.target.tex.width,
                 call.target.tex.height,
@@ -1284,6 +1417,7 @@ impl SceneRenderer {
         prog.set(gl, "g_EffectModelViewProjectionMatrix", &call.mvp);
         prog.set(gl, "g_Time", &[f.time]);
         prog.set(gl, "g_Daytime", &[f.daytime]);
+        set_audio(gl, prog, &f.audio);
         prog.set(gl, "g_Frametime", &[1.0 / 30.0]);
         prog.set(gl, "g_PointerPosition", &f.pointer);
         prog.set(gl, "g_PointerPositionLast", &f.pointer);
@@ -1323,7 +1457,10 @@ impl SceneRenderer {
             );
         }
 
-        self.quad.draw(gl, &call.verts);
+        match (&call.which, &self.layers[call.layer].puppet) {
+            (PassRef::Material, Some((_, mesh))) => mesh.draw(gl),
+            _ => self.quad.draw(gl, &call.verts),
+        }
     }
 
     fn named_texture(
@@ -1349,6 +1486,13 @@ impl SceneRenderer {
             "_rt_FullFrameBuffer" | "_rt_MipMappedFrameBuffer" => {
                 self.scene.blit_to(gl, &self.fullframe);
                 self.fullframe.tex
+            }
+            n if n.starts_with("_text_") => {
+                let id: i64 = n[6..].parse().unwrap_or(-1);
+                match self.texts.iter().find(|t| t.id == id).and_then(|t| t.tex) {
+                    Some(t) => t,
+                    None => self.white,
+                }
             }
             // engine-provided aliases (light cookies, shadow atlases...) only
             // exist with scene lighting, which we don't render
@@ -1398,6 +1542,88 @@ impl SceneRenderer {
             .unwrap_or_else(|| local_matrix(obj))
     }
 
+    // ------------------------------------------------------------------ text
+
+    fn load_text(&mut self, obj: &Value) -> Result<TextRt, String> {
+        let id = obj.get("id").and_then(|i| i.as_i64()).unwrap_or(0);
+        let font_name = obj
+            .get("font")
+            .and_then(|f| f.as_str())
+            .unwrap_or("systemfont_arial");
+        let bytes = match self.assets.read(font_name) {
+            Some(b) => b.into_owned(),
+            None => {
+                let path = text::system_font_path(font_name)
+                    .or_else(|| text::system_font_path("sans-serif"))
+                    .ok_or_else(|| format!("font {font_name} not found"))?;
+                std::fs::read(path).map_err(|e| e.to_string())?
+            }
+        };
+        let font =
+            ab_glyph::FontVec::try_from_vec(bytes).map_err(|e| format!("font {font_name}: {e}"))?;
+        let size = value::get_vec2(obj, "size", [512.0, 128.0]);
+        let bg = value::get_bool(obj, "opaquebackground", false).then(|| {
+            let c = value::get_vec3(obj, "backgroundcolor", [0.0; 3]);
+            let b = value::get_f32(obj, "backgroundbrightness", 1.0);
+            [c[0] * b, c[1] * b, c[2] * b]
+        });
+        Ok(TextRt {
+            id,
+            source: text::TextSource::from_json(&obj["text"]),
+            font,
+            style: text::TextStyle {
+                em: value::get_f32(obj, "pointsize", 32.0) * text::UNITS_PER_POINT,
+                halign: obj
+                    .get("horizontalalign")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("center")
+                    .to_string(),
+                valign: obj
+                    .get("verticalalign")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("center")
+                    .to_string(),
+                padding: value::get_f32(obj, "padding", 0.0),
+                size: (
+                    (size[0].round() as u32).clamp(1, 4096),
+                    (size[1].round() as u32).clamp(1, 4096),
+                ),
+                background: bg,
+            },
+            shown: None,
+            tex: None,
+        })
+    }
+
+    /// Re-rasterizes text whose content changed (clocks tick every second).
+    /// The canvas grows past the object's box when the text doesn't fit, and
+    /// the text layer's quad follows it.
+    fn update_texts(&mut self, gl: &glow::Context) {
+        for t in &mut self.texts {
+            let now = t.source.current();
+            if t.shown.as_deref() == Some(now.as_str()) {
+                continue;
+            }
+            let mut style = t.style.clone();
+            style.size = text::canvas_size(&t.font, &now, &t.style);
+            let px = text::rasterize(&t.font, &now, &style);
+            let (w, h) = style.size;
+            let tex = match t.tex {
+                Some(tex) if tex.width == w && tex.height == h => tex,
+                _ => {
+                    let tex = crate::gpu::empty_texture(gl, w, h);
+                    t.tex = Some(tex);
+                    tex
+                }
+            };
+            crate::gpu::write_texture(gl, &tex, &px);
+            if let Some(l) = self.layers.iter_mut().find(|l| l.id == t.id) {
+                l.size = [w as f32, h as f32];
+            }
+            t.shown = Some(now);
+        }
+    }
+
     // -------------------------------------------------------------- particles
 
     fn load_particles(
@@ -1418,7 +1644,7 @@ impl SceneRenderer {
                 .and_then(|n| n.as_str())
                 .unwrap_or("")
                 .to_string(),
-            visible: value::get_bool(obj, "visible", true),
+            visible: object_visible(obj),
             world: self.world_of(obj),
             systems,
             prewarm: prewarm.min(60.0),
@@ -1528,6 +1754,10 @@ impl SceneRenderer {
         }
         if sheet {
             combos.insert("SPRITESHEET".to_string(), 1);
+            // Runtime combo WE always sets for flipbooks: crossfade between
+            // frames. Without it big sheets (fog) jump every frame change
+            // (Demon Angel 1851646226: motion energy ratio 4.3 -> 2.7).
+            combos.insert("SPRITESHEETBLEND".to_string(), 1);
         }
         let pass = self.resolve_pass(gl, &pass_json, None, &[], &combos, false)?;
 
@@ -1579,6 +1809,9 @@ impl SceneRenderer {
             inv[1] * px + inv[5] * py + inv[13],
             0.0,
         ];
+        for s in &mut o.systems {
+            s.sim.audio = frame.audio;
+        }
         let max_steps = ((o.prewarm + 1.0) / particles::STEP) as usize + 120;
         let mut steps = 0;
         while o.systems[0].sim.time + particles::STEP <= target + 1e-4 && steps < max_steps {
@@ -1589,9 +1822,11 @@ impl SceneRenderer {
                 let cps = particles::control_points(&sys.sim.def, pointer);
                 match sys.parent {
                     None => sys.sim.step(particles::STEP, &cps, true),
+                    Some((_, ChildEvent::Static, _)) => sys.sim.step(particles::STEP, &cps, true),
                     Some((pi, event, origin)) => {
                         let parent = &mut before[pi].sim;
                         match event {
+                            ChildEvent::Static => {}
                             ChildEvent::Follow => {
                                 let rate = sys.sim.rate();
                                 let mut spawns = Vec::new();
@@ -1646,7 +1881,7 @@ impl SceneRenderer {
         let (w, h) = (self.width as f32, self.height as f32);
         let o = &self.particle_objs[i];
         let model = o.world;
-        let proj = math::scene_ortho(w, h);
+        let proj = self.view_proj();
         let mvp = math::mul(&proj, &model);
         let inverse = math::invert(&model);
         for k in 0..self.particle_objs[i].systems.len() {
@@ -1763,6 +1998,8 @@ impl SceneRenderer {
 enum PassRef {
     Material,
     Effect(usize, usize),
+    /// the colorBlendMode composite of a layer drawn through its own target
+    Composite,
 }
 
 struct DrawCall<'a> {
@@ -1777,6 +2014,18 @@ struct DrawCall<'a> {
     verts: [f32; 20],
     blend: Blend,
     frame: FrameInput,
+}
+
+/// `g_AudioSpectrum{16,32,64}{Left,Right}` from the current spectrum.
+fn set_audio(gl: &glow::Context, prog: &Program, audio: &crate::audio::AudioFrame) {
+    for n in [16, 32, 64] {
+        for (right, side) in [(false, "Left"), (true, "Right")] {
+            let name = format!("g_AudioSpectrum{n}{side}");
+            if prog.uniforms.contains_key(&name) {
+                prog.set(gl, &name, &audio.bands(right, n));
+            }
+        }
+    }
 }
 
 /// Sets the shader's annotated material parameters (`uniform float g_Speed;
@@ -1800,6 +2049,19 @@ fn set_params(gl: &glow::Context, prog: &Program, constants: &HashMap<String, Va
             .unwrap_or_else(|| p.default.clone());
         prog.set(gl, &p.uniform, &v);
     }
+}
+
+/// `visible` of an object, honoring user properties; objects whose visibility
+/// is driven by a script that spawns layer clones (`createLayer`, e.g. audio
+/// visualizer bars) are templates WE never shows themselves. The script text is
+/// only inspected, never run.
+fn object_visible(obj: &Value) -> bool {
+    let spawns_clones = obj
+        .get("visible")
+        .and_then(|v| v.get("script"))
+        .and_then(|s| s.as_str())
+        .is_some_and(|s| s.contains("createLayer"));
+    !spawns_clones && value::get_bool(obj, "visible", true)
 }
 
 /// An object's own transform: translate(origin) * rotZ(angle) * scale.
