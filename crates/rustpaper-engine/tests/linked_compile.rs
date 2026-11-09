@@ -1,7 +1,7 @@
-// Verifica que compilar vertex + fragment LINKADOS unifica o bloco de uniforms:
-// os dois SPIR-V devem ter o MESMO tamanho de UBO e os mesmos offsets pros membros
-// compartilhados. É o que permite usar o vertex do WE junto do fragment com um UBO
-// único. Pulado se faltar assets do WE ou glslang.
+// Checks that compiling vertex + fragment LINKED unifies the uniform block:
+// both SPIR-V outputs must have the SAME UBO size and the same offsets for the
+// shared members. This is what allows using the WE vertex together with the fragment
+// with a single UBO. Skipped if the WE assets or glslang are missing.
 
 use std::path::PathBuf;
 
@@ -17,9 +17,9 @@ fn shaders_dir() -> Option<PathBuf> {
 }
 
 #[test]
-fn linked_ubo_e_unificado() {
+fn linked_ubo_is_unified() {
     let Some(dir) = shaders_dir() else {
-        eprintln!("SKIP: sem assets do WE");
+        eprintln!("SKIP: no WE assets");
         return;
     };
     let vert = std::fs::read_to_string(dir.join("genericimage2.vert")).unwrap();
@@ -28,8 +28,8 @@ fn linked_ubo_e_unificado() {
     let (v_spv, f_spv) =
         match rustpaper_engine::shader_compile::compile_linked(&vert, &frag, &[], &dir) {
             Ok(x) => x,
-            Err(e) if e.contains("não encontrado") => {
-                eprintln!("SKIP: glslang ausente ({e})");
+            Err(e) if e.contains("not found") => {
+                eprintln!("SKIP: glslang missing ({e})");
                 return;
             }
             Err(e) => panic!("compile_linked: {e}"),
@@ -38,28 +38,28 @@ fn linked_ubo_e_unificado() {
     let vr = rustpaper_engine::shader_compile::reflect(&v_spv).unwrap();
     let fr = rustpaper_engine::shader_compile::reflect(&f_spv).unwrap();
 
-    // mesmo tamanho de bloco nos dois estágios (unificado)
+    // same block size in both stages (unified)
     assert_eq!(
         vr.uniform_size, fr.uniform_size,
-        "UBO deve ter o mesmo tamanho nos dois estágios"
+        "UBO must have the same size in both stages"
     );
-    // membros compartilhados no mesmo offset (g_Brightness existe no bloco unificado)
+    // shared members at the same offset (g_Brightness exists in the unified block)
     for shared in ["g_Brightness", "g_ModelViewProjectionMatrix"] {
         if let (Some(a), Some(b)) = (
             vr.uniform_offsets.get(shared),
             fr.uniform_offsets.get(shared),
         ) {
-            assert_eq!(a, b, "offset de {shared} deve bater entre vert e frag");
+            assert_eq!(a, b, "offset of {shared} must match between vert and frag");
         }
     }
-    // o bloco unificado tem tanto o membro do vertex quanto o do fragment
+    // the unified block has both the vertex member and the fragment member
     assert!(
         fr.uniform_offsets
             .contains_key("g_ModelViewProjectionMatrix")
     );
     assert!(fr.uniform_offsets.contains_key("g_Brightness"));
     eprintln!(
-        "UBO unificado: {} bytes, membros do frag: {:?}",
+        "Unified UBO: {} bytes, frag members: {:?}",
         fr.uniform_size, fr.uniform_offsets
     );
 }

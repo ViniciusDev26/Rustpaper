@@ -1,4 +1,4 @@
-// rustpaper-core: formatos do Wallpaper Engine. Cada módulo é independente de GPU/UI.
+// rustpaper-core: Wallpaper Engine formats. Each module is independent of the GPU/UI.
 pub mod effects;
 pub mod layout;
 pub mod mdl;

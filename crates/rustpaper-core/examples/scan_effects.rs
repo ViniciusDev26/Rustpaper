@@ -1,11 +1,13 @@
-// Varre um wallpaper: imprime o shader do fundo e, pra cada efeito do fundo, se é
-// SIMPLES (1 pass, sem FBO) ou complexo. Ajuda a achar cenas boas pra demo.
-// Uso: scan_effects <pasta-do-wallpaper>
+// Scans a wallpaper: prints the background shader and, for each background effect,
+// whether it is SIMPLE (1 pass, no FBO) or complex. Helps find good scenes for demos.
+// Usage: scan_effects <wallpaper-folder>
 use rustpaper_core::{effects, pkg::Pkg, scene};
 use std::path::Path;
 
 fn main() {
-    let dir = std::env::args().nth(1).expect("uso: scan_effects <pasta>");
+    let dir = std::env::args()
+        .nth(1)
+        .expect("usage: scan_effects <folder>");
     let Ok(pkg) = Pkg::open(Path::new(&dir).join("scene.pkg").as_path()) else {
         return;
     };
@@ -46,7 +48,7 @@ fn main() {
         }
     }
     println!(
-        "{}  bg={shader}  efeitos: {} (simple={simple} complex={complex})  {:?}",
+        "{}  bg={shader}  effects: {} (simple={simple} complex={complex})  {:?}",
         Path::new(&dir).file_name().unwrap().to_string_lossy(),
         fx.len(),
         kinds

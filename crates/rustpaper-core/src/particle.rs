@@ -1,50 +1,50 @@
-// Módulo `particle`: parseia um sistema de partículas do Wallpaper Engine
-// (particles/*.json) nos parâmetros que a simulação precisa. O formato tem
-// campos min/max que ora são escalares, ora vec3 em string ("x y z").
+// Module `particle`: parses a Wallpaper Engine particle system
+// (particles/*.json) into the parameters the simulation needs. The format has
+// min/max fields that are sometimes scalars and sometimes vec3 strings ("x y z").
 
 use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParticleSystem {
     pub max_count: u32,
-    pub material: String, // caminho do material (→ textura do sprite)
-    // Emissão
-    pub rate: f32, // partículas por segundo
+    pub material: String, // material path (→ sprite texture)
+    // Emission
+    pub rate: f32, // particles per second
     pub origin: [f32; 3],
     pub distance_min: f32,
     pub distance_max: f32,
-    // Inicialização (faixas aleatórias por partícula)
+    // Initialization (random ranges per particle)
     pub lifetime: (f32, f32),
     pub size: (f32, f32),
     pub velocity_min: [f32; 3],
     pub velocity_max: [f32; 3],
-    // turbulentvelocityrandom: velocidade inicial de MÓDULO aleatório numa DIREÇÃO
-    // aleatória (comum em bolhas/poeira). (speed_min, speed_max) — None se ausente.
+    // turbulentvelocityrandom: initial velocity with a random MAGNITUDE in a random
+    // DIRECTION (common for bubbles/dust). (speed_min, speed_max) — None if absent.
     pub turbulent_speed: Option<(f32, f32)>,
     pub color_min: [f32; 3],
     pub color_max: [f32; 3],
-    // Operadores
+    // Operators
     pub gravity: [f32; 3],
     pub drag: f32,
     pub fade_in_time: f32,
     pub oscillate: Option<Oscillate>,
     pub color_change: Option<ColorChange>,
-    // Metadados pro engine decidir se sabe renderizar (degradação graciosa):
+    // Metadata so the engine can decide whether it can render (graceful degradation):
     pub renderer: String,       // "sprite" | "spritetrail" | ...
-    pub operators: Vec<String>, // nomes dos operadores presentes
+    pub operators: Vec<String>, // names of the operators present
 }
 
-// oscillateposition: desloca a partícula num seno (balanço). Faixas por partícula.
+// oscillateposition: moves the particle along a sine (sway). Ranges per particle.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Oscillate {
-    pub mask: [f32; 3], // em quais eixos oscila
+    pub mask: [f32; 3], // which axes it oscillates on
     pub frequency: (f32, f32),
     pub phase: (f32, f32),
     pub scale: (f32, f32),
 }
 
-// colorchange: interpola a cor (0..1) entre start e end, entre start_time e end_time
-// (frações da vida).
+// colorchange: interpolates the color (0..1) from start to end, between start_time
+// and end_time (fractions of the lifetime).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColorChange {
     pub start_time: f32,
@@ -53,7 +53,7 @@ pub struct ColorChange {
     pub end: [f32; 3],
 }
 
-// "x y z" -> [x, y, z]. Aceita também número puro (replica nos 3).
+// "x y z" -> [x, y, z]. Also accepts a bare number (replicated to all 3).
 fn vec3(v: &Value) -> [f32; 3] {
     if let Some(s) = v.as_str() {
         let mut it = s
@@ -75,7 +75,7 @@ fn f32_of(v: &Value) -> f32 {
     v.as_f64().map(|n| n as f32).unwrap_or(0.0)
 }
 
-// Acha o primeiro item de um array cujo campo "name" bate.
+// Finds the first item of an array whose "name" field matches.
 fn find_named<'a>(arr: Option<&'a Value>, name: &str) -> Option<&'a Value> {
     arr?.as_array()?
         .iter()
@@ -93,7 +93,7 @@ impl ParticleSystem {
             .unwrap_or("")
             .to_string();
 
-        // Emitter (usamos o primeiro).
+        // Emitter (we use the first one).
         let emitter = root
             .get("emitter")
             .and_then(|e| e.as_array())
@@ -115,7 +115,7 @@ impl ParticleSystem {
             .map(f32_of)
             .unwrap_or(0.0);
 
-        // Initializers (por nome).
+        // Initializers (by name).
         let init = root.get("initializer");
         let (lt_min, lt_max) = min_max_scalar(find_named(init, "lifetimerandom"));
         let (sz_min, sz_max) = min_max_scalar(find_named(init, "sizerandom"));
@@ -166,7 +166,7 @@ impl ParticleSystem {
             end: c.get("endvalue").map(vec3).unwrap_or([1.0; 3]),
         });
 
-        // Renderer (primeiro) + nomes dos operadores.
+        // Renderer (first one) + operator names.
         let renderer = root
             .get("renderer")
             .and_then(|r| r.as_array())
@@ -233,7 +233,7 @@ fn min_max_vec3(item: Option<&Value>) -> ([f32; 3], [f32; 3]) {
 mod tests {
     use super::*;
 
-    // Fixture baseada na neve real do Wallpaper Engine (snowparticles.json).
+    // Fixture based on the real Wallpaper Engine snow (snowparticles.json).
     const SNOW: &str = r#"{
         "maxcount": 300,
         "material": "materials/presets/snowparticles.json",

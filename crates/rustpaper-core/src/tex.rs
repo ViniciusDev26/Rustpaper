@@ -1,24 +1,24 @@
-// Módulo `tex`: decodifica o formato de textura do Wallpaper Engine (.tex) pra
-// RGBA8. Formato (baseado no TextureParser do linux-wallpaperengine):
-//   "TEXV0005\0" "TEXI0001\0"  (magics de 9 bytes, null-terminated)
+// `tex` module: decodes the Wallpaper Engine texture format (.tex) to
+// RGBA8. Format (based on linux-wallpaperengine's TextureParser):
+//   "TEXV0005\0" "TEXI0001\0"  (9-byte magics, null-terminated)
 //   u32 format, u32 flags, u32 texWidth, u32 texHeight, u32 width, u32 height, u32 (ignore)
-//   "TEXB000x\0"  u32 imageCount   (+ FIF/mp4 nos TEXB0003/0004)
-//   por imagem: u32 mipmapCount; por mipmap: [extras TEXB0004] w, h,
-//     [TEXB0002+: compression, uncompressedSize] compressedSize, dados
-//   dados podem ser LZ4 (compression==1). Formato final vem de `format` ou, nos
-//   TEXB0003/0004, de uma imagem embutida (JPEG/PNG) decodificada pela crate image.
+//   "TEXB000x\0"  u32 imageCount   (+ FIF/mp4 in TEXB0003/0004)
+//   per image: u32 mipmapCount; per mipmap: [TEXB0004 extras] w, h,
+//     [TEXB0002+: compression, uncompressedSize] compressedSize, data
+//   data may be LZ4 (compression==1). The final format comes from `format` or, in
+//   TEXB0003/0004, from an embedded image (JPEG/PNG) decoded by the image crate.
 
-// Formatos que sabemos converter; o resto dá erro claro.
+// Formats we know how to convert; anything else gives a clear error.
 const FORMAT_ARGB8888: u32 = 0;
 const FORMAT_DXT5: u32 = 4; // BC3
 const FORMAT_DXT3: u32 = 6; // BC2
 const FORMAT_DXT1: u32 = 7; // BC1
-const FORMAT_RG88: u32 = 8; // 2 canais (R,G) — sprites com alpha no canal G
-const FORMAT_R8: u32 = 9; // 1 canal — máscara (luminância = alpha)
-const FIF_UNKNOWN: u32 = 0xFFFF_FFFF; // FreeImage: sem formato = -1
+const FORMAT_RG88: u32 = 8; // 2 channels (R,G) — sprites with alpha in the G channel
+const FORMAT_R8: u32 = 9; // 1 channel — mask (luminance = alpha)
+const FIF_UNKNOWN: u32 = 0xFFFF_FFFF; // FreeImage: no format = -1
 
-/// Sprite sheet (flipbook) de uma textura: N frames numa grade cols×rows. Muitas
-/// partículas do WE (bolhas, faíscas) animam por esses frames ao longo da vida.
+/// Sprite sheet (flipbook) of a texture: N frames in a cols×rows grid. Many
+/// WE particles (bubbles, sparks) animate through these frames over their lifetime.
 /// Sprite sheet stored INSIDE a .tex (block `TEXS000x` after the images), as
 /// used by Workshop particle sprites: `frames` cells of `frame_w`x`frame_h` px,
 /// laid out left-to-right, top-to-bottom over the image content.
@@ -163,8 +163,8 @@ pub struct SpriteSheet {
     pub rows: u32,
 }
 
-/// Lê o sprite sheet do JSON companheiro do .tex (`spritesheetsequences`), dado o
-/// tamanho da textura. Ex.: frames=64, cell 128×128 em 1024×1024 → 8×8.
+/// Reads the sprite sheet from the .tex's companion JSON (`spritesheetsequences`), given the
+/// texture size. E.g.: frames=64, cell 128×128 em 1024×1024 → 8×8.
 pub fn parse_spritesheet(tex_json: &str, tex_w: u32, tex_h: u32) -> Option<SpriteSheet> {
     let v: serde_json::Value = serde_json::from_str(tex_json).ok()?;
     let seq = v.get("spritesheetsequences")?.as_array()?.first()?;
@@ -180,9 +180,9 @@ pub fn parse_spritesheet(tex_json: &str, tex_w: u32, tex_h: u32) -> Option<Sprit
 }
 
 pub struct DecodedTexture {
-    pub width: u32, // dims do buffer decodificado (pode vir com padding)
+    pub width: u32, // dims of the decoded buffer (may come with padding)
     pub height: u32,
-    pub real_width: u32, // região "de conteúdo" (dims da imagem no header)
+    pub real_width: u32, // "content" region (image dims in the header)
     pub real_height: u32,
     pub rgba: Vec<u8>, // width*height*4
     /// Header flags: bit 0 = no interpolation (nearest filter), bit 1 = clamp UVs.
@@ -206,7 +206,7 @@ impl<'a> Cursor<'a> {
         self.pos += 4;
         Ok(u32::from_le_bytes(b.try_into().unwrap()))
     }
-    // Magic de 9 bytes (8 chars + null). Confere os 8 primeiros.
+    // 9-byte magic (8 chars + null). Checks the first 8.
     fn magic8(&mut self) -> Result<String, String> {
         let b = self.data.get(self.pos..self.pos + 9).ok_or("EOF (magic)")?;
         self.pos += 9;
@@ -216,7 +216,7 @@ impl<'a> Cursor<'a> {
         while *self.data.get(self.pos).ok_or("EOF (str)")? != 0 {
             self.pos += 1;
         }
-        self.pos += 1; // pula o \0
+        self.pos += 1; // skips the \0
         Ok(())
     }
     fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
@@ -247,17 +247,17 @@ pub fn parse_image(data: &[u8], index: u32) -> Result<DecodedTexture, String> {
     // --- header ---
     let v = c.magic8()?;
     if v != "TEXV0005" {
-        return Err(format!("container inesperado: {v:?}"));
+        return Err(format!("unexpected container: {v:?}"));
     }
     let vi = c.magic8()?;
     if vi != "TEXI0001" {
-        return Err(format!("sub-container inesperado: {vi:?}"));
+        return Err(format!("unexpected sub-container: {vi:?}"));
     }
     let format = c.u32()?;
     let flags = c.u32()?;
     let _tex_w = c.u32()?;
     let _tex_h = c.u32()?;
-    let width = c.u32()?; // dims reais da imagem
+    let width = c.u32()?; // real image dims
     let height = c.u32()?;
     let _ignore = c.u32()?;
 
@@ -275,7 +275,7 @@ pub fn parse_image(data: &[u8], index: u32) -> Result<DecodedTexture, String> {
             free_image_format = c.u32()?;
         }
         "TEXB0002" | "TEXB0001" => {}
-        other => return Err(format!("container de bitmap desconhecido: {other:?}")),
+        other => return Err(format!("unknown bitmap container: {other:?}")),
     }
     let has_comp_fields = matches!(container.as_str(), "TEXB0004" | "TEXB0003" | "TEXB0002");
     let is_texb0004 = container == "TEXB0004";
@@ -309,7 +309,7 @@ pub fn parse_image(data: &[u8], index: u32) -> Result<DecodedTexture, String> {
     if is_texb0004 && is_mp4 {
         let _ = c.u32()?;
         let _ = c.u32()?;
-        c.null_string()?; // json do editor
+        c.null_string()?; // editor json
         let _ = c.u32()?;
     }
     let mip_w = c.u32()?;
@@ -326,20 +326,20 @@ pub fn parse_image(data: &[u8], index: u32) -> Result<DecodedTexture, String> {
         uncompressed_size = compressed_size;
     }
 
-    // bytes do mipmap (descomprimidos se LZ4)
+    // mipmap bytes (decompressed if LZ4)
     let raw = if compression == 1 {
         let comp = c.take(compressed_size as usize)?;
         lz4_flex::block::decompress(comp, uncompressed_size as usize)
-            .map_err(|e| format!("falha LZ4: {e}"))?
+            .map_err(|e| format!("LZ4 failure: {e}"))?
     } else {
         c.take(uncompressed_size as usize)?.to_vec()
     };
 
-    // --- converte pra RGBA ---
-    // Caso free-image (JPEG/PNG embutido): a crate image decodifica.
+    // --- convert to RGBA ---
+    // Free-image case (embedded JPEG/PNG): the image crate decodes it.
     if free_image_format != FIF_UNKNOWN {
         let img = image::load_from_memory(&raw)
-            .map_err(|e| format!("falha ao decodificar imagem embutida: {e}"))?
+            .map_err(|e| format!("failed to decode embedded image: {e}"))?
             .to_rgba8();
         let (w, h) = img.dimensions();
         return Ok(DecodedTexture {
@@ -368,11 +368,11 @@ pub fn parse_image(data: &[u8], index: u32) -> Result<DecodedTexture, String> {
     };
 
     match format {
-        // ARGB8888: apesar do nome, os bytes já estão em RGBA (o WE faz upload como
-        // GL_RGBA, não GL_BGRA) — sem troca de canais.
+        // ARGB8888: despite the name, the bytes are already RGBA (WE uploads as
+        // GL_RGBA, not GL_BGRA) — no channel swap.
         FORMAT_ARGB8888 => make(raw),
-        // RG88: 2 bytes/pixel. WE guarda a luminância em R e o alpha em G. Expande
-        // pra rgb = R (cinza, a cor vem do tint da partícula) e a = G.
+        // RG88: 2 bytes/pixel. WE stores luminance in R and alpha in G. Expands
+        // to rgb = R (gray, the color comes from the particle tint) and a = G.
         FORMAT_RG88 => {
             let mut rgba = Vec::with_capacity(raw.len() * 2);
             for px in raw.as_chunks::<2>().0 {
@@ -380,7 +380,7 @@ pub fn parse_image(data: &[u8], index: u32) -> Result<DecodedTexture, String> {
             }
             make(rgba)
         }
-        // R8: 1 byte/pixel, usado como máscara (luminância = alpha).
+        // R8: 1 byte/pixel, used as a mask (luminance = alpha).
         FORMAT_R8 => {
             let mut rgba = Vec::with_capacity(raw.len() * 4);
             for &r in &raw {
@@ -388,7 +388,7 @@ pub fn parse_image(data: &[u8], index: u32) -> Result<DecodedTexture, String> {
             }
             make(rgba)
         }
-        // DXT/BC (S3TC): blocos 4x4 comprimidos -> RGBA via texpresso.
+        // DXT/BC (S3TC): compressed 4x4 blocks -> RGBA via texpresso.
         FORMAT_DXT1 | FORMAT_DXT3 | FORMAT_DXT5 => {
             let bc = match format {
                 FORMAT_DXT1 => texpresso::Format::Bc1,
@@ -400,7 +400,7 @@ pub fn parse_image(data: &[u8], index: u32) -> Result<DecodedTexture, String> {
             make(rgba)
         }
         other => Err(format!(
-            "formato de textura {other} ainda não suportado (ARGB8888/RG88/R8/DXT/free-image)"
+            "texture format {other} not supported yet (ARGB8888/RG88/R8/DXT/free-image)"
         )),
     }
 }

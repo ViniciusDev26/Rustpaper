@@ -1,15 +1,15 @@
-// Prova da CADEIA DE EFEITOS (offscreen): renderiza o fundo de uma cena e depois
-// aplica um efeito do WE (tint) por cima, cada etapa como um `postprocess::Pass`
-// que amostra a textura anterior. Salva PNG pra eu verificar.
+// EFFECT CHAIN proof (offscreen): renders a scene's background and then
+// applies a WE effect (tint) on top, each stage as a `postprocess::Pass`
+// that samples the previous texture. Saves a PNG so I can verify it.
 //
-//   fundo (genericimage2) -> texA
-//   tint (BLENDMODE=2 multiply, cor vermelha) amostra texA -> texB -> PNG
+//   background (genericimage2) -> texA
+//   tint (BLENDMODE=2 multiply, red color) samples texA -> texB -> PNG
 //
-// O tint multiplica a imagem (cinza do Zoro) pela cor -> deve sair NITIDAMENTE
-// avermelhado, provando que o passe de efeito amostra o quadro anterior e aplica o
-// fragment shader real do efeito.
+// The tint multiplies the image (Zoro's gray) by the color -> it should come out CLEARLY
+// reddish, proving that the effect pass samples the previous frame and applies the
+// real effect fragment shader.
 //
-// Uso: cargo run -p rustpaper-engine --example render_effect -- <pasta-do-wallpaper> [saida.png]
+// Usage: cargo run -p rustpaper-engine --example render_effect -- <wallpaper-dir> [out.png]
 
 use std::path::Path;
 
@@ -24,7 +24,7 @@ fn align256(n: u32) -> u32 {
     (n + 255) & !255
 }
 
-// escreve um f32 no offset (se o membro existir na reflexão)
+// writes an f32 at the offset (if the member exists in the reflection)
 fn put_f32(buf: &mut [u8], refl: &Reflection, name: &str, v: f32) {
     if let Some(&o) = refl.uniform_offsets.get(name) {
         buf[o as usize..o as usize + 4].copy_from_slice(&v.to_le_bytes());
@@ -62,7 +62,7 @@ fn make_target(device: &wgpu::Device, w: u32, h: u32) -> wgpu::Texture {
 fn main() {
     let dir = std::env::args()
         .nth(1)
-        .expect("uso: render_effect <pasta-do-wallpaper> [saida.png]");
+        .expect("usage: render_effect <wallpaper-dir> [out.png]");
     let out_png = std::env::args()
         .nth(2)
         .unwrap_or_else(|| "/tmp/render_effect.png".into());
@@ -70,12 +70,12 @@ fn main() {
         std::env::var("WE_SHADERS_DIR").unwrap_or_else(|_| "/home/vscode/we-assets/shaders".into());
     let sd = Path::new(&shaders_dir);
 
-    // --- fundo da cena ---
+    // --- scene background ---
     let pkg = Pkg::open(Path::new(&dir).join("scene.pkg").as_path()).expect("scene.pkg");
-    let material = scene::background_material(&pkg).expect("material de fundo");
-    let tex_path = scene::background_texture(&pkg).expect("textura de fundo");
-    let tex_bytes = pkg.read(&tex_path).expect("ler .tex");
-    let decoded = tex::parse(tex_bytes).expect("decodificar .tex");
+    let material = scene::background_material(&pkg).expect("background material");
+    let tex_path = scene::background_texture(&pkg).expect("background texture");
+    let tex_bytes = pkg.read(&tex_path).expect("read .tex");
+    let decoded = tex::parse(tex_bytes).expect("decode .tex");
     let (cw, ch) = (decoded.real_width, decoded.real_height);
     let mut content = vec![0u8; (cw * ch * 4) as usize];
     for y in 0..ch {
@@ -102,7 +102,7 @@ fn main() {
     });
     let fmt = wgpu::TextureFormat::Rgba8Unorm;
 
-    // textura de entrada = conteúdo decodificado
+    // input texture = decoded content
     let in_tex = make_target(&device, cw, ch);
     queue.write_texture(
         wgpu::TexelCopyTextureInfo {
@@ -125,12 +125,12 @@ fn main() {
     );
     let in_view = in_tex.create_view(&Default::default());
 
-    // ---- Passe 1: material de fundo (genericimage2, v_TexCoord vec2) ----
+    // ---- Pass 1: background material (genericimage2, v_TexCoord vec2) ----
     let bg_frag = std::fs::read_to_string(format!("{shaders_dir}/{}.frag", material.shader))
         .expect("bg .frag");
     let bg_spirv = shader_compile::compile(Stage::Fragment, &bg_frag, &material.combos, sd)
-        .expect("compilar fundo");
-    let bg_refl = shader_compile::reflect(&bg_spirv).expect("refletir fundo");
+        .expect("compile background");
+    let bg_refl = shader_compile::reflect(&bg_spirv).expect("reflect background");
     let bg_pass = Pass::new(&device, &bg_spirv, &bg_refl, fmt, false);
     let mut bg_ubo = vec![0u8; bg_pass.ubo_size() as usize];
     put_f32(&mut bg_ubo, &bg_refl, "g_Brightness", 1.0);
@@ -140,21 +140,21 @@ fn main() {
     let view_a = tex_a.create_view(&Default::default());
     bg_pass.render(&device, &queue, &in_view, &sampler, &bg_ubo, &view_a);
 
-    // ---- Passe 2: efeito tint (BLENDMODE=2 multiply; v_TexCoord vec4) ----
+    // ---- Pass 2: tint effect (BLENDMODE=2 multiply; v_TexCoord vec4) ----
     let tint_path = "/home/vscode/we-assets/effects/tint/shaders/effects/tint.frag";
     let tint_frag = std::fs::read_to_string(tint_path).expect("tint.frag");
     let tint_combos = vec![("BLENDMODE".to_string(), 2i64)]; // multiply
     let tint_spirv = shader_compile::compile(Stage::Fragment, &tint_frag, &tint_combos, sd)
-        .expect("compilar tint");
-    let tint_refl = shader_compile::reflect(&tint_spirv).expect("refletir tint");
+        .expect("compile tint");
+    let tint_refl = shader_compile::reflect(&tint_spirv).expect("reflect tint");
     println!(
-        "tint reflection: ubo={} membros={:?} tex={:?}",
+        "tint reflection: ubo={} members={:?} tex={:?}",
         tint_refl.uniform_size, tint_refl.uniform_offsets, tint_refl.texture_bindings
     );
     let tint_pass = Pass::new(&device, &tint_spirv, &tint_refl, fmt, true);
     let mut tint_ubo = vec![0u8; tint_pass.ubo_size() as usize];
     put_f32(&mut tint_ubo, &tint_refl, "g_BlendAlpha", 1.0);
-    put_vec3(&mut tint_ubo, &tint_refl, "g_TintColor", [1.0, 0.35, 0.35]); // vermelho
+    put_vec3(&mut tint_ubo, &tint_refl, "g_TintColor", [1.0, 0.35, 0.35]); // red
 
     let tex_b = make_target(&device, cw, ch);
     let view_b = tex_b.create_view(&Default::default());
@@ -202,5 +202,5 @@ fn main() {
         pixels[d..d + (cw * 4) as usize].copy_from_slice(&data[s..s + (cw * 4) as usize]);
     }
     image::save_buffer(&out_png, &pixels, cw, ch, image::ColorType::Rgba8).unwrap();
-    println!("PNG salvo em {out_png} ({cw}x{ch}) — fundo + tint");
+    println!("PNG saved to {out_png} ({cw}x{ch}) — background + tint");
 }

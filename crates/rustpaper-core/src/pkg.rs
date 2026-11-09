@@ -1,14 +1,14 @@
-// Módulo `pkg`: lê o formato de arquivo do Wallpaper Engine (scene.pkg, "PKGV").
-// É um arquivo-diretório: header + lista de entradas + blob de dados.
+// Module `pkg`: reads the Wallpaper Engine archive format (scene.pkg, "PKGV").
+// It is a directory-style archive: header + entry list + data blob.
 //
 // Layout (little-endian):
-//   [u32 len][bytes]            versão (sized string, começa com "PKGV")
+//   [u32 len][bytes]            version (sized string, starts with "PKGV")
 //   [u32 filesCount]
 //   filesCount x:
-//     [u32 len][bytes]          nome do arquivo (sized string)
-//     [u32 offset]              deslocamento do dado, relativo ao base
-//     [u32 length]              tamanho do dado
-//   <base_offset = aqui>        início do blob; dado i em [base+offset, +length]
+//     [u32 len][bytes]          file name (sized string)
+//     [u32 offset]              data offset, relative to the base
+//     [u32 length]              data length
+//   <base_offset = here>        start of the blob; data i at [base+offset, +length]
 
 use std::path::Path;
 
@@ -24,7 +24,7 @@ pub struct Pkg {
     entries: Vec<Entry>,
 }
 
-// Leitor sequencial simples sobre um &[u8] (cursor + helpers little-endian).
+// Simple sequential reader over a &[u8] (cursor + little-endian helpers).
 struct Cursor<'a> {
     data: &'a [u8],
     pos: usize,
@@ -37,7 +37,7 @@ impl<'a> Cursor<'a> {
         Some(u32::from_le_bytes(bytes.try_into().unwrap()))
     }
 
-    // "sized string": um u32 com o tamanho, seguido dos bytes.
+    // "sized string": a u32 with the length, followed by the bytes.
     fn sized_string(&mut self) -> Option<String> {
         let len = self.u32()? as usize;
         let bytes = self.data.get(self.pos..self.pos + len)?;
@@ -52,7 +52,7 @@ impl Pkg {
         Pkg::parse(data).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
 
-    // Parse PURO (bytes -> índice). Não toca em disco -> testável.
+    // PURE parse (bytes -> index). Does not touch the disk -> testable.
     pub fn parse(data: Vec<u8>) -> Result<Pkg, String> {
         let mut c = Cursor {
             data: &data,
@@ -64,14 +64,12 @@ impl Pkg {
             return Err(format!("header inesperado: {version:?} (esperava PKGV*)"));
         }
 
-        let count = c.u32().ok_or("contagem de arquivos ausente")?;
+        let count = c.u32().ok_or("file count missing")?;
         let mut entries = Vec::with_capacity(count as usize);
         for i in 0..count {
-            let name = c
-                .sized_string()
-                .ok_or(format!("nome do arquivo {i} ausente"))?;
-            let offset = c.u32().ok_or(format!("offset do arquivo {i} ausente"))?;
-            let length = c.u32().ok_or(format!("length do arquivo {i} ausente"))?;
+            let name = c.sized_string().ok_or(format!("file name {i} missing"))?;
+            let offset = c.u32().ok_or(format!("offset of file {i} missing"))?;
+            let length = c.u32().ok_or(format!("length of file {i} missing"))?;
             entries.push(Entry {
                 name,
                 offset,
@@ -87,12 +85,12 @@ impl Pkg {
         })
     }
 
-    // Nomes dos arquivos contidos no pacote.
+    // Names of the files contained in the package.
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.entries.iter().map(|e| e.name.as_str())
     }
 
-    // Bytes de um arquivo pelo nome (None se não existe ou está fora dos limites).
+    // Bytes of a file by name (None if it does not exist or is out of bounds).
     pub fn read(&self, name: &str) -> Option<&[u8]> {
         let e = self.entries.iter().find(|e| e.name == name)?;
         let start = self.base_offset + e.offset as usize;
@@ -105,19 +103,19 @@ impl Pkg {
 mod tests {
     use super::*;
 
-    // Monta um .pkg mínimo em memória com um arquivo "a.txt" = "hello".
+    // Builds a minimal .pkg in memory with one file "a.txt" = "hello".
     fn build_minimal_pkg() -> Vec<u8> {
         let mut b = Vec::new();
         let sized = |b: &mut Vec<u8>, s: &str| {
             b.extend_from_slice(&(s.len() as u32).to_le_bytes());
             b.extend_from_slice(s.as_bytes());
         };
-        sized(&mut b, "PKGV0001"); // versão
-        b.extend_from_slice(&1u32.to_le_bytes()); // 1 arquivo
-        sized(&mut b, "a.txt"); // nome
+        sized(&mut b, "PKGV0001"); // version
+        b.extend_from_slice(&1u32.to_le_bytes()); // 1 file
+        sized(&mut b, "a.txt"); // name
         b.extend_from_slice(&0u32.to_le_bytes()); // offset 0
         b.extend_from_slice(&5u32.to_le_bytes()); // length 5
-        b.extend_from_slice(b"hello"); // blob de dados
+        b.extend_from_slice(b"hello"); // data blob
         b
     }
 
@@ -136,7 +134,7 @@ mod tests {
 
     #[test]
     fn rejects_bad_header() {
-        // "XXXX" não começa com PKGV.
+        // "XXXX" does not start with PKGV.
         let mut b = Vec::new();
         b.extend_from_slice(&4u32.to_le_bytes());
         b.extend_from_slice(b"XXXX");
@@ -145,7 +143,7 @@ mod tests {
 
     #[test]
     fn two_files_with_offsets() {
-        // Verifica que offsets relativos ao base apontam pro pedaço certo do blob.
+        // Checks that offsets relative to the base point to the right slice of the blob.
         let mut b = Vec::new();
         let sized = |b: &mut Vec<u8>, s: &str| {
             b.extend_from_slice(&(s.len() as u32).to_le_bytes());
