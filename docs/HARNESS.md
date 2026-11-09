@@ -127,6 +127,13 @@ compare the zoomed motion maps and measure sizes/brightness of features.
 | Ayanami Rei 3571376089 | 10 particle systems, hierarchy | 0.958 | 0.738 |
 | Akame ga Kill 1827211233 | fog/fire particles, children | 0.957 | 0.553 |
 
+## Pending work (`harness/pending.sh`)
+
+Captures that could not run (locked session) are queued: contaminated scenes
+in `harness-out/recapture_after_unlock.txt`, the second particle
+calibration round, then a full re-render and `score.py`. Run it with the
+session unlocked.
+
 ## Batch and report
 
 `batch.sh` runs every `scene` wallpaper of the Steam Workshop folder and the
