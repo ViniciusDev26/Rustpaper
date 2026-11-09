@@ -79,6 +79,10 @@ steam -applaunch 431960`. After a crash WE shows a "Safe Start" dialog; the
 
 ## What the comparison measures
 
+Desktop notifications pop up in the top-right corner of every output,
+including the headless one; that corner (460x64 px under the bar) is blacked
+out on both sides before comparing.
+
 WE's clock can't be controlled, so per-frame diffs are meaningless for
 animated scenes. Instead (top 32 px ignored: the desktop bar is drawn on the
 headless output):
