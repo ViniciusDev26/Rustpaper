@@ -67,8 +67,20 @@ render_and_compare() { # <id> <dir> <out> <title>
     rm -f "$o/row.tsv"
     RUSTPAPER_CLOCK=$(capture_clock "$o" "$secs") \
         "$bin" "$dir" --out "$o/rp.png" --time 10 --screen 1920x1080 2>"$o/rp_warnings.txt" || true
-    if ! RUSTPAPER_CLOCK=$(capture_clock "$o" "$secs") \
-        "$bin" "$dir" --video "$o/rp.mp4" --duration "$secs" --fps 30 --screen 1920x1080 --start "$(capture_time "$o")" --pointer "$(capture_pointer "$o")" $(capture_audio "$o") 2>>"$o/rp_warnings.txt"; then
+    # With many parallel jobs the GL driver occasionally hands out a context
+    # whose entry points are null and the render segfaults (2026-11-09: 11 of
+    # 124 at BATCH_JOBS=6, none when re-run): retry once when killed by a signal.
+    render_video() {
+        RUSTPAPER_CLOCK=$(capture_clock "$o" "$secs") \
+            "$bin" "$dir" --video "$o/rp.mp4" --duration "$secs" --fps 30 --screen 1920x1080 --start "$(capture_time "$o")" --pointer "$(capture_pointer "$o")" $(capture_audio "$o") 2>>"$o/rp_warnings.txt"
+    }
+    local rc=0
+    render_video || rc=$?
+    if [ "$rc" -gt 128 ]; then
+        echo "  render of $id died with signal $((rc - 128)): retrying"
+        rc=0; render_video || rc=$?
+    fi
+    if [ "$rc" -ne 0 ]; then
         echo "  render failed: $id"
         printf '%s\t\t\t\t\t\tERROR\t%s\n' "$id" "$title" > "$o/row.tsv"
         return
