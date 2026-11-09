@@ -19,6 +19,7 @@ ensure_headless
 user_focus=$(hyprctl activewindow -j | python3 -c "import json,sys; d = json.load(sys.stdin); print('' if d.get('workspace', {}).get('name') == 'rpref' else d.get('address', ''))") # WE's new window grabs focus: give it back
 user_monitor=$(focused_monitor); export PARK_MONITOR=$user_monitor
 open_window() {
+    t_open=$(date +%s.%N)
     we_control -control openWallpaper -file "$(wine_path "$project")" \
         -playInWindow "$title" -width 1920 -height 1080
     addr=""
@@ -48,6 +49,10 @@ lum=$(ffmpeg -v error -i "$out/we.png" -vf "scale=1:1:flags=area,format=gray" -f
 # Video: grab frames as fast as the output refreshes, keep real timestamps,
 # then resample to 30 fps CFR so it lines up with rustpaper-render --fps 30.
 date -Iseconds > "$out/we_start.txt"
+# Seconds WE's scene clock has run when recording starts (it opens the
+# wallpaper fresh): Rustpaper renders from the same time so time-driven
+# animations (puppets, paths, pulses) are in phase.
+python3 -c "import sys,time; print(f'{time.time() - float(sys.argv[1]):.2f}')" "$t_open" > "$out/we_time.txt"
 frames="$out/.frames"; rm -rf "$frames"; mkdir -p "$frames"
 end=$(( $(date +%s%N) + secs * 1000000000 )); n=0
 while [ "$(date +%s%N)" -lt "$end" ]; do

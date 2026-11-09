@@ -159,6 +159,10 @@ capture_clock() { # capture_clock <capture dir> <seconds>
     else date -Iseconds -d "@$(( $(stat -c %Y "$1/we.mp4") - ${2:-8} - 2 ))"; fi
 }
 
+# Scene time at the start of a WE capture (see we-capture.sh); captures made
+# before it was recorded used a 6 s warm-up.
+capture_time() { cat "$1/we_time.txt" 2>/dev/null || echo 6; }
+
 close_window() { hyprctl dispatch "hl.dsp.window.close({ window = 'address:$1' })" >/dev/null 2>&1 || true; }
 # refocus <window address> [monitor]: back to the user's window, or at least
 # their monitor when nothing was focused (empty workspace).

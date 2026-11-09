@@ -97,12 +97,12 @@ Clocks: `we-capture.sh` stores the capture start in `we_start.txt`; the
 renders run with `RUSTPAPER_CLOCK=<that time>` so clock/date texts show the
 same time as the capture (older captures fall back to the video's mtime).
 
-Rustpaper's video starts at t = 10 s (`--start 10`) because WE has been running
-for a while when its capture starts: particles are compared at steady state.
-Audio: WE hears the real system audio while capturing (whatever is
-playing), Rustpaper renders silence. Audio visualizers (02-raindrops
-3050160027) therefore move in WE and not in Rustpaper; capture with nothing
-playing to compare them.
+Rustpaper's video starts at the scene time WE had reached when its recording
+started (`we_time.txt`: open command -> first frame, ~6-7 s; 6 s for older
+captures). WE opens the wallpaper fresh for every capture, so this puts
+time-driven animations in phase: starting at a fixed 10 s instead cost
+Painting the Sharks 2468489223 0.966 -> 0.945, wlop sky2 2900431360
+0.975 -> 0.928, Dome 3113287126 0.949 -> 0.897.
 
 Parallax: WE's window never sees the cursor during a capture; scenes with
 `cameraparallax` behave as if the pointer sat near the bottom edge (see
