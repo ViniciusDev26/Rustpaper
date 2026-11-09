@@ -108,6 +108,8 @@ struct Layer {
     brightness: f32,
     /// Keyframed properties (timeline animations), applied every frame.
     anim: Option<LayerAnim>,
+    /// Animated image (GIF scenes, `spritesheet` combo): frames over images.
+    flipbook: Option<Flipbook>,
     material: Pass,
     /// Puppet warp: skeletal animation + its mesh (replaces the quad).
     puppet: Option<(crate::puppet::PuppetRt, crate::gpu::MeshGpu)>,
@@ -214,6 +216,9 @@ pub struct SceneRenderer {
 
     /// Human-readable problems found while loading/rendering (deduplicated).
     pub warnings: Vec<String>,
+    /// The scene's animated image asks for no interpolation (pixel art):
+    /// scale the frame to the screen with nearest filtering.
+    pub pixelated: bool,
     /// Debug: when set, every intermediate layer/effect target of the next
     /// `render` is written here as PNG (see `rustpaper-render --dump-passes`).
     pub dump_dir: Option<std::path::PathBuf>,
@@ -269,8 +274,29 @@ impl SceneRenderer {
             .get("orthogonalprojection")
             .cloned()
             .unwrap_or_default();
-        let width = proj.get("width").and_then(|v| v.as_u64()).unwrap_or(1920) as u32;
-        let height = proj.get("height").and_then(|v| v.as_u64()).unwrap_or(1080) as u32;
+        // `"auto": true` (GIF scenes): the scene is the size of its image,
+        // which sits centered (origin = size / 2).
+        let auto_size = scene
+            .get("objects")
+            .and_then(|o| o.as_array())
+            .and_then(|objs| {
+                objs.iter()
+                    .find(|o| o.get("image").is_some_and(|i| i.is_string()))
+            })
+            .map(|o| value::get_vec3(o, "origin", [960.0, 540.0, 0.0]))
+            .filter(|o| o[0] > 0.0 && o[1] > 0.0)
+            .map(|o| ((o[0] * 2.0).round() as u64, (o[1] * 2.0).round() as u64));
+        let auto = value::get_bool(&proj, "auto", false);
+        let width = proj
+            .get("width")
+            .and_then(|v| v.as_u64())
+            .or(auto_size.filter(|_| auto).map(|s| s.0))
+            .unwrap_or(1920) as u32;
+        let height = proj
+            .get("height")
+            .and_then(|v| v.as_u64())
+            .or(auto_size.filter(|_| auto).map(|s| s.1))
+            .unwrap_or(1080) as u32;
         let cc = value::get_vec3(&general, "clearcolor", [0.0, 0.0, 0.0]);
         let hdr = value::get_bool(&general, "hdr", false);
 
@@ -309,6 +335,7 @@ impl SceneRenderer {
             composites: HashMap::new(),
             pool: HashMap::new(),
             warnings: Vec::new(),
+            pixelated: false,
             worlds: HashMap::new(),
             parallax: Parallax::from_general(&general),
             dump_dir: None,
@@ -527,6 +554,7 @@ impl SceneRenderer {
             }
         }
         let material = self.resolve_pass(gl, pass_json, None, &[], &extra_combos, false)?;
+        let flipbook = self.load_flipbook(gl, pass_json);
 
         let (w, h) = (self.width as f32, self.height as f32);
         let first_tex = material.slots.iter().find_map(|(n, s)| match s {
@@ -565,6 +593,7 @@ impl SceneRenderer {
             alpha: value::get_f32(obj, "alpha", 1.0),
             brightness: value::get_f32(obj, "brightness", 1.0),
             anim: LayerAnim::parse(obj, self.world_of(obj)),
+            flipbook,
             material,
             puppet,
             composite,
@@ -793,6 +822,38 @@ impl SceneRenderer {
         })();
         self.sources.insert(name.to_string(), src.clone());
         src
+    }
+
+    /// Flipbook of an image material with the `spritesheet` combo: every image
+    /// of its .tex plus the frame list of the embedded `TEXS` block.
+    fn load_flipbook(&mut self, gl: &glow::Context, pass_json: &Value) -> Option<Flipbook> {
+        let combos = pass_json.get("combos")?;
+        let on = ["spritesheet", "SPRITESHEET"]
+            .iter()
+            .any(|k| combos.get(k).and_then(|v| v.as_i64()).unwrap_or(0) != 0);
+        if !on {
+            return None;
+        }
+        let name = pass_json.get("textures")?.get(0)?.as_str()?.to_string();
+        let bytes = self.assets.read(&format!("materials/{name}.tex"))?;
+        let frames = rustpaper_core::tex::sheet_frames(&bytes)?;
+        let mut images = Vec::new();
+        for i in 0..rustpaper_core::tex::image_count(&bytes).max(1) {
+            match rustpaper_core::tex::parse_image(&bytes, i) {
+                // the header size is one FRAME; each image is a whole atlas
+                Ok(mut d) => {
+                    self.pixelated |= d.flags & 1 != 0;
+                    d.real_width = d.width;
+                    d.real_height = d.height;
+                    images.push(upload_texture(gl, &d));
+                }
+                Err(e) => {
+                    self.warn(format!("materials/{name}.tex image {i}: {e}"));
+                    break;
+                }
+            }
+        }
+        (frames.len() > 1 && !images.is_empty()).then_some(Flipbook { images, frames })
     }
 
     fn texture(&mut self, gl: &glow::Context, name: &str) -> Tex {
@@ -1467,8 +1528,24 @@ impl SceneRenderer {
         prog.set(gl, "g_EyePosition", &[sw / 2.0, sh / 2.0, 1.0]);
         prog.set(gl, "g_LightAmbientColor", &self.ambient);
         prog.set(gl, "g_LightSkylightColor", &self.skylight);
-        prog.set(gl, "g_Texture0Rotation", &[1.0, 0.0, 0.0, 1.0]);
-        prog.set(gl, "g_Texture0Translation", &[0.0, 0.0]);
+        let flip = is_material
+            .then(|| self.layers[call.layer].flipbook.as_ref())
+            .flatten()
+            .and_then(|fb| fb.at(f.time));
+        match flip {
+            Some((tex, rot, tr)) => {
+                prog.set(gl, "g_Texture0Rotation", &rot);
+                prog.set(gl, "g_Texture0Translation", &tr);
+                unsafe {
+                    gl.active_texture(glow::TEXTURE0);
+                    gl.bind_texture(glow::TEXTURE_2D, Some(tex.id));
+                }
+            }
+            None => {
+                prog.set(gl, "g_Texture0Rotation", &[1.0, 0.0, 0.0, 1.0]);
+                prog.set(gl, "g_Texture0Translation", &[0.0, 0.0]);
+            }
+        }
         prog.set(gl, "g_Alpha", &[1.0]);
         prog.set(gl, "g_UserAlpha", &[1.0]);
         prog.set(gl, "g_Brightness", &[1.0]);
@@ -2341,6 +2418,47 @@ impl LayerAnim {
             let scale = v3(&self.scale, s);
             *world = math::mul(&self.parent, &math::model(origin, angle, scale));
         }
+    }
+}
+
+/// Animated image layer (GIF scenes): frames spread over several images.
+struct Flipbook {
+    images: Vec<Tex>,
+    frames: Vec<rustpaper_core::tex::SheetFrame>,
+}
+
+impl Flipbook {
+    /// Texture, `g_Texture0Rotation` (u and v axes of the frame in uv) and
+    /// `g_Texture0Translation` (its corner) at `time`, looping.
+    fn at(&self, time: f32) -> Option<(Tex, [f32; 4], [f32; 2])> {
+        let total: f32 = self.frames.iter().map(|f| f.duration.max(0.0)).sum();
+        let mut t = if total > 0.0 {
+            time.rem_euclid(total)
+        } else {
+            0.0
+        };
+        let frame = self
+            .frames
+            .iter()
+            .find(|f| {
+                if t < f.duration {
+                    true
+                } else {
+                    t -= f.duration;
+                    false
+                }
+            })
+            .or(self.frames.last())?;
+        let tex = *self
+            .images
+            .get(frame.image as usize)
+            .or(self.images.first())?;
+        let (w, h) = (tex.width.max(1) as f32, tex.height.max(1) as f32);
+        Some((
+            tex,
+            [frame.w / w, 0.0, 0.0, frame.h / h],
+            [frame.x / w, frame.y / h],
+        ))
     }
 }
 

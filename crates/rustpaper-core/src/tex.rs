@@ -105,6 +105,57 @@ pub fn embedded_sheet(data: &[u8]) -> Option<EmbeddedSheet> {
     })
 }
 
+/// One frame of an embedded flipbook: which image of the .tex, how long it
+/// shows, and its rectangle in texels.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SheetFrame {
+    pub image: u32,
+    pub duration: f32,
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+/// Frames of the embedded `TEXS` block. Layouts (all little endian):
+///   TEXS0001: u32 count; per frame u32 image, f32 duration, u32 x, u32 y,
+///             u32 w, u32, u32, u32 h   (integers; GIF scenes)
+///   TEXS0002: u32 count; per frame u32 image, f32 duration, f32 x, f32 y,
+///             f32 w, f32, f32, f32 h
+///   TEXS0003: u32 count, u32 w, u32 h; frames as in 0002
+pub fn sheet_frames(data: &[u8]) -> Option<Vec<SheetFrame>> {
+    let at = data.windows(5).rposition(|w| w == b"TEXS0")?;
+    let mut c = Cursor { data, pos: at };
+    let magic = c.magic8().ok()?;
+    let count = c.u32().ok()?;
+    if magic == "TEXS0003" {
+        c.u32().ok()?;
+        c.u32().ok()?;
+    }
+    let ints = magic == "TEXS0001";
+    let mut out = Vec::new();
+    for _ in 0..count.min(100_000) {
+        let rec = c.take(32).ok()?;
+        let u = |i: usize| u32::from_le_bytes(rec[i * 4..i * 4 + 4].try_into().unwrap());
+        let f = |i: usize| {
+            if ints {
+                u(i) as f32
+            } else {
+                f32::from_bits(u(i))
+            }
+        };
+        out.push(SheetFrame {
+            image: u(0),
+            duration: f32::from_bits(u(1)),
+            x: f(2),
+            y: f(3),
+            w: f(4),
+            h: f(7),
+        });
+    }
+    (!out.is_empty()).then_some(out)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SpriteSheet {
     pub frames: u32,
@@ -176,6 +227,21 @@ impl<'a> Cursor<'a> {
 }
 
 pub fn parse(data: &[u8]) -> Result<DecodedTexture, String> {
+    parse_image(data, 0)
+}
+
+/// Number of images in the .tex (GIF flipbooks spread frames over several).
+pub fn image_count(data: &[u8]) -> u32 {
+    let mut c = Cursor { data, pos: 0 };
+    let ok = c.magic8().is_ok()
+        && c.magic8().is_ok()
+        && (0..7).all(|_| c.u32().is_ok())
+        && c.magic8().is_ok();
+    if ok { c.u32().unwrap_or(1) } else { 1 }
+}
+
+/// Decodes image `index` (largest mipmap) of the .tex.
+pub fn parse_image(data: &[u8], index: u32) -> Result<DecodedTexture, String> {
     let mut c = Cursor { data, pos: 0 };
 
     // --- header ---
@@ -214,7 +280,29 @@ pub fn parse(data: &[u8]) -> Result<DecodedTexture, String> {
     let has_comp_fields = matches!(container.as_str(), "TEXB0004" | "TEXB0003" | "TEXB0002");
     let is_texb0004 = container == "TEXB0004";
 
-    // --- primeiro mipmap (o maior) da primeira imagem ---
+    // skip the images before `index` (all of their mipmaps)
+    for _ in 0..index {
+        let mips = c.u32()?;
+        for _ in 0..mips {
+            if is_texb0004 && is_mp4 {
+                c.u32()?;
+                c.u32()?;
+                c.null_string()?;
+                c.u32()?;
+            }
+            c.u32()?;
+            c.u32()?;
+            let mut size = 0;
+            if has_comp_fields {
+                c.u32()?;
+                c.u32()?;
+            }
+            size += c.u32()?;
+            c.take(size as usize)?;
+        }
+    }
+
+    // --- largest mipmap of image `index` ---
     let mip_count = c.u32()?;
     // The extra per-mipmap header only exists for video (mp4) textures; for
     // regular TEXB0004 images the width/height follow the mipmap count directly.

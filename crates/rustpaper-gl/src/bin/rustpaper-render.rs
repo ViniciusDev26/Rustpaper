@@ -129,7 +129,7 @@ fn frame_pixels(
 ) -> (Vec<u8>, u32, u32) {
     match screen {
         Some(t) => {
-            rustpaper_gl::gpu::cover_into(gl, scene.output(), t);
+            rustpaper_gl::gpu::cover_into(gl, scene.output(), t, scene.pixelated);
             (t.read_rgba(gl), t.tex.width, t.tex.height)
         }
         None => (scene.output().read_rgba(gl), scene.width, scene.height),

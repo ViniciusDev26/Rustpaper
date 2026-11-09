@@ -3,7 +3,8 @@
 // A scene references files by relative path ("materials/x.json",
 // "shaders/effects/shake.frag", "materials/util/noise.tex"...). The same path can
 // live in three places, checked in this order:
-//   1. the wallpaper's `scene.pkg` (most scenes pack everything here);
+//   1. the wallpaper's `<scene file>.pkg`, usually `scene.pkg` (most scenes
+//      pack everything here);
 //   2. the wallpaper folder itself (unpacked scenes);
 //   3. the base WE assets (shared effects, shaders, util textures).
 
@@ -20,7 +21,27 @@ pub struct Assets {
 
 impl Assets {
     pub fn open(wallpaper_dir: &Path, base_assets: &Path) -> std::io::Result<Assets> {
-        let pkg_path = wallpaper_dir.join("scene.pkg");
+        // The pkg is named after the project's scene file: scene.json ->
+        // scene.pkg, gifscene.json -> gifscene.pkg (Aesthetic City 843532366).
+        let stem = std::fs::read_to_string(wallpaper_dir.join("project.json"))
+            .ok()
+            .and_then(|t| {
+                serde_json::from_str::<serde_json::Value>(t.trim_start_matches('\u{feff}')).ok()
+            })
+            .and_then(|p| {
+                Some(
+                    p.get("file")?
+                        .as_str()?
+                        .trim_end_matches(".json")
+                        .to_string(),
+                )
+            })
+            .filter(|s| !s.is_empty() && !s.contains('/'))
+            .unwrap_or_else(|| "scene".to_string());
+        let mut pkg_path = wallpaper_dir.join(format!("{stem}.pkg"));
+        if !pkg_path.is_file() {
+            pkg_path = wallpaper_dir.join("scene.pkg");
+        }
         let pkg = if pkg_path.is_file() {
             Some(Pkg::open(&pkg_path)?)
         } else {
