@@ -119,6 +119,13 @@ ensure_headless() {
     # stops rendering too: grim hangs and WE's window captures black. Wake
     # only the headless output; the user's monitors stay off.
     hyprctl dispatch "hl.dsp.dpms({ action = 'on', monitor = '$HEADLESS' })" >/dev/null 2>&1 || true
+    # WE's windows open straight on the hidden workspace and never take focus
+    # (they re-request it while rendering). Runtime only: gone on the next
+    # Hyprland reload. Also moves WE's own UI there while a run is going on.
+    if [ -z "${_WE_RULE_SET:-}" ]; then
+        hyprctl eval "hl.window_rule({ name = 'rustpaper-harness-we', match = { class = 'steam_app_431960' }, workspace = 'name:rpref silent', no_focus = true, no_initial_focus = true, focus_on_activate = false })" >/dev/null 2>&1 || true
+        export _WE_RULE_SET=1
+    fi
 }
 
 remove_headless() { hyprctl output remove "$HEADLESS" >/dev/null 2>&1 || true; }
@@ -163,4 +170,15 @@ refocus() {
     fi
     return 0
 }
-focused_monitor() { hyprctl monitors -j | python3 -c "import json,sys; print(next((m['name'] for m in json.load(sys.stdin) if m['focused']), ''))"; }
+# The user's monitor: the focused one unless that is the headless output,
+# else the one under the cursor (focus can be left on RPREF by WE's windows).
+focused_monitor() {
+    hyprctl monitors -j | python3 -c "
+import json, subprocess, sys
+ms = json.load(sys.stdin)
+f = next((m['name'] for m in ms if m['focused'] and m['name'] != '$HEADLESS'), '')
+if not f:
+    x, y = (float(v) for v in subprocess.run(['hyprctl', 'cursorpos'], capture_output=True, text=True).stdout.split(','))
+    f = next((m['name'] for m in ms if m['name'] != '$HEADLESS' and m['x'] <= x < m['x'] + m['width'] / m['scale'] and m['y'] <= y < m['y'] + m['height'] / m['scale']), '')
+print(f)"
+}
