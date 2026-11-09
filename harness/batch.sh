@@ -30,7 +30,8 @@ if [ ${#ids[@]} -eq 0 ]; then
         [ -d "$root" ] || continue
         for d in "$root"/*/; do
             t=$(python3 -c "import json,sys; print(str(json.load(open(sys.argv[1], encoding='utf-8-sig')).get('type','')).lower())" "$d/project.json" 2>/dev/null || true)
-            [ "$t" = scene ] && ids+=("$(basename "$d")")
+            id=$(basename "$d")
+            [ "$t" = scene ] && [[ " ${ids[*]} " != *" $id "* ]] && ids+=("$id")
         done
     done
 fi

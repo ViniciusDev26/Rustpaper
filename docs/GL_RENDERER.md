@@ -128,6 +128,11 @@ quad, the trail (`TRAILRENDERER`) or the sprite-sheet frame (`SPRITESHEET`,
   parent's origin). `rain_screen_4k`'s untyped static drops are drawn by WE
   (3576135309: motion energy ratio 0.05 -> 0.68). A detour that dropped them
   was fitting a glow excess actually caused by the sprite-sheet header bug.
+- **`flags & 4` = perspective.** Those systems are drawn with a perspective
+  camera (`general.fov`, eye on the center axis at the distance where z = 0
+  matches the ortho view): emitters spread hundreds of units in depth, and
+  near particles must look bigger and move faster (`math::scene_perspective`;
+  Kakashi 2811157144 motion energy ratio 0.77 -> 0.88).
 - **Rope renderers** (`rope`, `ropetrail`) use `genericropeparticle` with its
   own 21-float vertex layout; `ropetrail` keeps 16 history samples per
   particle.

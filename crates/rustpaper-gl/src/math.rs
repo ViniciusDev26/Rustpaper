@@ -45,6 +45,34 @@ pub fn scene_ortho(w: f32, h: f32) -> Mat4 {
     ]
 }
 
+/// Perspective view of the scene used by particle systems with the
+/// `perspective` flag: camera on the scene's center axis at the distance
+/// where the z = 0 plane maps exactly onto the screen (so z = 0 matches
+/// `scene_ortho`), looking down -z; same top = row 0 convention.
+/// Returns (view-projection, eye position).
+pub fn scene_perspective(w: f32, h: f32, fov_y_deg: f32) -> (Mat4, [f32; 3]) {
+    let f = 1.0 / (fov_y_deg.clamp(1.0, 170.0).to_radians() / 2.0).tan();
+    let d = h / 2.0 * f;
+    let (n, far) = (1.0, d * 20.0);
+    let a = w / h;
+    #[rustfmt::skip]
+    let proj: Mat4 = [
+        f / a, 0.0, 0.0,                          0.0,
+        0.0,   -f,  0.0,                          0.0,
+        0.0,   0.0, (far + n) / (n - far),        -1.0,
+        0.0,   0.0, 2.0 * far * n / (n - far),    0.0,
+    ];
+    let eye = [w / 2.0, h / 2.0, d];
+    #[rustfmt::skip]
+    let view: Mat4 = [
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        -eye[0], -eye[1], -eye[2], 1.0,
+    ];
+    (mul(&proj, &view), eye)
+}
+
 /// Projection for a quad centered at the origin that must fill a render target
 /// of `w`x`h` (effect passes, layer FBOs). Same top = row 0 rule.
 #[rustfmt::skip]
