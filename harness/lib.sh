@@ -49,6 +49,22 @@ start_we() {
     return 1
 }
 
+# WE's crash dialog ("Error", same window class) is up.
+we_crashed() {
+    hyprctl clients -j | python3 -c "import json,sys; sys.exit(0 if any(c['class'] == 'steam_app_431960' and c['title'] == 'Error' for c in json.load(sys.stdin)) else 1)"
+}
+
+# Kills WE (crashed or wedged: windows that never open or close) and starts
+# it again.
+restart_we() {
+    echo "restarting Wallpaper Engine" >&2
+    pkill -x launcher.exe 2>/dev/null || true
+    pkill -x wallpaperui.exe 2>/dev/null || true
+    pkill -x wallpaper64.exe 2>/dev/null || true
+    for _ in $(seq 1 30); do pgrep -x wallpaper64.exe >/dev/null || break; sleep 1; done
+    start_we >/dev/null || die "could not restart Wallpaper Engine"
+}
+
 # we_control <args for wallpaper64.exe...>
 we_control() {
     local pid
