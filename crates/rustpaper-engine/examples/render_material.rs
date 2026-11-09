@@ -1,24 +1,24 @@
-// Prova OFFSCREEN do caminho de render por material do WE.
+// OFFSCREEN proof of the WE per-material render path.
 //
-// Renderiza uma textura de teste (gradiente) através do FRAGMENT shader REAL do WE
-// (genericimage2), compilado em runtime (translate -> glslang -> SPIR-V -> wgpu), e
-// grava um PNG. O vertex é um triângulo fullscreen simples nosso (em WGSL) — só o
-// FRAGMENT é do WE, que é a parte interessante (cor/brilho/blend). Isso contorna,
-// por ora, a unificação do bloco de uniforms entre estágios e a matriz MVP.
+// Renders a test texture (gradient) through the REAL WE FRAGMENT shader
+// (genericimage2), compiled at runtime (translate -> glslang -> SPIR-V -> wgpu), and
+// writes a PNG. The vertex is our own simple fullscreen triangle (in WGSL) — only the
+// FRAGMENT is from WE, which is the interesting part (color/brightness/blend). This works
+// around, for now, the uniform block unification across stages and the MVP matrix.
 //
-// Pra PROVAR que o shader do WE realmente roda, usamos g_Brightness = 0.4: o PNG de
-// saída deve sair NITIDAMENTE mais escuro que o gradiente de entrada.
+// To PROVE that the WE shader really runs, we use g_Brightness = 0.4: the output PNG
+// must come out CLEARLY darker than the input gradient.
 //
-// Uso: cargo run -p rustpaper-engine --example render_material
-// Saída: /tmp/render_material.png
+// Usage: cargo run -p rustpaper-engine --example render_material
+// Output: /tmp/render_material.png
 
 use rustpaper_core::shader::{Stage, translate};
 use std::process::Command;
 
 const SIZE: u32 = 256;
 
-// Vertex fullscreen (triângulo cobrindo a tela) que emite v_TexCoord no location 0,
-// que é onde o frag do WE espera `in vec2 v_TexCoord`.
+// Fullscreen vertex (triangle covering the screen) that emits v_TexCoord at location 0,
+// which is where the WE frag expects `in vec2 v_TexCoord`.
 const VERTEX_WGSL: &str = r#"
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
@@ -50,7 +50,7 @@ fn glslang() -> &'static str {
             return Box::leak(c.to_string().into_boxed_str());
         }
     }
-    panic!("glslangValidator não encontrado");
+    panic!("glslangValidator not found");
 }
 
 fn compile_frag_spirv(shaders_dir: &str) -> Vec<u32> {
@@ -103,7 +103,7 @@ fn main() {
         std::env::var("WE_SHADERS_DIR").unwrap_or_else(|_| "/home/vscode/we-assets/shaders".into());
     let frag_spirv = compile_frag_spirv(&shaders_dir);
 
-    // --- wgpu headless (sem surface) ---
+    // --- wgpu headless (no surface) ---
     let instance = wgpu::Instance::default();
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
@@ -115,7 +115,7 @@ fn main() {
     let (device, queue) =
         pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
 
-    // --- textura de entrada: gradiente (X=vermelho, Y=verde) ---
+    // --- input texture: gradient (X=red, Y=green) ---
     let mut rgba = vec![0u8; (SIZE * SIZE * 4) as usize];
     for y in 0..SIZE {
         for x in 0..SIZE {
@@ -163,8 +163,8 @@ fn main() {
         ..Default::default()
     });
 
-    // --- WeGlobals UBO (genericimage2 frag, sem combos): g_Brightness@0, g_UserAlpha@4 ---
-    // 0.4 de brilho pra o efeito ser óbvio no PNG.
+    // --- WeGlobals UBO (genericimage2 frag, no combos): g_Brightness@0, g_UserAlpha@4 ---
+    // 0.4 brightness so the effect is obvious in the PNG.
     let mut ubo_data = [0u8; 16];
     ubo_data[0..4].copy_from_slice(&0.4f32.to_le_bytes()); // g_Brightness
     ubo_data[4..8].copy_from_slice(&1.0f32.to_le_bytes()); // g_UserAlpha
@@ -176,7 +176,7 @@ fn main() {
     });
     queue.write_buffer(&ubo, 0, &ubo_data);
 
-    // --- módulos: vertex (nosso WGSL) + fragment (SPIR-V do WE) ---
+    // --- modules: vertex (our WGSL) + fragment (WE SPIR-V) ---
     let vs = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("vs"),
         source: wgpu::ShaderSource::Wgsl(VERTEX_WGSL.into()),
@@ -186,7 +186,7 @@ fn main() {
         source: wgpu::ShaderSource::SpirV(frag_spirv.into()),
     });
 
-    // bind group layout: WeGlobals@0, textura@1, sampler@2 (tudo no fragment)
+    // bind group layout: WeGlobals@0, texture@1, sampler@2 (all in the fragment stage)
     let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("bgl"),
         entries: &[
@@ -269,7 +269,7 @@ fn main() {
         cache: None,
     });
 
-    // --- alvo offscreen + render ---
+    // --- offscreen target + render ---
     let out_tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("output"),
         size: extent,
@@ -306,7 +306,7 @@ fn main() {
         rp.draw(0..3, 0..1);
     }
 
-    // copiar textura -> buffer (bytes_per_row múltiplo de 256; 256*4=1024 ok)
+    // copy texture -> buffer (bytes_per_row multiple of 256; 256*4=1024 ok)
     let bpr = 4 * SIZE;
     let readback = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("readback"),
@@ -341,8 +341,8 @@ fn main() {
     let out_path = "/tmp/render_material.png";
     image::save_buffer(out_path, &data, SIZE, SIZE, image::ColorType::Rgba8).unwrap();
 
-    // sanidade: pixel do centro deve estar escurecido (~0.4x) vs a entrada
+    // sanity check: the center pixel should be darkened (~0.4x) vs the input
     let center = ((SIZE / 2 * SIZE + SIZE / 2) * 4) as usize;
-    println!("centro saída RGBA = {:?}", &data[center..center + 4]);
-    println!("PNG salvo em {out_path}");
+    println!("output center RGBA = {:?}", &data[center..center + 4]);
+    println!("PNG saved to {out_path}");
 }

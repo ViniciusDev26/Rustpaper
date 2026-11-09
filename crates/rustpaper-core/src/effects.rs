@@ -1,19 +1,19 @@
-// Módulo `effects`: entende o grafo de efeitos de uma cena do Wallpaper Engine.
+// `effects` module: understands the effect graph of a Wallpaper Engine scene.
 //
-// Modelo (dois níveis):
-//   1. O OBJETO da cena tem `effects: [ { file, visible, passes: [override...] } ]`.
-//      Cada `file` aponta pra um effect.json; os `passes` trazem OVERRIDES (combos,
-//      constantshadervalues, textures) por índice de pass.
-//   2. O effect.json tem `passes: [ { material, bind } ]` e `fbos: [ {name,scale,format} ]`.
-//      O `material` (json) tem shader + combos + constants base; o `bind` mapeia de
-//      onde vem cada textura de entrada do pass (um FBO nomeado ou o quadro anterior).
+// Model (two levels):
+//   1. The scene OBJECT has `effects: [ { file, visible, passes: [override...] } ]`.
+//      Each `file` points to an effect.json; the `passes` carry OVERRIDES (combos,
+//      constantshadervalues, textures) per pass index.
+//   2. The effect.json has `passes: [ { material, bind } ]` e `fbos: [ {name,scale,format} ]`.
+//      The `material` (json) has shader + combos + base constants; the `bind` maps
+//      where each input texture of the pass comes from (a named FBO or the previous frame).
 //
-// Aqui só PARSEAMOS e resolvemos (merge dos overrides sobre a base). Quem renderiza
-// os passes é o engine.
+// Here we only PARSE and resolve (merging the overrides onto the base). The engine
+// is what renders the passes.
 
 use serde_json::{Map, Value};
 
-/// Override que a cena aplica sobre um pass do efeito (por índice).
+/// Override that the scene applies to an effect pass (by index).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PassOverride {
     pub combos: Vec<(String, i64)>,
@@ -21,15 +21,15 @@ pub struct PassOverride {
     pub textures: Vec<Option<String>>,
 }
 
-/// Uso de um efeito por um objeto da cena.
+/// Use of an effect by a scene object.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EffectInstance {
-    pub file: String, // caminho do effect.json dentro do pkg
+    pub file: String, // path of the effect.json inside the pkg
     pub visible: bool,
-    pub passes: Vec<PassOverride>, // overrides por índice de pass
+    pub passes: Vec<PassOverride>, // overrides per pass index
 }
 
-// ---- structs de desserialização (scene.json: objeto -> effects) ----
+// ---- deserialization structs (scene.json: object -> effects) ----
 
 #[derive(serde::Deserialize)]
 struct RawPassOverride {
@@ -82,8 +82,8 @@ fn to_override(r: RawPassOverride) -> PassOverride {
     }
 }
 
-/// Constrói as instâncias de efeito a partir do valor JSON do campo `effects` de um
-/// objeto (um array). Usado pelo compositor pra pegar os efeitos de CADA camada.
+/// Builds the effect instances from the JSON value of an object's `effects` field
+/// (an array). Used by the compositor to get the effects of EACH layer.
 pub fn effects_from_json(effects_array: &Value) -> Vec<EffectInstance> {
     serde_json::from_value::<Vec<RawEffect>>(effects_array.clone())
         .ok()
@@ -99,7 +99,7 @@ pub fn effects_from_json(effects_array: &Value) -> Vec<EffectInstance> {
         .unwrap_or_default()
 }
 
-/// Efeitos aplicados ao PRIMEIRO objeto-imagem (o fundo). Vazio se não houver.
+/// Effects applied to the FIRST image object (the background). Empty if there are none.
 pub fn background_effects(scene_json: &str) -> Vec<EffectInstance> {
     let Ok(scene) = serde_json::from_str::<RawScene>(scene_json) else {
         return Vec::new();
@@ -123,30 +123,30 @@ pub fn background_effects(scene_json: &str) -> Vec<EffectInstance> {
 
 // ---- effect.json ----
 
-/// De onde vem uma textura de entrada de um pass: um FBO nomeado (ou "previous").
+/// Where an input texture of a pass comes from: a named FBO (or "previous").
 #[derive(Debug, Clone, PartialEq)]
 pub struct Bind {
     pub name: String,
-    pub index: u32, // slot de textura (g_TextureN)
+    pub index: u32, // texture slot (g_TextureN)
 }
 
-/// Um pass do efeito, como definido no effect.json.
+/// An effect pass, as defined in effect.json.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EffectPass {
-    pub material: String, // caminho do material.json
+    pub material: String, // path of the material.json
     pub binds: Vec<Bind>,
-    pub target: Option<String>, // FBO de saída (None = a saída padrão do efeito)
+    pub target: Option<String>, // output FBO (None = the effect's default output)
 }
 
-/// Um render target nomeado do efeito.
+/// A named render target of the effect.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Fbo {
     pub name: String,
-    pub scale: f32,     // 1 = resolução cheia, 2 = metade, ...
-    pub format: String, // ex.: "rgba_backbuffer"
+    pub scale: f32,     // 1 = full resolution, 2 = half, ...
+    pub format: String, // e.g. "rgba_backbuffer"
 }
 
-/// effect.json parseado.
+/// Parsed effect.json.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EffectDef {
     pub passes: Vec<EffectPass>,
@@ -191,7 +191,7 @@ struct RawEffectDef {
     fbos: Vec<RawFbo>,
 }
 
-/// Parseia um effect.json. Passes sem `material` são ignorados.
+/// Parses an effect.json. Passes without `material` are ignored.
 pub fn parse_effect(effect_json: &str) -> Option<EffectDef> {
     let raw: RawEffectDef = serde_json::from_str(effect_json).ok()?;
     let passes = raw
@@ -224,9 +224,9 @@ pub fn parse_effect(effect_json: &str) -> Option<EffectDef> {
     Some(EffectDef { passes, fbos })
 }
 
-/// True se o efeito é do caso SIMPLES que já sabemos rodar: um único pass, sem FBOs
-/// nomeados extras (amostra só o quadro anterior). Os complexos (godrays, blur com
-/// downsample) ficam pra depois.
+/// True if the effect is the SIMPLE case we already know how to run: a single pass, no
+/// extra named FBOs (samples only the previous frame). The complex ones (godrays, blur
+/// with downsample) come later.
 pub fn is_simple(def: &EffectDef) -> bool {
     def.passes.len() == 1 && def.fbos.is_empty()
 }
@@ -263,7 +263,7 @@ mod tests {
 
     #[test]
     fn parse_effect_multipass_with_fbos_e_binds() {
-        // formato do godrays (resumido)
+        // godrays layout (abridged)
         let ej = r#"{
             "passes": [
                 { "material": "m/down.json", "target": "_rt_Half1" },

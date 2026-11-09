@@ -1,23 +1,23 @@
-// Módulo `layout`: lê a cena INTEIRA como uma pilha de camadas (não só o fundo).
-// Uma cena do WE é uma composição de vários objetos-imagem, cada um com sua textura,
+// Module `layout`: reads the WHOLE scene as a stack of layers (not just the background).
+// A WE scene is a composition of several image objects, each with its own texture,
 // transform (origin/scale/angles/size), material (shader+combos+constants), blend,
-// alpha/cor/brilho e efeitos — desenhados em ordem com alpha. É o que faz o
-// personagem principal (Ashe, etc.) aparecer, em vez de só o fundo.
+// alpha/color/brightness and effects — drawn in order with alpha. This is what makes
+// the main character (Ashe, etc.) show up, instead of just the background.
 
 use crate::effects::{self, EffectInstance};
 use crate::pkg::Pkg;
 use crate::scene::{self, MaterialInfo};
 
-/// Uma camada-imagem da cena, pronta pra desenhar.
+/// An image layer of the scene, ready to draw.
 #[derive(Debug, Clone)]
 pub struct Layer {
     pub name: String,
-    pub texture: Option<String>, // caminho do .tex dentro do pkg
+    pub texture: Option<String>, // path of the .tex inside the pkg
     pub material: MaterialInfo,
-    pub origin: [f32; 3], // posição do CENTRO no espaço da cena
+    pub origin: [f32; 3], // CENTER position in scene space
     pub scale: [f32; 3],
-    pub angles: [f32; 3], // rotação (radianos? o WE usa graus? -> ver nota abaixo)
-    pub size: [f32; 2],   // tamanho do quad em unidades de cena
+    pub angles: [f32; 3], // rotation (radians? does WE use degrees? -> see note below)
+    pub size: [f32; 2],   // quad size in scene units
     pub color: [f32; 3],
     pub alpha: f32,
     pub brightness: f32,
@@ -25,7 +25,7 @@ pub struct Layer {
     pub effects: Vec<EffectInstance>,
 }
 
-/// A cena como um todo: projeção ortográfica + camadas em ordem de desenho.
+/// The scene as a whole: orthographic projection + layers in draw order.
 #[derive(Debug, Clone)]
 pub struct SceneLayout {
     pub width: f32,
@@ -62,8 +62,8 @@ fn scalar(v: &serde_json::Value, key: &str, default: f32) -> f32 {
         .unwrap_or(default)
 }
 
-// texturas do primeiro pass de um material (mesmo critério do scene::first_texture,
-// mas devolve o caminho completo).
+// textures of the first pass of a material (same criterion as scene::first_texture,
+// but returns the full path).
 fn first_texture_path(mat: &MaterialInfo) -> Option<String> {
     mat.textures
         .iter()
@@ -72,7 +72,7 @@ fn first_texture_path(mat: &MaterialInfo) -> Option<String> {
         .map(|t| format!("materials/{t}.tex"))
 }
 
-/// Lê a cena inteira do pkg como uma lista de camadas.
+/// Reads the whole scene from the pkg as a list of layers.
 pub fn parse_layout(pkg: &Pkg) -> Option<SceneLayout> {
     let scene_json = std::str::from_utf8(pkg.read("scene.json")?).ok()?;
     let scene: serde_json::Value = serde_json::from_str(scene_json).ok()?;
@@ -96,7 +96,7 @@ pub fn parse_layout(pkg: &Pkg) -> Option<SceneLayout> {
         .and_then(|o| o.as_array())
         .unwrap_or(&empty);
     for obj in objects {
-        // só objetos-imagem visíveis
+        // visible image objects only
         let Some(image_path) = obj.get("image").and_then(|i| i.as_str()) else {
             continue;
         };
@@ -107,7 +107,7 @@ pub fn parse_layout(pkg: &Pkg) -> Option<SceneLayout> {
         {
             continue;
         }
-        // resolve model -> material -> textura
+        // resolve model -> material -> texture
         let Some(model) = pkg
             .read(image_path)
             .and_then(|b| std::str::from_utf8(b).ok().map(String::from))
@@ -165,7 +165,7 @@ pub fn parse_layout(pkg: &Pkg) -> Option<SceneLayout> {
     })
 }
 
-// caminho do material de um model json.
+// path of the material of a model JSON.
 fn model_material(model_json: &str) -> Option<String> {
     #[derive(serde::Deserialize)]
     struct M {

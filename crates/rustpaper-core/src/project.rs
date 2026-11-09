@@ -1,10 +1,10 @@
-// Módulo `project`: lê o `project.json` de um wallpaper do Wallpaper Engine e
-// descobre o tipo (video/scene/web) e o arquivo principal.
+// `project` module: reads the `project.json` of a Wallpaper Engine wallpaper and
+// determines its type (video/scene/web) and main file.
 
 use std::path::{Path, PathBuf};
 
-// Os tipos de wallpaper do WE que nos importam. `Unknown` guarda o texto original
-// (inclui os sem tipo, que viram string vazia).
+// The WE wallpaper types we care about. `Unknown` keeps the original text
+// (including untyped ones, which become an empty string).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WallpaperKind {
     Video,
@@ -16,15 +16,15 @@ pub enum WallpaperKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Project {
     pub kind: WallpaperKind,
-    pub file: String, // arquivo principal, relativo à pasta (ex.: "video.mp4")
+    pub file: String, // main file, relative to the folder (ex.: "video.mp4")
     pub title: String,
 }
 
-// Espelho cru do project.json (só os campos que usamos). serde preenche a partir
-// do JSON; #[serde(default)] deixa campos ausentes virarem None em vez de erro.
+// Raw mirror of project.json (only the fields we use). serde fills it in from
+// the JSON; #[serde(default)] lets missing fields become None instead of an error.
 #[derive(serde::Deserialize)]
 struct RawProject {
-    // `type` é palavra-chave em Rust; r#type mapeia pra chave "type" do JSON.
+    // `type` is a Rust keyword; r#type maps to the JSON key "type".
     #[serde(default)]
     r#type: Option<String>,
     #[serde(default)]
@@ -34,10 +34,10 @@ struct RawProject {
 }
 
 impl Project {
-    // Parse PURO (string JSON -> Project). Testável sem tocar em disco.
+    // PURE parse (JSON string -> Project). Testable without touching the disk.
     pub fn parse(json: &str) -> Result<Project, serde_json::Error> {
         let raw: RawProject = serde_json::from_str(json)?;
-        // Casing varia no WE (scene/Scene, video/Video) -> normaliza.
+        // Casing varies in WE (scene/Scene, video/Video) -> normalize.
         let kind = match raw
             .r#type
             .as_deref()
@@ -57,13 +57,13 @@ impl Project {
         })
     }
 
-    // Lê e parseia o project.json dentro de uma pasta de wallpaper.
+    // Reads and parses the project.json inside a wallpaper folder.
     pub fn load(dir: &Path) -> std::io::Result<Project> {
         let json = std::fs::read_to_string(dir.join("project.json"))?;
         Project::parse(&json).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
 
-    // Caminho absoluto do arquivo principal, dado a pasta do wallpaper.
+    // Absolute path of the main file, given the wallpaper folder.
     pub fn file_path(&self, dir: &Path) -> PathBuf {
         dir.join(&self.file)
     }
@@ -75,11 +75,11 @@ mod tests {
 
     #[test]
     fn parses_video() {
-        let json = r#"{ "type": "video", "file": "clip.mp4", "title": "Meu Vídeo" }"#;
+        let json = r#"{ "type": "video", "file": "clip.mp4", "title": "My Video" }"#;
         let p = Project::parse(json).unwrap();
         assert_eq!(p.kind, WallpaperKind::Video);
         assert_eq!(p.file, "clip.mp4");
-        assert_eq!(p.title, "Meu Vídeo");
+        assert_eq!(p.title, "My Video");
     }
 
     #[test]
@@ -88,12 +88,12 @@ mod tests {
         let p = Project::parse(json).unwrap();
         assert_eq!(p.kind, WallpaperKind::Scene);
         assert_eq!(p.file, "scene.json");
-        assert_eq!(p.title, ""); // ausente -> string vazia
+        assert_eq!(p.title, ""); // missing -> empty string
     }
 
     #[test]
     fn type_is_case_insensitive() {
-        // No WE aparecem tanto "Video" quanto "video".
+        // In WE both "Video" and "video" appear.
         assert_eq!(
             Project::parse(r#"{"type":"Video","file":"a.mp4"}"#)
                 .unwrap()
@@ -110,14 +110,14 @@ mod tests {
 
     #[test]
     fn unknown_and_missing_type() {
-        // Tipo não suportado (web) -> Unknown com o texto normalizado.
+        // Unsupported type (web) -> Unknown with the normalized text.
         assert_eq!(
             Project::parse(r#"{"type":"web","file":"index.html"}"#)
                 .unwrap()
                 .kind,
             WallpaperKind::Web
         );
-        // Sem campo type -> Unknown("").
+        // No type field -> Unknown("").
         assert_eq!(
             Project::parse(r#"{"file":""}"#).unwrap().kind,
             WallpaperKind::Unknown(String::new())
@@ -126,7 +126,7 @@ mod tests {
 
     #[test]
     fn rejects_invalid_json() {
-        assert!(Project::parse("nao é json").is_err());
+        assert!(Project::parse("not json").is_err());
     }
 
     #[test]

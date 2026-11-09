@@ -1,6 +1,6 @@
-// Ferramenta de dev: traduz um shader do WE pra GLSL e imprime no stdout.
-// Uso: cargo run -p rustpaper-core --example translate_shader -- <vert|frag> <nome> [shaders_dir]
-// Ex.: ... translate_shader frag genericimage2 /home/vscode/we-assets/shaders
+// Dev tool: translates a WE shader to GLSL and prints it to stdout.
+// Usage: cargo run -p rustpaper-core --example translate_shader -- <vert|frag> <name> [shaders_dir]
+// E.g.: ... translate_shader frag genericimage2 /home/vscode/we-assets/shaders
 use rustpaper_core::shader::{Stage, translate};
 use std::path::PathBuf;
 
@@ -10,11 +10,11 @@ fn main() {
         Some("vert") => Stage::Vertex,
         Some("frag") => Stage::Fragment,
         _ => {
-            eprintln!("uso: translate_shader <vert|frag> <nome> [shaders_dir] [COMBO=valor ...]");
+            eprintln!("usage: translate_shader <vert|frag> <name> [shaders_dir] [COMBO=value ...]");
             std::process::exit(2);
         }
     };
-    let name = args.get(2).expect("nome do shader");
+    let name = args.get(2).expect("shader name");
     let dir = PathBuf::from(
         args.get(3)
             .cloned()
@@ -25,9 +25,9 @@ fn main() {
     } else {
         "frag"
     };
-    let src = std::fs::read_to_string(dir.join(format!("{name}.{ext}"))).expect("ler shader");
+    let src = std::fs::read_to_string(dir.join(format!("{name}.{ext}"))).expect("read shader");
 
-    // combos extras via CLI: NOME=valor
+    // combos extra via CLI: NAME=value
     let combos: Vec<(String, i64)> = args[4.min(args.len())..]
         .iter()
         .filter_map(|a| {
@@ -38,6 +38,6 @@ fn main() {
 
     print!(
         "{}",
-        translate(stage, &src, &combos, &dir).expect("traduzir")
+        translate(stage, &src, &combos, &dir).expect("translate")
     );
 }

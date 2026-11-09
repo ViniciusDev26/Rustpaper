@@ -1,20 +1,20 @@
-// Prova do "boss final": o pipeline WE→GLSL→SPIR-V→(naga, o que o wgpu usa)
-// funciona ponta-a-ponta com os shaders REAIS do WE?
+// Proof of the "final boss": does the WE→GLSL→SPIR-V→(naga, what wgpu uses)
+// pipeline work end to end with the REAL WE shaders?
 //
 // Pipeline:
-//   1. shader::translate  -> GLSL 330 (dialeto WE resolvido + samplers SEPARADOS)
+//   1. shader::translate  -> GLSL 330 (WE dialect resolved + SEPARATE samplers)
 //   2. glslangValidator   -> SPIR-V Vulkan
-//      -V (Vulkan) -R (regras relaxadas: permite uniforms livres estilo GL)
-//      --amb --aml (auto-bind/locate) --sdub WeGlobals 0 0 (junta os uniforms
-//      livres num bloco no set 0, binding 0)
-//   3. naga spv-in        -> Module + validação (é o que o wgpu faz internamente)
+//      -V (Vulkan) -R (relaxed rules: allows GL-style free uniforms)
+//      --amb --aml (auto-bind/locate) --sdub WeGlobals 0 0 (gathers the free
+//      uniforms into one block at set 0, binding 0)
+//   3. naga spv-in        -> Module + validation (this is what wgpu does internally)
 //
-// Descobertas que moldaram esse caminho (ver shader.rs / SHADER_TRANSLATION.md):
-//   - naga glsl-in é fraco demais (rejeita uniforms livres e qualifiers de sampler)
-//   - naga spv-in rejeita samplers COMBINADOS -> por isso separamos em translate()
+// Findings that shaped this path (see shader.rs / SHADER_TRANSLATION.md):
+//   - naga glsl-in is too weak (rejects free uniforms and sampler qualifiers)
+//   - naga spv-in rejects COMBINED samplers -> hence we split them in translate()
 //
-// Precisa dos assets do WE ($WE_SHADERS_DIR ou /home/vscode/we-assets/shaders) e do
-// glslangValidator no PATH. Se faltar, o teste é PULADO (não falha).
+// Needs the WE assets ($WE_SHADERS_DIR or /home/vscode/we-assets/shaders) and
+// glslangValidator on the PATH. If either is missing, the test is SKIPPED (does not fail).
 
 use rustpaper_core::shader::{Stage, translate};
 use std::path::{Path, PathBuf};
@@ -39,7 +39,7 @@ fn have_glslang() -> bool {
         .unwrap_or(false)
 }
 
-// Traduz + compila pra SPIR-V via glslang. Retorna as palavras SPIR-V.
+// Translates + compiles to SPIR-V via glslang. Returns the SPIR-V words.
 fn to_spirv(stage: Stage, src: &str, dir: &Path) -> Result<Vec<u32>, String> {
     let glsl = translate(stage, src, &[], dir)?;
     let tmp = std::env::temp_dir();
@@ -70,7 +70,7 @@ fn to_spirv(stage: Stage, src: &str, dir: &Path) -> Result<Vec<u32>, String> {
         .output()
         .map_err(|e| e.to_string())?;
     if !out.status.success() {
-        // dump numerado pra depurar o que o glslang rejeitou
+        // numbered dump to debug what glslang rejected
         for (i, l) in glsl.lines().enumerate() {
             eprintln!("{:4} | {}", i + 1, l);
         }
@@ -92,11 +92,11 @@ fn to_spirv(stage: Stage, src: &str, dir: &Path) -> Result<Vec<u32>, String> {
 #[test]
 fn genericimage2_pipeline_completo() {
     let Some(dir) = shaders_dir() else {
-        eprintln!("SKIP: assets do WE não encontrados (defina WE_SHADERS_DIR)");
+        eprintln!("SKIP: WE assets not found (set WE_SHADERS_DIR)");
         return;
     };
     if !have_glslang() {
-        eprintln!("SKIP: glslangValidator não está no PATH");
+        eprintln!("SKIP: glslangValidator is not on the PATH");
         return;
     }
 
@@ -104,20 +104,20 @@ fn genericimage2_pipeline_completo() {
         let src = std::fs::read_to_string(dir.join(format!("genericimage2.{ext}"))).unwrap();
         let spirv = to_spirv(stage, &src, &dir).expect("translate+glslang");
 
-        // naga spv-in + validação: exatamente o que o wgpu faz.
+        // naga spv-in + validation: exactly what wgpu does.
         let module = naga::front::spv::Frontend::new(
             spirv.iter().copied(),
             &naga::front::spv::Options::default(),
         )
         .parse()
-        .unwrap_or_else(|e| panic!("naga rejeitou o SPIR-V do {ext}: {e:?}"));
+        .unwrap_or_else(|e| panic!("naga rejected the SPIR-V for {ext}: {e:?}"));
 
         naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
         )
         .validate(&module)
-        .unwrap_or_else(|e| panic!("validação naga falhou ({ext}): {e:?}"));
+        .unwrap_or_else(|e| panic!("naga validation failed ({ext}): {e:?}"));
 
         eprintln!("--- {ext}: {} globais ---", module.global_variables.len());
         for (_, gv) in module.global_variables.iter() {

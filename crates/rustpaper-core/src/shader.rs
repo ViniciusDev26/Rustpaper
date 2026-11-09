@@ -1,35 +1,35 @@
-// Módulo `shader`: traduz o "dialeto" de shader do Wallpaper Engine para GLSL 330
-// que o naga (frontend GLSL do wgpu) consegue compilar.
+// `shader` module: translates the Wallpaper Engine shader "dialect" into GLSL 330
+// that naga (wgpu's GLSL frontend) can compile.
 //
-// Os shaders do WE (`.vert`/`.frag` nos assets base) NÃO são GLSL puro: são um
-// dialeto cross-compile (HLSL+GLSL) com:
-//   - `#include "common_*.h"`  — includes próprios (resolvidos a partir de shaders/)
-//   - macros estilo HLSL: `mul()`, `frac`, `saturate`, `lerp`, `CAST3`, `texSample2D`...
-//   - GLSL legado: `attribute`, `varying`, `gl_FragColor`
-//   - `#if COMBO` — feature flags ("combos") setadas por material
+// WE shaders (`.vert`/`.frag` in the base assets) are NOT plain GLSL: they are a
+// cross-compile dialect (HLSL+GLSL) with:
+//   - `#include "common_*.h"`  — custom includes (resolved from shaders/)
+//   - HLSL-style macros: `mul()`, `frac`, `saturate`, `lerp`, `CAST3`, `texSample2D`...
+//   - legacy GLSL: `attribute`, `varying`, `gl_FragColor`
+//   - `#if COMBO` — feature flags ("combos") set per material
 //
-// A estratégia (mesma do linux-wallpaperengine, ver ShaderUnit.cpp) é montar um
-// PRELÚDIO de `#define`s que mapeia o dialeto pra GLSL 330 e prependê-lo ao código
-// com os includes resolvidos e os combos definidos. O resultado é GLSL que o
-// preprocessador+frontend do naga entende. Aqui só produzimos o TEXTO GLSL; quem
-// compila pra GPU é o engine (via `wgpu::ShaderSource::Glsl`).
+// The strategy (same as linux-wallpaperengine, see ShaderUnit.cpp) is to build a
+// PRELUDE of `#define`s that maps the dialect to GLSL 330 and prepend it to the code
+// with the includes resolved and the combos defined. The result is GLSL that
+// naga's preprocessor+frontend understands. Here we only produce the GLSL TEXT; the
+// engine compiles it for the GPU (via `wgpu::ShaderSource::Glsl`).
 
 use std::collections::HashSet;
 use std::path::Path;
 
-/// Estágio do pipeline — muda quais `#define`s de compatibilidade entram e como
-/// `varying` é traduzido (saída no vertex, entrada no fragment).
+/// Pipeline stage — changes which compatibility `#define`s are included and how
+/// `varying` is translated (output in the vertex stage, input in the fragment stage).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stage {
     Vertex,
     Fragment,
 }
 
-// Prelúdio comum a todos os estágios: mapeia o dialeto WE (HLSL-ish) pra GLSL.
-// Copiado 1:1 do SHADER_HEADER do linux-wallpaperengine (ground truth) — cada
-// linha resolve uma construção que o naga não engoliria crua.
-// #version 450 (não 330 como o lwe): precisamos de `layout(binding=)` explícito
-// nos samplers separados, que só existe a partir do 420.
+// Prelude common to all stages: maps the WE dialect (HLSL-ish) to GLSL.
+// Copied 1:1 from linux-wallpaperengine's SHADER_HEADER (ground truth) — each
+// line resolves a construct that naga would not swallow raw.
+// #version 450 (not 330 like lwe): we need explicit `layout(binding=)` on the
+// separate samplers, which only exists from 420 on.
 const PRELUDE: &str = "#version 450\n\
     precision highp float;\n\
     #define mul(x, y) ((y) * (x))\n\
@@ -56,40 +56,40 @@ const PRELUDE: &str = "#version 450\n\
     #define ddy(x) dFdy(-(x))\n\
     #define GLSL 1\n";
 
-// No fragment, `varying` é ENTRADA e existe um destino de cor explícito.
+// In the fragment stage, `varying` is an INPUT and there is an explicit color output.
 const FRAGMENT_DEFINES: &str = "out vec4 out_FragColor;\n#define varying in\n";
-// No vertex, `attribute` é entrada e `varying` é SAÍDA.
+// In the vertex stage, `attribute` is an input and `varying` is an OUTPUT.
 const VERTEX_DEFINES: &str = "#define attribute in\n#define varying out\n";
 
-/// Traduz um shader do WE pra GLSL 330.
+/// Translates a WE shader to GLSL 330.
 ///
-/// - `stage`: vertex ou fragment.
-/// - `source`: conteúdo bruto do `.vert`/`.frag`.
-/// - `combos`: pares (NOME, valor) das feature flags do material. Viram
-///   `#define NOME valor` (nome em maiúsculas, como o WE espera nos `#if`).
-/// - `shaders_dir`: pasta dos shaders base (ex.: `we-assets/shaders`) pra
-///   resolver os `#include`.
+/// - `stage`: vertex or fragment.
+/// - `source`: raw contents of the `.vert`/`.frag`.
+/// - `combos`: (NAME, value) pairs of the material's feature flags. They become
+///   `#define NAME value` (name in uppercase, as WE expects in `#if`s).
+/// - `shaders_dir`: folder of the base shaders (e.g. `we-assets/shaders`) used to
+///   resolve the `#include`s.
 pub fn translate(
     stage: Stage,
     source: &str,
     combos: &[(String, i64)],
     shaders_dir: &Path,
 ) -> Result<String, String> {
-    // 1) resolve os includes recursivamente (o naga não tem #include).
+    // 1) resolve includes recursively (naga has no #include).
     let mut seen = HashSet::new();
     let with_includes = resolve_includes(source, shaders_dir, &mut seen)?;
 
-    // 1b) resolve `#require` (módulos gerados pelo WE, ex.: LightingV1).
+    // 1b) resolve `#require` (modules generated by WE, e.g. LightingV1).
     let with_includes = resolve_requires(&with_includes);
 
-    // 2) gl_FragColor -> out_FragColor (destino declarado no prelúdio do fragment).
+    // 2) gl_FragColor -> out_FragColor (destination declared in the fragment prelude).
     let body = with_includes.replace("gl_FragColor", "out_FragColor");
 
-    // 3) separa samplers combinados (`sampler2D`, estilo GL) em texture2D +
-    // sampler (estilo Vulkan/wgpu). Ver `separate_samplers`.
+    // 3) split combined samplers (`sampler2D`, GL style) into texture2D +
+    // sampler (Vulkan/wgpu style). See `separate_samplers`.
     let body = separate_samplers(&body);
 
-    // 4) monta o resultado: prelúdio + defines do estágio + combos + corpo.
+    // 4) assemble the result: prelude + stage defines + combos + body.
     let mut out = String::with_capacity(PRELUDE.len() + body.len() + 512);
     out.push_str(PRELUDE);
     out.push_str(match stage {
@@ -790,9 +790,9 @@ pub fn parse_samplers(source: &str) -> Vec<SamplerAnnotation> {
     out
 }
 
-// Expande `#include "arquivo.h"` recursivamente, inserindo o conteúdo no lugar da
-// diretiva. Cada arquivo é incluído no MÁXIMO uma vez (dedupe por nome) — funciona
-// como include guard, evitando redefinições (GLSL não tem `#pragma once`).
+// Expands `#include "file.h"` recursively, inserting the contents in place of the
+// directive. Each file is included AT MOST once (dedupe by name) — works
+// as an include guard, avoiding redefinitions (GLSL has no `#pragma once`).
 fn resolve_includes(
     source: &str,
     shaders_dir: &Path,
@@ -803,14 +803,13 @@ fn resolve_includes(
         if let Some(name) = parse_include(line) {
             if seen.insert(name.clone()) {
                 let path = shaders_dir.join(&name);
-                let content = std::fs::read_to_string(&path).map_err(|e| {
-                    format!("include {name:?} não encontrado ({}): {e}", path.display())
-                })?;
+                let content = std::fs::read_to_string(&path)
+                    .map_err(|e| format!("include {name:?} not found ({}): {e}", path.display()))?;
                 out.push_str(&format!("// begin include {name}\n"));
                 out.push_str(&resolve_includes(&content, shaders_dir, seen)?);
                 out.push_str(&format!("\n// end include {name}\n"));
             }
-            // já incluído antes: omite (dedupe)
+            // already included before: omit (dedupe)
         } else {
             out.push_str(line);
             out.push('\n');
@@ -846,25 +845,25 @@ pub fn expand_includes(source: &str, shaders_dir: &Path) -> String {
     out
 }
 
-// Stub do módulo LightingV1: no WE, `PerformLighting_V1` é gerado dinamicamente a
-// partir das luzes da cena. Como (assim como o linux-wallpaperengine) ainda não há
-// suporte a objetos de luz, geramos um stub que não contribui luz dinâmica. Sem
-// isso os shaders que dão `#require LightingV1` (ex.: genericimage4) não compilam.
+// Stub of the LightingV1 module: in WE, `PerformLighting_V1` is generated dynamically
+// from the scene's lights. Since (like linux-wallpaperengine) there is no support
+// for light objects yet, we generate a stub that contributes no dynamic light. Without
+// it, shaders that `#require LightingV1` (e.g. genericimage4) do not compile.
 const LIGHTING_V1_STUB: &str = "// generated module LightingV1\n\
     vec3 PerformLighting_V1(vec3 worldPos, vec3 albedo, vec3 normal, vec3 viewDir,\n\
     vec3 specularTint, vec3 baseReflectance, float roughness, float metallic) {\n\
     return vec3(0.0);\n\
     }\n";
 
-// Substitui diretivas `#require <módulo>` pelo código do módulo. Só conhecemos
-// LightingV1; outras viram comentário (com aviso inline) pra não quebrar o parse.
+// Replaces `#require <module>` directives with the module's code. We only know
+// LightingV1; others become a comment (with an inline warning) so parsing does not break.
 fn resolve_requires(source: &str) -> String {
     let mut out = String::with_capacity(source.len());
     for line in source.lines() {
         if let Some(module) = line.trim_start().strip_prefix("#require") {
             match module.trim() {
                 "LightingV1" => out.push_str(LIGHTING_V1_STUB),
-                other => out.push_str(&format!("// #require {other} (módulo não suportado)\n")),
+                other => out.push_str(&format!("// #require {other} (unsupported module)\n")),
             }
         } else {
             out.push_str(line);
@@ -874,10 +873,10 @@ fn resolve_requires(source: &str) -> String {
     out
 }
 
-/// Um parâmetro de material declarado no shader: o uniform, o nome do parâmetro no
-/// material (`"material"` na anotação), o valor default e quantos componentes tem.
-/// Ex.: `uniform vec3 g_TintColor; // {"material":"color","default":"1 0 0"}`
-/// vira `{ uniform:"g_TintColor", material:Some("color"), default:[1,0,0], components:3 }`.
+/// A material parameter declared in the shader: the uniform, the parameter name in the
+/// material (`"material"` in the annotation), the default value and how many components it has.
+/// E.g.: `uniform vec3 g_TintColor; // {"material":"color","default":"1 0 0"}`
+/// becomes `{ uniform:"g_TintColor", material:Some("color"), default:[1,0,0], components:3 }`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UniformParam {
     pub uniform: String,
@@ -886,7 +885,7 @@ pub struct UniformParam {
     pub components: usize,
 }
 
-// Nº de componentes de um tipo GLSL escalar/vetor (o que cabe no UBO como floats).
+// Number of components of a scalar/vector GLSL type (what fits in the UBO as floats).
 fn type_components(ty: &str) -> Option<usize> {
     match ty {
         "float" | "int" => Some(1),
@@ -897,7 +896,7 @@ fn type_components(ty: &str) -> Option<usize> {
     }
 }
 
-// Lê um default da anotação: número -> [n]; string "1 0 0" -> [1,0,0].
+// Reads a default from the annotation: number -> [n]; string "1 0 0" -> [1,0,0].
 fn parse_default(v: &serde_json::Value, components: usize) -> Vec<f32> {
     let mut out = match v {
         serde_json::Value::Number(n) => vec![n.as_f64().unwrap_or(0.0) as f32],
@@ -911,9 +910,9 @@ fn parse_default(v: &serde_json::Value, components: usize) -> Vec<f32> {
     out
 }
 
-/// Extrai os parâmetros de material anotados num shader (linhas
-/// `uniform <tipo> <nome>; // {json}`). Ignora samplers e uniforms sem anotação
-/// JSON válida. Usado pra montar o UBO com defaults + overrides do material.
+/// Extracts the annotated material parameters of a shader (lines
+/// `uniform <type> <name>; // {json}`). Ignores samplers and uniforms without a valid
+/// JSON annotation. Used to build the UBO with defaults + material overrides.
 pub fn parse_params(source: &str) -> Vec<UniformParam> {
     let mut out = Vec::new();
     for line in source.lines() {
@@ -924,13 +923,13 @@ pub fn parse_params(source: &str) -> Vec<UniformParam> {
         let Some((decl, comment)) = rest.split_once("//") else {
             continue;
         };
-        // decl = "<tipo> <nome> ;" (com ; no fim)
+        // decl = "<type> <name> ;" (with ; at the end)
         let decl = decl.trim().trim_end_matches(';').trim();
         let mut it = decl.split_whitespace();
         let (Some(ty), Some(name)) = (it.next(), it.next()) else {
             continue;
         };
-        // nome pode ter [N] (array) — ignoramos arrays por ora
+        // name may have [N] (array) — we ignore arrays for now
         if name.contains('[') {
             continue;
         }
@@ -958,9 +957,9 @@ pub fn parse_params(source: &str) -> Vec<UniformParam> {
     out
 }
 
-/// Defaults dos combos declarados via `// [COMBO] {"combo":"NAME","default":N}` no
-/// shader. O WE usa esses defaults quando o material/cena não sobrescreve o combo.
-/// Sem isso, shaders com `#if BLENDMODE` etc. não compilam (identificador indefinido).
+/// Defaults of the combos declared via `// [COMBO] {"combo":"NAME","default":N}` in the
+/// shader. WE uses these defaults when the material/scene does not override the combo.
+/// Without this, shaders with `#if BLENDMODE` etc. do not compile (undefined identifier).
 pub fn parse_combo_defaults(source: &str) -> Vec<(String, i64)> {
     let mut out = Vec::new();
     for line in source.lines() {
@@ -982,9 +981,9 @@ pub fn parse_combo_defaults(source: &str) -> Vec<(String, i64)> {
     out
 }
 
-/// Textura default de cada sampler anotado: `uniform sampler2D g_Texture1;
-/// // {"default":"util/noise"}` -> ("g_Texture1", "util/noise"). Serve pra saber que
-/// textura carregar num slot que o material não preenche (ex.: ruído do filmgrain).
+/// Default texture of each annotated sampler: `uniform sampler2D g_Texture1;
+/// // {"default":"util/noise"}` -> ("g_Texture1", "util/noise"). Used to know which
+/// texture to load into a slot the material does not fill (e.g. filmgrain's noise).
 pub fn parse_sampler_defaults(source: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for line in source.lines() {
@@ -1000,23 +999,23 @@ pub fn parse_sampler_defaults(source: &str) -> Vec<(String, String)> {
     out
 }
 
-/// Binding do bloco de uniforms livres (WeGlobals) no descriptor set 0.
+/// Binding of the free-uniforms block (WeGlobals) in descriptor set 0.
 pub const UNIFORM_BLOCK_BINDING: u32 = 0;
 
-/// Bindings de uma textura `g_TextureN`: a imagem e o sampler que a acompanha.
-/// Reservamos o binding 0 pro bloco de uniforms, então N=0 → (1, 2), N=1 → (3, 4)...
-/// Determinístico (deriva do índice, não da ordem) pra bater entre vertex e fragment.
+/// Bindings of a `g_TextureN` texture: the image and its accompanying sampler.
+/// We reserve binding 0 for the uniforms block, so N=0 → (1, 2), N=1 → (3, 4)...
+/// Deterministic (derived from the index, not the order) so vertex and fragment match.
 pub fn texture_bindings(index: u32) -> (u32, u32) {
     (2 * index + 1, 2 * index + 2)
 }
 
-// Reescreve declarações `uniform sampler2D g_TextureN;` (samplers COMBINADOS,
-// estilo OpenGL) em duas declarações separadas estilo Vulkan/wgpu:
+// Rewrites `uniform sampler2D g_TextureN;` declarations (COMBINED samplers,
+// OpenGL style) into two separate declarations in Vulkan/wgpu style:
 //   layout(binding = t) uniform texture2D g_TextureN;
 //   layout(binding = s) uniform sampler   _smp_g_TextureN;
-// As macros texSample2D/Lod no prelúdio remontam `sampler2D(tex, _smp_tex)` na hora
-// de amostrar. Isso é necessário porque o wgpu (WebGPU) usa textura e sampler como
-// bindings distintos — não existe sampler combinado como no GL.
+// The texSample2D/Lod macros in the prelude reassemble `sampler2D(tex, _smp_tex)` at
+// sampling time. This is necessary because wgpu (WebGPU) uses texture and sampler as
+// distinct bindings — there is no combined sampler as in GL.
 fn separate_samplers(source: &str) -> String {
     let mut out = String::with_capacity(source.len());
     for line in source.lines() {
@@ -1026,8 +1025,8 @@ fn separate_samplers(source: &str) -> String {
                 digits.parse::<u32>().ok()
             }) {
                 Some(idx) => texture_bindings(idx),
-                // Sampler sem o padrão g_TextureN: joga em bindings altos pra não
-                // colidir com os das texturas numeradas nem com o bloco.
+                // Sampler without the g_TextureN pattern: put it in high bindings so it does not
+                // collide with the numbered textures' bindings or the block.
                 None => (900, 901),
             };
             out.push_str(&format!(
@@ -1042,13 +1041,13 @@ fn separate_samplers(source: &str) -> String {
     out
 }
 
-// Reconhece `uniform sampler2D NOME;` (com espaços variáveis e comentário opcional).
-// Retorna (nome, comentário_sem_barras). None se a linha não for isso.
+// Recognizes `uniform sampler2D NAME;` (with variable spacing and an optional comment).
+// Returns (name, comment_without_slashes). None if the line is not that.
 fn parse_sampler_decl(line: &str) -> Option<(String, String)> {
     let t = line.trim();
     let rest = t.strip_prefix("uniform")?;
     let rest = rest.trim_start().strip_prefix("sampler2D")?;
-    // precisa de um espaço após o tipo (senão "sampler2DArray" casaria)
+    // needs a space after the type (otherwise "sampler2DArray" would match)
     if !rest.starts_with(char::is_whitespace) {
         return None;
     }
@@ -1066,8 +1065,8 @@ fn parse_sampler_decl(line: &str) -> Option<(String, String)> {
     Some((name.to_string(), comment))
 }
 
-// Extrai o nome de um `#include "x.h"` (ignorando espaços). Retorna None se a
-// linha não for um include.
+// Extracts the name from an `#include "x.h"` (ignoring whitespace). Returns None if the
+// line is not an include.
 fn parse_include(line: &str) -> Option<String> {
     let t = line.trim_start();
     let rest = t.strip_prefix("#include")?;
@@ -1099,15 +1098,15 @@ mod tests {
         let dir = std::env::temp_dir();
         let src = "varying vec2 v_TexCoord;\nvoid main() { gl_FragColor = vec4(1.0); }\n";
         let out = translate(Stage::Fragment, src, &[("lighting".into(), 1)], &dir).unwrap();
-        // prelúdio presente
+        // prelude present
         assert!(out.starts_with("#version 450"));
         assert!(out.contains("#define mul(x, y) ((y) * (x))"));
-        // define do estágio fragment
+        // fragment stage define
         assert!(out.contains("out vec4 out_FragColor;"));
         assert!(out.contains("#define varying in"));
-        // combo em maiúsculas
+        // combo in uppercase
         assert!(out.contains("#define LIGHTING 1"));
-        // gl_FragColor reescrito
+        // gl_FragColor rewritten
         assert!(out.contains("out_FragColor = vec4(1.0)"));
         assert!(!out.contains("gl_FragColor"));
     }
@@ -1134,7 +1133,7 @@ mod tests {
                    uniform sampler2D g_Texture0; // {\"label\":\"x\"}\n\
                    uniform float g_NoAnno;\n";
         let ps = parse_params(src);
-        assert_eq!(ps.len(), 2); // sampler e sem-anotação ignorados
+        assert_eq!(ps.len(), 2); // sampler and unannotated ignored
         assert_eq!(
             ps[0],
             UniformParam {
@@ -1160,7 +1159,7 @@ mod tests {
         let out = resolve_requires("a\n#require LightingV1\nb\n");
         assert!(out.contains("vec3 PerformLighting_V1("));
         assert!(!out.contains("#require LightingV1"));
-        // módulo desconhecido vira comentário, não some nem quebra
+        // unknown module becomes a comment; it neither disappears nor breaks
         let unk = resolve_requires("#require Foo\n");
         assert!(unk.contains("// #require Foo"));
     }
@@ -1287,7 +1286,7 @@ mod tests {
         let src = "#include \"a.h\"\n#include \"a.h\"\nvoid main() {}\n";
         let mut seen = HashSet::new();
         let out = resolve_includes(src, &dir, &mut seen).unwrap();
-        // incluído uma vez só
+        // included only once
         assert_eq!(out.matches("float helper()").count(), 1);
         assert!(out.contains("void main()"));
     }
