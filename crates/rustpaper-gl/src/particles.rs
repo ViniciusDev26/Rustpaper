@@ -926,8 +926,12 @@ impl ParticleSim {
         p.size *= self.ov.size * SIZE_SCALE;
         p.alpha *= self.ov.alpha;
         p.vel = scale(p.vel, self.ov.speed);
+        // The instance color REPLACES the initializer's (two scenes agree:
+        // wind v7 2884352976 draws its orange `Light shafts` lavender with
+        // colorn 0.435 0.424 0.525; rain 1444077782's gray smoke is white with
+        // colorn 1 1 1, matching WE's brightness only when replaced).
         if let Some(c) = self.ov.color {
-            p.color = mul3(p.color, c);
+            p.color = c;
         }
         p.color = scale(p.color, self.ov.brightness);
         p.frame_phase = rng.f();
