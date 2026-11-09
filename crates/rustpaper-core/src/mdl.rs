@@ -230,11 +230,13 @@ impl Puppet {
                         "single" => PlayMode::Single,
                         _ => PlayMode::Loop,
                     };
-                    // MDLA0001 stores a playback rate over the editor's 30 fps
-                    // (Summer Feeling 2477602742: trains of 360 frames at
-                    // "1.0" pass every 12 s); 0003+ store frames per second.
-                    let rate = c.f32()?;
-                    let fps = if mdla_version < 2 { rate * 30.0 } else { rate };
+                    // Frames per second in every version seen (0001, 0003,
+                    // 0004). Checked on MDLA0001 data: Summer Feeling's train
+                    // (rate 1.0, 360 frames) crosses the screen between two
+                    // consecutive keys, i.e. in ~1 s at 1 fps; at 30 fps it
+                    // would be an invisible 1/30 s jump.
+                    let fps = c.f32()?;
+                    let _ = mdla_version;
                     let frames = c.u32()?;
                     c.u32()?;
                     let mut tracks = Vec::new();
