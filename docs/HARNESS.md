@@ -118,6 +118,14 @@ headless output and halfway down fits best at pointer (0, 0.5)).
 `--pointer`; older captures assume the center. Parallax, `depthparallax`,
 iris-following effects depend on it.
 
+Every one of the 11 corpus scenes with `cameraparallax` failed against
+captures without `we_pointer.txt`, and the best-fitting pointer differs per
+capture (平泽唯 3835761947: (0, 0) gives frame SSIM 0.94 vs 0.48 at the
+center; 3366882745: center 0.96 vs 0.85 at (0, 0)) — the cursor was wherever
+the user left it. Those failures are capture metadata, not renderer bugs, so
+`pending.sh` recaptures every failing scene that has no `we_pointer.txt`
+instead of fitting a pointer per scene.
+
 For random particles the motion SSIM is a weak signal (positions never match);
 compare the zoomed motion maps and measure sizes/brightness of features.
 
@@ -130,7 +138,8 @@ compare the zoomed motion maps and measure sizes/brightness of features.
 ## Pending work (`harness/pending.sh`)
 
 Captures that could not run (locked session) are queued: contaminated scenes
-in `harness-out/recapture_after_unlock.txt`, the second particle
+in `harness-out/recapture_after_unlock.txt`, then every failing scene
+captured before `we_pointer.txt`/`we_time.txt` existed, the second particle
 calibration round, then a full re-render and `score.py`. Run it with the
 session unlocked.
 
