@@ -209,7 +209,7 @@ impl GlWallpaper {
             if self.gl.make_current(Some(surface)).is_err() {
                 continue;
             }
-            present_cover(&self.gl.gl, self.scene.output(), w, h);
+            present_cover(&self.gl.gl, self.scene.output(), w, h, self.scene.pixelated);
             if let Err(e) = self.gl.swap(surface) {
                 eprintln!("warning: {e}");
             }

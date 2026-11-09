@@ -217,6 +217,21 @@ unchanged WE material shader draws it.
   0.57 vs 0.60).
 - Play modes `loop`, `mirror` (ping-pong), `single` (hold last frame).
 
+## GIF scenes (animated images)
+
+- The pkg is named after the project's scene file (`gifscene.json` ->
+  `gifscene.pkg`).
+- `orthogonalprojection: {"auto": true}`: the scene is the size of its
+  image (centered, so size = 2 x origin).
+- An image material with the `spritesheet` combo is a flipbook: the
+  embedded `TEXS` block lists frames (image index, duration, rectangle) over
+  SEVERAL images of the .tex (atlases). `TEXS0001` stores the rectangle as
+  integers, 0002/0003 as floats. Each frame sets `g_Texture0Translation` /
+  `g_Texture0Rotation` and binds its image.
+- Pixel art (`flags & 1`, no interpolation) is scaled to the screen with
+  nearest filtering, as WE draws it at screen resolution (Aesthetic City
+  843532366: mean SSIM 0.91 -> 0.9997).
+
 ## Timeline animations (`keyframes.rs`)
 
 Object properties can carry an `animation` (the editor timeline): one curve

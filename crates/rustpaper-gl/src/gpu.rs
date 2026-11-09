@@ -555,7 +555,9 @@ pub fn cover_rect(src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) -> (i32, i32, 
 
 /// Cover-blits a finished frame into another target (same convention: row 0
 /// = top), e.g. to emulate a 1920x1080 screen offscreen.
-pub fn cover_into(gl: &glow::Context, src: &Target, dst: &Target) {
+/// `nearest`: pixel-art scenes (their image asks for no interpolation) are
+/// scaled up without blurring, like WE draws them at screen resolution.
+pub fn cover_into(gl: &glow::Context, src: &Target, dst: &Target, nearest: bool) {
     let (x0, y0, x1, y1) = cover_rect(src.tex.width, src.tex.height, dst.tex.width, dst.tex.height);
     unsafe {
         gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(src.fbo));
@@ -570,7 +572,7 @@ pub fn cover_into(gl: &glow::Context, src: &Target, dst: &Target) {
             dst.tex.width as i32,
             dst.tex.height as i32,
             glow::COLOR_BUFFER_BIT,
-            glow::LINEAR,
+            if nearest { glow::NEAREST } else { glow::LINEAR },
         );
     }
 }
@@ -578,7 +580,7 @@ pub fn cover_into(gl: &glow::Context, src: &Target, dst: &Target) {
 /// Copies a finished frame to the current window surface (default framebuffer)
 /// of `dst_w`x`dst_h`, cover-scaled. Our targets keep the image top in row 0,
 /// the window's row 0 is the bottom, so the destination rectangle is flipped.
-pub fn present_cover(gl: &glow::Context, src: &Target, dst_w: u32, dst_h: u32) {
+pub fn present_cover(gl: &glow::Context, src: &Target, dst_w: u32, dst_h: u32, nearest: bool) {
     let (x0, y0, x1, y1) = cover_rect(src.tex.width, src.tex.height, dst_w, dst_h);
     unsafe {
         gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(src.fbo));
@@ -599,7 +601,7 @@ pub fn present_cover(gl: &glow::Context, src: &Target, dst_w: u32, dst_h: u32) {
             dst_w as i32,
             0,
             glow::COLOR_BUFFER_BIT,
-            glow::LINEAR,
+            if nearest { glow::NEAREST } else { glow::LINEAR },
         );
         // The wallpaper is opaque: force alpha to 1 so the compositor never
         // blends it with whatever is below the background layer.
