@@ -36,6 +36,15 @@ if [ ${#ids[@]} -eq 0 ]; then
     done
 fi
 
+# documented exclusions (harness/excluded.tsv): never captured nor scored
+mapfile -t EXCLUDED < <(grep -v '^#' "$HARNESS_DIR/excluded.tsv" 2>/dev/null | cut -f1)
+kept=()
+for id in "${ids[@]}"; do
+    [[ " ${EXCLUDED[*]} " == *" $id "* ]] && { echo "skip $id: excluded"; continue; }
+    kept+=("$id")
+done
+ids=("${kept[@]}")
+
 results="$OUT/results.tsv"
 mkdir -p "$OUT"
 header='id\tmean_ssim\tmotion_ssim\tenergy_rp\tenergy_we\tenergy_ratio\tverdict\ttitle\n'

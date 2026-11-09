@@ -858,18 +858,21 @@ impl ParticleSim {
                     offset,
                     forward,
                 } => {
-                    // Direction from a noise field sampled at the spawn point
-                    // (neighbours move alike). `offset` shifts the noise
-                    // sample (a phase), it does not push along `forward`:
-                    // measured on 9 scenes with every other fix in place,
-                    // phase passes 5 vs 4 for a push by |offset|, fewer for
-                    // a push by -offset or a "min cosine with forward" cone.
-                    // Flattened to the plane when forward.z = 0.
-                    let n = noise_vec(add(
-                        scale(p.pos, s * 0.01),
-                        [self.time * timescale + offset; 3],
-                    ));
-                    let mut d = n;
+                    // `forward` (default up) rotated in the scene plane by
+                    // `offset` radians plus a random angle of up to
+                    // +-2 * `scale` rad. Calibrated on single-system scenes
+                    // (harness/calibration/make_particles.py): offset 0 goes
+                    // up (82% of the light above the emitter in WE, 83% here),
+                    // offset 3 goes down-left, -0.5 up-right, and scale 0.1
+                    // is a narrow cone (x spread 0.029 in both). `timescale`
+                    // has no visible effect at spawn.
+                    let _ = timescale;
+                    let jitter = (rng.f() * 2.0 - 1.0) * s * 2.0;
+                    let a = offset + jitter;
+                    let (sa, ca) = a.sin_cos();
+                    let f = norm(forward);
+                    // rotate forward around z by a (the scene plane)
+                    let mut d = [f[0] * ca - f[1] * sa, f[0] * sa + f[1] * ca, f[2]];
                     if forward[2] == 0.0 {
                         d[2] = 0.0;
                     }

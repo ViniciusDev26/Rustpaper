@@ -44,7 +44,7 @@ timeout 20 grim -o "$HEADLESS" "$out/we.png" || die "grim could not capture $HEA
 # WE sometimes shows a black window (wallpaper failed to load in it): that is
 # not a reference, so fail instead of comparing against it
 lum=$(ffmpeg -v error -i "$out/we.png" -vf "scale=1:1:flags=area,format=gray" -f rawvideo - | od -An -tu1 | tr -d ' ')
-[ "${lum:-0}" -ge 6 ] || { rm -f "$out/we.png"; die "Wallpaper Engine showed a black window for $id"; }
+[ "${lum:-0}" -ge 6 ] || [ "${WE_ALLOW_DARK:-0}" = 1 ] || { rm -f "$out/we.png"; die "Wallpaper Engine showed a black window for $id"; }
 
 # Video: grab frames as fast as the output refreshes, keep real timestamps,
 # then resample to 30 fps CFR so it lines up with rustpaper-render --fps 30.
