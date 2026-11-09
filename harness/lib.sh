@@ -175,6 +175,10 @@ capture_time() { cat "$1/we_time.txt" 2>/dev/null || echo 6; }
 # older captures did not record it: center.
 capture_pointer() { cat "$1/we_pointer.txt" 2>/dev/null || echo 0.5,0.5; }
 
+# rustpaper-render arguments replaying the audio WE heard during a capture
+# (none for older captures: silence).
+capture_audio() { [ -s "$1/we_audio.wav" ] && echo "--audio $1/we_audio.wav"; true; }
+
 close_window() { hyprctl dispatch "hl.dsp.window.close({ window = 'address:$1' })" >/dev/null 2>&1 || true; }
 # refocus <window address> [monitor]: back to the user's window, or at least
 # their monitor when nothing was focused (empty workspace).

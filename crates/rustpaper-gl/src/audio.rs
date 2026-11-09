@@ -5,10 +5,26 @@
 // the system audio is the live engine's job (PipeWire monitor of the default
 // output). The CLI replays a recorded file instead (`AudioTrack`,
 // `rustpaper-render --audio`); without one every band is 0 (silence).
+//
+// The model is fitted to WE itself (harness/calibration/run_audio.sh: a scene
+// that shows g_AudioSpectrum* as gray cells, captured while a sweep of tones
+// plays; fit_audio.py). What WE does, measured 2026-11-09:
+//   * band k is a fixed frequency: 45 Hz -> 0, 250 -> 8, 1 kHz -> 32,
+//     4 kHz -> 47, 11 kHz -> 61 (ANCHORS); nothing above ~13 kHz;
+//   * values are LINEAR magnitudes, not dB (amplitude 0.5 / 0.25 / 0.0625 after
+//     a full-scale tone show 0.47 / 0.25 / 0.08);
+//   * divided by an adaptive reference shared by all bands: a quiet tone that
+//     follows silence shows ~1.0, the same tone after a louder one ~0.5;
+//   * no temporal smoothing: a band drops from 1 to 0 within ~70 ms;
+//   * a tone also lights its neighbours (~0.3 one band below, ~0.4 above);
+//   * the 16/32-band arrays are the maximum of each group of 64 bands.
+// Fitted RMSE per band against WE: 0.107 (the previous dB + slow-decay
+// analyzer: 0.224). Remaining gap: WE lights more bands for tones below
+// ~700 Hz than a 2048-sample FFT can explain.
 
 use rustfft::{FftPlanner, num_complex::Complex};
 
-/// Number of bands kept; 32/16-band versions are averages of these.
+/// Number of bands kept; 32/16-band versions are maxima of these.
 pub const BANDS: usize = 64;
 /// Samples per FFT window (per channel).
 pub const WINDOW: usize = 2048;
@@ -30,12 +46,13 @@ impl Default for AudioFrame {
 }
 
 impl AudioFrame {
-    /// `n`-band version (16, 32 or 64) of one channel: averages of the 64.
+    /// `n`-band version (16, 32 or 64) of one channel: the maximum of each
+    /// group of the 64 (closer to WE than the average: RMSE 0.10 vs 0.15).
     pub fn bands(&self, right: bool, n: usize) -> Vec<f32> {
         let src = if right { &self.right } else { &self.left };
         let group = (BANDS / n.max(1)).max(1);
         src.chunks(group)
-            .map(|c| c.iter().sum::<f32>() / c.len() as f32)
+            .map(|c| c.iter().copied().fold(0.0, f32::max))
             .collect()
     }
 
@@ -66,11 +83,55 @@ impl AudioFrame {
     }
 }
 
-/// FFT + band mapping with WE-like smoothing (instant attack, slow decay).
+/// Tone frequency (Hz) -> the band WE lights for it (sweep, 2026-11-09).
+const ANCHORS: [(f32, f32); 16] = [
+    (45.0, 0.0),
+    (90.0, 1.0),
+    (125.0, 2.0),
+    (180.0, 5.0),
+    (250.0, 8.0),
+    (350.0, 13.0),
+    (500.0, 20.0),
+    (700.0, 29.0),
+    (1000.0, 32.0),
+    (1400.0, 35.0),
+    (2000.0, 39.0),
+    (2800.0, 43.0),
+    (4000.0, 47.0),
+    (5600.0, 51.0),
+    (8000.0, 56.0),
+    (11000.0, 61.0),
+];
+/// How much of a band shows in the 1st / 2nd band below and above it.
+const SPREAD_BELOW: [f32; 2] = [0.3, 0.1];
+const SPREAD_ABOVE: [f32; 2] = [0.4, 0.15];
+/// Adaptive reference, per analysis step (60 Hz): rises toward the loudest
+/// band by ATTACK, otherwise decays by RELEASE (~33 s time constant; the fit
+/// barely distinguishes it from no decay, but a live wallpaper must recover
+/// after a loud moment), never below REF_MIN (silence stays dark).
+const ATTACK: f32 = 0.05;
+const RELEASE: f32 = 0.9995;
+const REF_MIN: f32 = 0.01;
+
+/// Center frequency of band `k`: log-linear between the anchors.
+fn band_center(k: usize) -> f32 {
+    let k = k as f32;
+    let seg = ANCHORS
+        .windows(2)
+        .find(|w| k <= w[1].1)
+        .unwrap_or(&ANCHORS[ANCHORS.len() - 2..]);
+    let ((f0, b0), (f1, b1)) = (seg[0], seg[1]);
+    let t = (k - b0) / (b1 - b0);
+    (f0.ln() + t * (f1.ln() - f0.ln())).exp()
+}
+
+/// FFT + WE's band mapping, spread and adaptive normalization.
 pub struct Analyzer {
     fft: std::sync::Arc<dyn rustfft::Fft<f32>>,
     window: Vec<f32>,
-    edges: Vec<usize>,
+    /// FFT bin range of each band, plus its center as a fractional bin.
+    bins: Vec<(usize, usize, f32)>,
+    reference: f32,
     pub frame: AudioFrame,
 }
 
@@ -81,44 +142,88 @@ impl Analyzer {
         let window = (0..WINDOW)
             .map(|i| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / (WINDOW - 1) as f32).cos())
             .collect();
-        // log-spaced band edges between 30 Hz and 16 kHz, as FFT bin indices
-        let bin = |hz: f32| ((hz / sample_rate * WINDOW as f32) as usize).clamp(1, WINDOW / 2 - 1);
-        let (lo, hi) = (30.0f32.ln(), 16_000.0f32.ln());
-        let edges = (0..=BANDS)
-            .map(|k| bin((lo + (hi - lo) * k as f32 / BANDS as f32).exp()))
+        let to_bin = |hz: f32| hz / sample_rate * WINDOW as f32;
+        let centers: Vec<f32> = (0..BANDS).map(band_center).collect();
+        // edges halfway (geometrically) between band centers
+        let edge = |k: usize| -> f32 {
+            match k {
+                0 => centers[0] / (centers[1] / centers[0]).sqrt(),
+                k if k == BANDS => {
+                    centers[BANDS - 1] * (centers[BANDS - 1] / centers[BANDS - 2]).sqrt()
+                }
+                k => (centers[k - 1] * centers[k]).sqrt(),
+            }
+        };
+        let clamp = |b: f32| (b as usize).clamp(1, WINDOW / 2 - 2);
+        let bins = (0..BANDS)
+            .map(|k| {
+                (
+                    clamp(to_bin(edge(k))),
+                    clamp(to_bin(edge(k + 1))),
+                    to_bin(centers[k]),
+                )
+            })
             .collect();
         Analyzer {
             fft,
             window,
-            edges,
+            bins,
+            reference: REF_MIN,
             frame: AudioFrame::default(),
         }
     }
 
     /// Feeds the latest `WINDOW` interleaved stereo frames (L, R, L, R...).
+    /// Call it at ~60 Hz: the reference's attack/release are per call.
     pub fn analyze(&mut self, interleaved: &[f32]) -> AudioFrame {
         let frames = interleaved.len() / 2;
         if frames < WINDOW {
             return self.frame;
         }
         let tail = &interleaved[(frames - WINDOW) * 2..];
-        for ch in 0..2 {
+        let mut raw = [[0.0f32; BANDS]; 2];
+        for (ch, out) in raw.iter_mut().enumerate() {
             let mut buf: Vec<Complex<f32>> = (0..WINDOW)
                 .map(|i| Complex::new(tail[i * 2 + ch] * self.window[i], 0.0))
                 .collect();
             self.fft.process(&mut buf);
-            let out = if ch == 0 {
-                &mut self.frame.left
-            } else {
-                &mut self.frame.right
-            };
-            for (b, slot) in out.iter_mut().enumerate() {
-                let (a, z) = (self.edges[b], self.edges[b + 1].max(self.edges[b] + 1));
-                let mag =
-                    buf[a..z].iter().map(|c| c.norm()).fold(0.0, f32::max) / (WINDOW as f32 * 0.25);
-                // -60 dB .. 0 dB -> 0 .. 1
-                let level = ((20.0 * mag.max(1e-6).log10() + 60.0) / 60.0).clamp(0.0, 1.0);
-                *slot = level.max(*slot * 0.85);
+            // a full-scale sine peaks at WINDOW / 4 with a Hann window
+            let mag = |i: usize| buf[i].norm() / (WINDOW as f32 * 0.25);
+            let mut bands = [0.0f32; BANDS];
+            for (b, &(lo, hi, center)) in self.bins.iter().enumerate() {
+                // bands narrower than a bin (the bass) read the spectrum
+                // interpolated at their center
+                let i = center as usize;
+                let interp = mag(i) + (mag(i + 1) - mag(i)) * (center - i as f32);
+                bands[b] = (lo..hi).map(mag).fold(interp, f32::max);
+            }
+            for k in 0..BANDS {
+                let mut v = bands[k];
+                for (d, w) in SPREAD_BELOW.iter().enumerate() {
+                    if let Some(&above) = bands.get(k + d + 1) {
+                        v = v.max(above * w);
+                    }
+                }
+                for (d, w) in SPREAD_ABOVE.iter().enumerate() {
+                    if let Some(below) = k.checked_sub(d + 1) {
+                        v = v.max(bands[below] * w);
+                    }
+                }
+                out[k] = v;
+            }
+        }
+        let peak = raw.iter().flatten().copied().fold(0.0, f32::max);
+        self.reference = if peak > self.reference {
+            self.reference + (peak - self.reference) * ATTACK
+        } else {
+            (self.reference * RELEASE).max(REF_MIN)
+        };
+        for (dst, src) in [&mut self.frame.left, &mut self.frame.right]
+            .into_iter()
+            .zip(raw)
+        {
+            for (d, v) in dst.iter_mut().zip(src) {
+                *d = (v / self.reference).min(1.0);
             }
         }
         self.frame
@@ -140,6 +245,9 @@ pub struct AudioTrack {
 
 impl AudioTrack {
     pub const STEP: f32 = 1.0 / 60.0;
+    /// WE shows the spectrum of a sound ~0.167 s after it plays (fitted on
+    /// the calibration capture), so a replayed recording is delayed as much.
+    pub const WE_LATENCY: f32 = 0.167;
 
     /// Interleaved stereo samples at `rate` Hz.
     pub fn new(samples: Vec<f32>, rate: f32) -> AudioTrack {
@@ -176,10 +284,11 @@ impl AudioTrack {
         Ok(AudioTrack::new(samples, 48_000.0))
     }
 
-    /// Spectrum at audio time `t` seconds (before the start or after the end
-    /// of the recording counts as silence). Times must not go backwards by
+    /// Spectrum WE would show at audio time `t` seconds (`WE_LATENCY` late;
+    /// before the start or after the end of the recording counts as silence). Times must not go backwards by
     /// more than a step; going back restarts the analysis.
     pub fn frame_at(&mut self, t: f32) -> AudioFrame {
+        let t = t - Self::WE_LATENCY;
         if t + Self::STEP < self.pos {
             self.analyzer = Analyzer::new(self.rate);
             self.pos = -1.0;
@@ -206,31 +315,60 @@ impl AudioTrack {
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_tone_lights_its_band_and_silence_decays() {
-        let rate = 48_000.0;
-        let mut a = Analyzer::new(rate);
-        // 1 kHz sine, both channels
-        let tone: Vec<f32> = (0..WINDOW * 2)
+    fn sine(hz: f32, amp: f32, frames: usize) -> Vec<f32> {
+        (0..frames)
             .flat_map(|i| {
-                let v = (std::f32::consts::TAU * 1000.0 * i as f32 / rate).sin() * 0.5;
+                let v = (std::f32::consts::TAU * hz * i as f32 / 48_000.0).sin() * amp;
                 [v, v]
             })
-            .collect();
-        let f = a.analyze(&tone);
-        let peak = (0..BANDS)
-            .max_by(|&x, &y| f.left[x].total_cmp(&f.left[y]))
-            .unwrap();
-        // 1 kHz sits around the middle of a 30 Hz..16 kHz log scale
-        assert!((30..45).contains(&peak), "peak band {peak}");
-        assert!(f.left[peak] > 0.7 && f.left[2] < 0.3);
-        let silent = a.analyze(&vec![0.0; WINDOW * 2]);
+            .collect()
+    }
+
+    fn peak(v: &[f32; BANDS]) -> usize {
+        (0..BANDS).max_by(|&x, &y| v[x].total_cmp(&v[y])).unwrap()
+    }
+
+    #[test]
+    fn tones_land_on_we_bands_with_neighbours_and_no_smoothing() {
+        let mut a = Analyzer::new(48_000.0);
+        // WE: 1 kHz -> band 32, 4 kHz -> 47, 250 Hz -> 8 (calibration sweep)
+        // (tolerance: bass bands are narrower than an FFT bin, the known gap)
+        for (hz, band, tol) in [(1000.0, 32, 1), (4000.0, 47, 1), (250.0, 8, 2)] {
+            let tone = sine(hz, 0.5, WINDOW);
+            // the reference needs ~1 s to settle: before that everything
+            // above it saturates at 1 (WE does the same after silence)
+            for _ in 0..60 {
+                a.analyze(&tone);
+            }
+            let f = a.analyze(&tone);
+            let p = peak(&f.left);
+            assert!(p.abs_diff(band) <= tol, "{hz} Hz -> band {p}, WE {band}");
+            assert!(f.left[p] > 0.9, "{hz} Hz peak {}", f.left[p]);
+        }
+        let f = a.analyze(&sine(1000.0, 0.5, WINDOW));
+        let p = peak(&f.left);
         assert!(
-            silent.left[peak] < f.left[peak] && silent.left[peak] > 0.5,
-            "slow decay"
+            f.left[p + 1] > 0.2 && f.left[p + 5] < 0.05,
+            "spread to neighbours only"
         );
+        // no smoothing: silence is dark at once
+        let silent = a.analyze(&vec![0.0; WINDOW * 2]);
+        assert!(silent.left.iter().all(|&v| v < 0.01));
         assert_eq!(silent.bands(false, 16).len(), 16);
-        assert!(silent.response(3, 8, 12, (0.0, 1.0), 1.0) > 0.0);
+    }
+
+    #[test]
+    fn levels_are_linear_relative_to_the_loudest_recent_sound() {
+        let mut a = Analyzer::new(48_000.0);
+        let loud = sine(1000.0, 1.0, WINDOW);
+        for _ in 0..120 {
+            a.analyze(&loud); // 2 s: the reference settles on the loud tone
+        }
+        let half = a.analyze(&sine(1000.0, 0.5, WINDOW));
+        let v = half.left[peak(&half.left)];
+        // WE: 0.47 for half the amplitude after a full-scale tone
+        assert!((0.4..0.6).contains(&v), "{v}");
+        assert!(half.response(3, 8, 8, (0.0, 1.0), 1.0) > 0.3, "16-band max");
     }
 
     #[test]

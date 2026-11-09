@@ -68,7 +68,7 @@ render_and_compare() { # <id> <dir> <out> <title>
     RUSTPAPER_CLOCK=$(capture_clock "$o" "$secs") \
         "$bin" "$dir" --out "$o/rp.png" --time 10 --screen 1920x1080 2>"$o/rp_warnings.txt" || true
     if ! RUSTPAPER_CLOCK=$(capture_clock "$o" "$secs") \
-        "$bin" "$dir" --video "$o/rp.mp4" --duration "$secs" --fps 30 --screen 1920x1080 --start "$(capture_time "$o")" --pointer "$(capture_pointer "$o")" 2>>"$o/rp_warnings.txt"; then
+        "$bin" "$dir" --video "$o/rp.mp4" --duration "$secs" --fps 30 --screen 1920x1080 --start "$(capture_time "$o")" --pointer "$(capture_pointer "$o")" $(capture_audio "$o") 2>>"$o/rp_warnings.txt"; then
         echo "  render failed: $id"
         printf '%s\t\t\t\t\t\tERROR\t%s\n' "$id" "$title" > "$o/row.tsv"
         return
