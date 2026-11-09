@@ -64,6 +64,10 @@ SSIM >= 0.95 AND the motion energy ratio (mean |frame - previous| of RP over
 WE) is within 0.7..1.4 — the scene looks the same and moves about as much.
 Motion SSIM is reported but not gated (random particles never line up).
 
+Clocks: `we-capture.sh` stores the capture start in `we_start.txt`; the
+renders run with `RUSTPAPER_CLOCK=<that time>` so clock/date texts show the
+same time as the capture (older captures fall back to the video's mtime).
+
 Rustpaper's video starts at t = 10 s (`--start 10`) because WE has been running
 for a while when its capture starts: particles are compared at steady state.
 Audio: WE hears the real system audio while capturing (whatever is

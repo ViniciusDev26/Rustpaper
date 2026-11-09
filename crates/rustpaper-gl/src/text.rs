@@ -110,7 +110,7 @@ impl TextSource {
 
     /// The text to show right now.
     pub fn current(&self) -> String {
-        let now = Local::now();
+        let now = clock_now();
         match self {
             TextSource::Static(s) => s.clone(),
             TextSource::Clock {
@@ -223,6 +223,22 @@ impl TextSource {
 }
 
 /// yyyy yy MM M dd d hh h mm m ss s S a W, as in the "format" clock preset.
+/// Wall clock for clock/date text. `RUSTPAPER_CLOCK` (RFC 3339, e.g.
+/// `2026-11-08T21:22:05-03:00`) pins the clock's start: the harness sets it
+/// to the moment the WE capture started, so both show the same time.
+fn clock_now() -> chrono::DateTime<Local> {
+    use std::sync::OnceLock;
+    static OFFSET: OnceLock<chrono::TimeDelta> = OnceLock::new();
+    let offset = OFFSET.get_or_init(|| {
+        std::env::var("RUSTPAPER_CLOCK")
+            .ok()
+            .and_then(|v| chrono::DateTime::parse_from_rfc3339(v.trim()).ok())
+            .map(|t| t.with_timezone(&Local) - Local::now())
+            .unwrap_or_default()
+    });
+    Local::now() + *offset
+}
+
 fn format_tokens(format: &str, twelve: bool, week: &str, now: &chrono::DateTime<Local>) -> String {
     const DAYS: [&str; 7] = [
         "Sunday",

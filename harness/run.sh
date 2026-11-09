@@ -10,6 +10,7 @@ mkdir -p "$out"
 bin="$REPO_DIR/target/release/rustpaper-render"
 (cd "$REPO_DIR" && cargo build -q --release -p rustpaper-gl --bin rustpaper-render)
 
+export RUSTPAPER_CLOCK; RUSTPAPER_CLOCK=$(capture_clock "$out" "$secs")
 "$bin" "$id" --out "$out/rp.png" --time 10 --screen 1920x1080 2>"$out/rp_warnings.txt"
 # Start well into the animation: WE has been running for a while when its
 # capture starts (particles at steady state, not spawning from empty).

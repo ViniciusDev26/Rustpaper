@@ -77,5 +77,12 @@ park_window() { # park_window <address> <workspace name> [address to refocus]
     return 0
 }
 
+# RFC 3339 time a WE capture started (for RUSTPAPER_CLOCK: clock texts must
+# show the same time). Older captures: the video's mtime minus its length.
+capture_clock() { # capture_clock <capture dir> <seconds>
+    if [ -s "$1/we_start.txt" ]; then cat "$1/we_start.txt"
+    else date -Iseconds -d "@$(( $(stat -c %Y "$1/we.mp4") - ${2:-8} - 2 ))"; fi
+}
+
 close_window() { hyprctl dispatch "hl.dsp.window.close({ window = 'address:$1' })" >/dev/null 2>&1 || true; }
 refocus() { [ -n "${1:-}" ] && hyprctl dispatch "hl.dsp.focus({ window = 'address:$1' })" >/dev/null 2>&1; return 0; }

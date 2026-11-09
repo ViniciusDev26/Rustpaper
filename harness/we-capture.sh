@@ -32,6 +32,7 @@ grim -o "$HEADLESS" "$out/we.png"
 
 # Video: grab frames as fast as the output refreshes, keep real timestamps,
 # then resample to 30 fps CFR so it lines up with rustpaper-render --fps 30.
+date -Iseconds > "$out/we_start.txt"
 frames="$out/.frames"; rm -rf "$frames"; mkdir -p "$frames"
 end=$(( $(date +%s%N) + secs * 1000000000 )); n=0
 while [ "$(date +%s%N)" -lt "$end" ]; do
