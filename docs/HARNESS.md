@@ -58,6 +58,14 @@ parking and on exit (otherwise the keyboard ends up on the invisible output).
 - Focus goes back to the user's window, or to their monitor when no window
   was focused.
 
+- **Focus:** a runtime window rule (`rustpaper-harness-we`) opens WE's windows
+  on the `rpref` workspace without focus; it disappears on the next Hyprland
+  reload. The user's monitor is the focused one, or the one under the cursor.
+- **Parallel:** captures are serial; rendering + comparing run as background
+  jobs (`BATCH_JOBS_CAPTURE`, default 3, while WE captures — more would steal
+  GPU time from WE and skew its motion — and `BATCH_JOBS`, default 8, for
+  scenes whose capture is cached). Rows are collected at the end.
+
 ### Recovering a stuck WE
 
 If every capture fails with "did not open a window", WE is wedged (a leftover

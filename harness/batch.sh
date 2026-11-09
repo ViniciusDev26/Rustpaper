@@ -46,20 +46,48 @@ if [ $update = 1 ] && [ -f "$results" ]; then
 else
     printf "$header" > "$results"
 fi
+# Captures must be serial (one WE, one headless output); rendering and
+# comparing run as background jobs meanwhile. Few jobs while WE is capturing
+# (more would steal GPU time from WE and skew its motion), more afterwards.
+JOBS_CAPTURE=${BATCH_JOBS_CAPTURE:-3}
+JOBS=${BATCH_JOBS:-8}
+wait_slots() { while [ "$(jobs -rp | wc -l)" -ge "$1" ]; do wait -n || true; done; }
+
+render_and_compare() { # <id> <dir> <out> <title>
+    local id=$1 dir=$2 o=$3 title=$4
+    rm -f "$o/row.tsv"
+    RUSTPAPER_CLOCK=$(capture_clock "$o" "$secs") \
+        "$bin" "$dir" --out "$o/rp.png" --time 10 --screen 1920x1080 2>"$o/rp_warnings.txt" || true
+    if ! RUSTPAPER_CLOCK=$(capture_clock "$o" "$secs") \
+        "$bin" "$dir" --video "$o/rp.mp4" --duration "$secs" --fps 30 --screen 1920x1080 --start 10 2>>"$o/rp_warnings.txt"; then
+        echo "  render failed: $id"
+        printf '%s\t\t\t\t\t\tERROR\t%s\n' "$id" "$title" > "$o/row.tsv"
+        return
+    fi
+    "$HARNESS_DIR/compare.sh" "$o/rp.mp4" "$o/we.mp4" "$o" > /dev/null
+    printf '%s\t%s\t%s\n' "$id" "$(cat "$o/metrics.tsv")" "$title" > "$o/row.tsv"
+    echo "  done $id: $(cut -f1,6 "$o/metrics.tsv" | tr '\t' ' ')"
+}
+
+done_ids=()
 for id in "${ids[@]}"; do
     dir=$(wallpaper_dir "$id") || { echo "skip $id: not found"; continue; }
     o="$OUT/$id"; mkdir -p "$o"
     title=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8-sig')).get('title','')[:60])" "$dir/project.json" 2>/dev/null || true)
     echo "== $id $title"
     if [ $recapture = 1 ] || [ ! -s "$o/we.mp4" ]; then
+        wait_slots "$JOBS_CAPTURE"
         "$HARNESS_DIR/we-capture.sh" "$id" "$o" "$secs" || { echo "  capture failed"; continue; }
+        wait_slots "$JOBS_CAPTURE"
+    else
+        wait_slots "$JOBS"
     fi
-    export RUSTPAPER_CLOCK; RUSTPAPER_CLOCK=$(capture_clock "$o" "$secs")
-    "$bin" "$dir" --out "$o/rp.png" --time 10 --screen 1920x1080 2>"$o/rp_warnings.txt" || true
-    "$bin" "$dir" --video "$o/rp.mp4" --duration "$secs" --fps 30 --screen 1920x1080 --start 10 2>>"$o/rp_warnings.txt" || {
-        echo "  render failed"; printf '%s\t\t\t\t\t\tERROR\t%s\n' "$id" "$title" >> "$results"; continue; }
-    "$HARNESS_DIR/compare.sh" "$o/rp.mp4" "$o/we.mp4" "$o" > /dev/null
-    printf '%s\t%s\t%s\n' "$id" "$(cat "$o/metrics.tsv")" "$title" >> "$results"
+    render_and_compare "$id" "$dir" "$o" "$title" &
+    done_ids+=("$id")
+done
+wait
+for id in "${done_ids[@]}"; do
+    [ -s "$OUT/$id/row.tsv" ] && cat "$OUT/$id/row.tsv" >> "$results"
 done
 
 python3 - "$results" "$OUT" <<'EOF'

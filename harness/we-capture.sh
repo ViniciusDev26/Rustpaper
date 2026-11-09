@@ -16,7 +16,7 @@ mkdir -p "$out"
 title="rpref_$(basename "$id")"
 
 ensure_headless
-user_focus=$(active_address) # WE's new window grabs focus: give it back
+user_focus=$(hyprctl activewindow -j | python3 -c "import json,sys; d = json.load(sys.stdin); print('' if d.get('workspace', {}).get('name') == 'rpref' else d.get('address', ''))") # WE's new window grabs focus: give it back
 user_monitor=$(focused_monitor); export PARK_MONITOR=$user_monitor
 open_window() {
     we_control -control openWallpaper -file "$(wine_path "$project")" \
@@ -35,7 +35,8 @@ if ! open_window; then
     open_window || die "Wallpaper Engine did not open a window for $id"
 fi
 park_window "$addr" "rpref" "$user_focus"
-trap 'close_window "$addr"; refocus "$user_focus" "$user_monitor"' EXIT
+# WE's other windows grab focus when this one closes: refocus after it is gone
+trap 'close_window "$addr"; sleep 0.5; refocus "$user_focus" "$user_monitor"' EXIT
 
 sleep "$warmup"
 timeout 20 grim -o "$HEADLESS" "$out/we.png" || die "grim could not capture $HEADLESS"
