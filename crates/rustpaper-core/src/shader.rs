@@ -683,6 +683,33 @@ fn resolve_includes(
     Ok(out)
 }
 
+/// `source` with its `#include`s expanded (each file once); unreadable
+/// includes are left out. Used to read uniform annotations that live in
+/// headers (e.g. `g_CompositeColor`, default "1 1 1", in common_composite.h).
+pub fn expand_includes(source: &str, shaders_dir: &Path) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut seen = HashSet::new();
+    for line in source.lines() {
+        match parse_include(line) {
+            Some(name) if seen.insert(name.clone()) => {
+                if let Ok(content) = std::fs::read_to_string(shaders_dir.join(&name)) {
+                    // nested includes share the dedupe set
+                    let nested =
+                        resolve_includes(&content, shaders_dir, &mut seen).unwrap_or(content);
+                    out.push_str(&nested);
+                    out.push('\n');
+                }
+            }
+            Some(_) => {}
+            None => {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    out
+}
+
 // Stub do módulo LightingV1: no WE, `PerformLighting_V1` é gerado dinamicamente a
 // partir das luzes da cena. Como (assim como o linux-wallpaperengine) ainda não há
 // suporte a objetos de luz, geramos um stub que não contribui luz dinâmica. Sem

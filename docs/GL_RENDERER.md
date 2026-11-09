@@ -109,10 +109,15 @@ quad, the trail (`TRAILRENDERER`) or the sprite-sheet frame (`SPRITESHEET`,
   rendered size = `size` x 0.5; oscillation frequencies are rad/s and oscillate
   between scalemin..scalemax; turbulence makes particles FOLLOW a slowly
   evolving noise field (not accelerate, not curl); `offset` of
-  turbulentvelocityrandom pushes the random direction along `forward` by
-  `|offset|` — the sign does not reverse it: the stock "ember" preset
-  (`offset: -0.5`) rises in WE (Akame 1215952856: motion energy ratio
-  0.21 -> 0.90).
+  turbulentvelocityrandom shifts the noise sample (a phase). Pushing along
+  `forward` by `|offset|` or `-offset` was measured too: after the sprite-sheet
+  fix below, the phase reading passes 3 of 6 affected scenes vs 2 and 0.
+- **Embedded sprite sheets (`TEXS0003`)**: the header is `count, frame_w,
+  frame_h`; the per-frame records carry the exact (possibly fractional) size
+  (rosepetals: 5 frames of 102.5 x 128). Reading the header as
+  `w, h, count` turned every Workshop flipbook into 128 frames of garbage —
+  long bars for petals, flickering fog (Demon Angel 1851646226: FAIL ->
+  PASS, motion SSIM 0.47 -> 0.74; Luffy 2534819596 mean 0.80 -> 0.87).
 - **Sprite sheets crossfade.** WE always compiles `genericparticle` with the
   runtime-only combo `SPRITESHEETBLEND` (mix of the current and next frame).
   Without it, screen-sized flipbooks (fog) jump at every frame change:
@@ -185,6 +190,9 @@ skinned mesh, a bone hierarchy and keyframed animations. The scene object's
 frame and the mesh is skinned on the CPU (a few thousand vertices); the
 unchanged WE material shader draws it.
 
+- Animations can be followed by extra bytes (9 zero bytes between
+  animations); the parser resyncs on the next header (`u32 id, u32, name,
+  mode` with a known mode) instead of failing (Dome 3113287126: 0.45 -> 0.90).
 - The MDLA per-animation float is read as **frames per second**. Reading it as
   a duration (fps = frames / value) matched WE worse (2900431360: motion SSIM
   0.57 vs 0.60).
@@ -196,6 +204,13 @@ unchanged WE material shader draws it.
 `downsample_eighth_blur_v` -> `blur_h_bloom` -> `combine`) or, with
 `hdr: true`, the dual-filter HDR chain (`hdr_downsample` with BLOOM/UPSAMPLE
 -> `combine_hdr`) on RGBA16F targets.
+
+## Uniform annotations live in headers too
+
+`ShaderSource::params` expands `#include`s before reading
+`// {"material": ...}` annotations. `g_CompositeColor` (default "1 1 1") is
+declared in `common_composite.h`; left at GL's 0 it multiplied every
+blur/composite result to black (wind v7 2884352976: mean SSIM 0.26 -> 0.89).
 
 ## Shader fixer (`rustpaper_core::shader::fix_glsl_from_log`)
 
@@ -221,11 +236,15 @@ customization panel (`docs/SELECTOR.md`).
 - **Not supported by design:** SceneScript (JavaScript) and `web` wallpapers —
   executing Workshop code is a security risk. Properties driven only by a
   script keep their static value.
-- Camera parallax (`cameraparallax`, `parallaxDepth` with the mouse), scene
-  lights (`LIGHTING=1` materials use ambient only), keyframed property
+- Scene lights (`LIGHTING=1` materials use ambient only), keyframed property
   animations (`animation` blocks on object properties).
-- Particles: operator `remapvalue`, initializers `mapsequence*`,
-  `orientation` other than screen-facing.
+- Particles: `remapvalue` only for `output: velocity` + `operation: remap`
+  (unverified: no captured scene shows its rain); other outputs and the
+  `mapsequence*` initializers are reported as unsupported. Sprite
+  `orientation` modes coincide for the front-facing ortho camera (WE passes
+  world camera axes; compensating object rotation broke White Angel).
+- Camera parallax is implemented (`Parallax` in scene.rs) but not calibrated:
+  the harness can't move the cursor without taking the user's.
 - Video wallpapers still use the older wgpu path in `rustpaper-engine`.
 - Shaders the fixer cannot repair are skipped (the image passes through) and
   listed by `--describe`.

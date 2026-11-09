@@ -21,9 +21,15 @@ pub struct ShaderSource {
 
 impl ShaderSource {
     /// Annotated material parameters (`uniform float g_Speed; // {"material":"speed",...}`).
-    pub fn params(&self) -> Vec<UniformParam> {
-        let mut p = shader::parse_params(&self.vert);
-        p.extend(shader::parse_params(&self.frag));
+    /// Includes are expanded first: headers declare annotated uniforms too
+    /// (`g_CompositeColor` in common_composite.h: left at GL's 0 it turned
+    /// every blur/composite result black).
+    pub fn params(&self, shaders_dir: &Path) -> Vec<UniformParam> {
+        let mut p = shader::parse_params(&shader::expand_includes(&self.vert, shaders_dir));
+        p.extend(shader::parse_params(&shader::expand_includes(
+            &self.frag,
+            shaders_dir,
+        )));
         p
     }
 
@@ -134,7 +140,7 @@ impl Program {
                     gl.delete_shader(s);
                 }
                 let Some((stage, log)) = failed else {
-                    return Ok(Self::finish(gl, program, src));
+                    return Ok(Self::finish(gl, program, src, shaders_dir));
                 };
                 gl.delete_program(program);
                 last_err = format!("{stage} shader: {}", first_lines(&log, 6));
@@ -158,7 +164,12 @@ impl Program {
         Err(last_err)
     }
 
-    unsafe fn finish(gl: &glow::Context, program: glow::Program, src: &ShaderSource) -> Program {
+    unsafe fn finish(
+        gl: &glow::Context,
+        program: glow::Program,
+        src: &ShaderSource,
+        shaders_dir: &Path,
+    ) -> Program {
         unsafe {
             let mut uniforms = HashMap::new();
             for i in 0..gl.get_active_uniforms(program) {
@@ -181,7 +192,7 @@ impl Program {
             Program {
                 id: program,
                 uniforms,
-                params: src.params(),
+                params: src.params(shaders_dir),
                 samplers: src.samplers(),
             }
         }
