@@ -66,6 +66,15 @@ Motion SSIM is reported but not gated (random particles never line up).
 
 Rustpaper's video starts at t = 10 s (`--start 10`) because WE has been running
 for a while when its capture starts: particles are compared at steady state.
+Audio: WE hears the real system audio while capturing (whatever is
+playing), Rustpaper renders silence. Audio visualizers (02-raindrops
+3050160027) therefore move in WE and not in Rustpaper; capture with nothing
+playing to compare them.
+
+Parallax: WE's window never sees the cursor during a capture; scenes with
+`cameraparallax` behave as if the pointer sat near the bottom edge (see
+GL_RENDERER.md, Known gaps).
+
 For random particles the motion SSIM is a weak signal (positions never match);
 compare the zoomed motion maps and measure sizes/brightness of features.
 
