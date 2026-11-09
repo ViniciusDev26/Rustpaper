@@ -139,19 +139,29 @@ pub struct Target {
 
 impl Target {
     pub fn new(gl: &glow::Context, width: u32, height: u32) -> Target {
+        Self::with_format(gl, width, height, false)
+    }
+
+    /// `hdr` = RGBA16F: keeps values above 1.0 (HDR scenes, bloom chains).
+    pub fn with_format(gl: &glow::Context, width: u32, height: u32, hdr: bool) -> Target {
         let (w, h) = (width.max(1), height.max(1));
+        let (internal, ty) = if hdr {
+            (glow::RGBA16F, glow::HALF_FLOAT)
+        } else {
+            (glow::RGBA8, glow::UNSIGNED_BYTE)
+        };
         unsafe {
             let id = gl.create_texture().expect("glGenTextures");
             gl.bind_texture(glow::TEXTURE_2D, Some(id));
             gl.tex_image_2d(
                 glow::TEXTURE_2D,
                 0,
-                glow::RGBA8 as i32,
+                internal as i32,
                 w as i32,
                 h as i32,
                 0,
                 glow::RGBA,
-                glow::UNSIGNED_BYTE,
+                ty,
                 glow::PixelUnpackData::Slice(None),
             );
             for (p, v) in [
@@ -247,6 +257,8 @@ pub enum Blend {
     Translucent,
     /// Add on top, weighted by alpha (WE "additive").
     Additive,
+    /// Plain sum (bloom upsampling).
+    Add,
 }
 
 impl Blend {
@@ -276,6 +288,10 @@ impl Blend {
                 Blend::Additive => {
                     gl.enable(glow::BLEND);
                     gl.blend_func_separate(glow::SRC_ALPHA, glow::ONE, glow::ZERO, glow::ONE);
+                }
+                Blend::Add => {
+                    gl.enable(glow::BLEND);
+                    gl.blend_func(glow::ONE, glow::ONE);
                 }
             }
         }
@@ -315,17 +331,36 @@ impl QuadMesh {
     }
 }
 
-/// Dynamic vertex/index buffers for particle quads in the layout of
-/// `particles::VERTEX_FLOATS` (attributes 0, 2, 3, 4, 5; see Program::build).
+/// Dynamic vertex/index buffers for particle quads (4 vertices each), with
+/// the attribute layout of the WE particle shader it feeds.
 pub struct ParticleMesh {
     vao: glow::VertexArray,
     vbo: glow::Buffer,
     ebo: glow::Buffer,
-    index_capacity: usize, // in particles
+    index_capacity: usize, // in quads
+    floats_per_vertex: usize,
 }
 
+/// genericparticle: (location, components, float offset); see Program::build.
+pub const SPRITE_LAYOUT: &[(u32, i32, i32)] =
+    &[(0, 3, 0), (2, 4, 3), (3, 4, 7), (4, 2, 11), (5, 4, 13)];
+/// genericropeparticle (no geometry shader, thin format): a_PositionVec4,
+/// a_TexCoordVec4, a_TexCoordVec4C1, a_TexCoordVec3C2, a_TexCoordC3, a_Color.
+pub const ROPE_LAYOUT: &[(u32, i32, i32)] = &[
+    (6, 4, 0),
+    (2, 4, 4),
+    (5, 4, 8),
+    (7, 3, 12),
+    (8, 2, 15),
+    (3, 4, 17),
+];
+
 impl ParticleMesh {
-    pub fn new(gl: &glow::Context) -> ParticleMesh {
+    pub fn new(
+        gl: &glow::Context,
+        layout: &[(u32, i32, i32)],
+        floats_per_vertex: usize,
+    ) -> ParticleMesh {
         unsafe {
             let vao = gl.create_vertex_array().expect("glGenVertexArrays");
             let vbo = gl.create_buffer().expect("glGenBuffers");
@@ -333,9 +368,8 @@ impl ParticleMesh {
             gl.bind_vertex_array(Some(vao));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
             gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(ebo));
-            let stride = (crate::particles::VERTEX_FLOATS * 4) as i32;
-            // (location, components, float offset)
-            for (loc, n, off) in [(0, 3, 0), (2, 4, 3), (3, 4, 7), (4, 2, 11), (5, 4, 13)] {
+            let stride = (floats_per_vertex * 4) as i32;
+            for &(loc, n, off) in layout {
                 gl.enable_vertex_attrib_array(loc);
                 gl.vertex_attrib_pointer_f32(loc, n, glow::FLOAT, false, stride, off * 4);
             }
@@ -345,20 +379,21 @@ impl ParticleMesh {
                 vbo,
                 ebo,
                 index_capacity: 0,
+                floats_per_vertex,
             }
         }
     }
 
-    /// Uploads `vertices` (4 per particle) and draws them as quads.
+    /// Uploads `vertices` (4 per quad) and draws them as quads.
     pub fn draw(&mut self, gl: &glow::Context, vertices: &[f32]) {
-        let particles = vertices.len() / (crate::particles::VERTEX_FLOATS * 4);
-        if particles == 0 {
+        let quads = vertices.len() / (self.floats_per_vertex * 4);
+        if quads == 0 {
             return;
         }
         unsafe {
             gl.bind_vertex_array(Some(self.vao));
-            if particles > self.index_capacity {
-                let cap = particles.next_power_of_two();
+            if quads > self.index_capacity {
+                let cap = quads.next_power_of_two();
                 let mut idx: Vec<u32> = Vec::with_capacity(cap * 6);
                 for i in 0..cap as u32 {
                     let b = i * 4;
@@ -374,12 +409,7 @@ impl ParticleMesh {
             }
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.vbo));
             gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, slice_bytes(vertices), glow::STREAM_DRAW);
-            gl.draw_elements(
-                glow::TRIANGLES,
-                (particles * 6) as i32,
-                glow::UNSIGNED_INT,
-                0,
-            );
+            gl.draw_elements(glow::TRIANGLES, (quads * 6) as i32, glow::UNSIGNED_INT, 0);
             gl.bind_vertex_array(None);
         }
     }

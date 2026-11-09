@@ -12,6 +12,16 @@ HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$HARNESS_DIR")"
 HEADLESS="${RPREF_OUTPUT:-RPREF}"
 WORKSHOP="${WE_WORKSHOP_DIR:-$HOME/.local/share/Steam/steamapps/workshop/content/431960}"
+TESTSET="${RUSTPAPER_TESTSET_DIR:-$HOME/.local/share/rustpaper-testset}/steamapps/workshop/content/431960"
+
+# wallpaper_dir <id>: folder of a wallpaper (Steam Workshop or test corpus)
+wallpaper_dir() {
+    local d
+    for d in "$WORKSHOP/$1" "$TESTSET/$1"; do
+        [ -f "$d/project.json" ] && { echo "$d"; return 0; }
+    done
+    return 1
+}
 
 die() { echo "error: $*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null || die "$1 not installed"; }

@@ -84,9 +84,12 @@ fn parse_args() -> Result<Args, String> {
     let wallpaper = if path.is_dir() {
         path
     } else {
-        rustpaper_core::paths::workshop_dir()
-            .ok_or("Workshop folder not found (set WE_WORKSHOP_DIR)")?
-            .join(&w)
+        rustpaper_core::paths::find_wallpaper(&w).ok_or_else(|| {
+            format!(
+                "wallpaper {w} not found in {:?}",
+                rustpaper_core::paths::wallpaper_dirs()
+            )
+        })?
     };
     Ok(Args {
         wallpaper,

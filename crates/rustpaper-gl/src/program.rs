@@ -53,6 +53,21 @@ pub struct ActiveUniform {
     pub size: i32, // > 1 for arrays
 }
 
+/// Fixed attribute slots shared by every program (see QuadMesh/ParticleMesh).
+const ATTRIBUTES: &[(u32, &str)] = &[
+    (0, "a_Position"),
+    (1, "a_TexCoord"),
+    // genericparticle's vertex stream (gpu::SPRITE_LAYOUT)
+    (2, "a_TexCoordVec4"),
+    (3, "a_Color"),
+    (4, "a_TexCoordC2"),
+    (5, "a_TexCoordVec4C1"),
+    // genericropeparticle's extra attributes (gpu::ROPE_LAYOUT)
+    (6, "a_PositionVec4"),
+    (7, "a_TexCoordVec3C2"),
+    (8, "a_TexCoordC3"),
+];
+
 pub struct Program {
     pub id: glow::Program,
     pub uniforms: HashMap<String, ActiveUniform>,
@@ -68,46 +83,83 @@ impl Program {
         shaders_dir: &Path,
     ) -> Result<Program, String> {
         let combos: Vec<(String, i64)> = combos.iter().map(|(k, v)| (k.clone(), *v)).collect();
-        let vs = shader::translate_gl(Stage::Vertex, &src.vert, &combos, shaders_dir)?;
-        let fs = shader::translate_gl(Stage::Fragment, &src.frag, &combos, shaders_dir)?;
+        let mut vs = shader::translate_gl(Stage::Vertex, &src.vert, &combos, shaders_dir)?;
+        let mut fs = shader::translate_gl(Stage::Fragment, &src.frag, &combos, shaders_dir)?;
+        // HLSL doesn't care if a varying is vec4 in one stage and vec2 in the
+        // other; GLSL refuses to link. Promote the smaller declaration to the
+        // other stage's (bigger) type; the fixer then adapts the uses.
+        (vs, fs) = shader::match_varyings(&vs, &fs);
+        let no_fix = std::env::var_os("RUSTPAPER_NO_FIX").is_some();
+        let mut last_err = String::new();
         unsafe {
-            let program = gl.create_program()?;
-            let mut stages = Vec::new();
-            for (kind, code, label) in [
-                (glow::VERTEX_SHADER, &vs, "vertex"),
-                (glow::FRAGMENT_SHADER, &fs, "fragment"),
-            ] {
-                let s = gl.create_shader(kind)?;
-                gl.shader_source(s, code);
-                gl.compile_shader(s);
-                if !gl.get_shader_compile_status(s) {
-                    let log = gl.get_shader_info_log(s);
-                    gl.delete_shader(s);
-                    gl.delete_program(program);
-                    return Err(format!("{label} shader: {}", first_lines(&log, 6)));
+            // Compile + link; on failure the HLSL fixer patches the lines the
+            // driver complained about (compile or link log) and we retry.
+            for _attempt in 0..10 {
+                let program = gl.create_program()?;
+                let mut stages = Vec::new();
+                let mut failed: Option<(&str, String)> = None;
+                for (kind, code, label) in [
+                    (glow::VERTEX_SHADER, &vs, "vertex"),
+                    (glow::FRAGMENT_SHADER, &fs, "fragment"),
+                ] {
+                    let s = gl.create_shader(kind)?;
+                    gl.shader_source(s, code);
+                    gl.compile_shader(s);
+                    stages.push(s);
+                    if !gl.get_shader_compile_status(s) {
+                        failed = Some((label, gl.get_shader_info_log(s)));
+                        break;
+                    }
+                    gl.attach_shader(program, s);
                 }
-                gl.attach_shader(program, s);
-                stages.push(s);
-            }
-            // Fixed attribute slots, matching QuadMesh / ParticleMesh.
-            gl.bind_attrib_location(program, 0, "a_Position");
-            gl.bind_attrib_location(program, 1, "a_TexCoord");
-            // genericparticle's vertex stream (see ParticleMesh)
-            gl.bind_attrib_location(program, 2, "a_TexCoordVec4");
-            gl.bind_attrib_location(program, 3, "a_Color");
-            gl.bind_attrib_location(program, 4, "a_TexCoordC2");
-            gl.bind_attrib_location(program, 5, "a_TexCoordVec4C1");
-            gl.link_program(program);
-            for s in stages {
-                gl.detach_shader(program, s);
-                gl.delete_shader(s);
-            }
-            if !gl.get_program_link_status(program) {
-                let log = gl.get_program_info_log(program);
+                if failed.is_none() {
+                    // Fixed attribute slots, matching QuadMesh / ParticleMesh.
+                    for (loc, name) in ATTRIBUTES {
+                        gl.bind_attrib_location(program, *loc, name);
+                    }
+                    gl.link_program(program);
+                    if !gl.get_program_link_status(program) {
+                        let log = gl.get_program_info_log(program);
+                        // the link log has per-stage sections
+                        let stage = if log.contains("Fragment info") {
+                            "fragment"
+                        } else {
+                            "vertex"
+                        };
+                        failed = Some((stage, log));
+                    }
+                }
+                for s in stages {
+                    gl.detach_shader(program, s);
+                    gl.delete_shader(s);
+                }
+                let Some((stage, log)) = failed else {
+                    return Ok(Self::finish(gl, program, src));
+                };
                 gl.delete_program(program);
-                return Err(format!("link: {}", first_lines(&log, 6)));
+                last_err = format!("{stage} shader: {}", first_lines(&log, 6));
+                let code = if stage == "fragment" {
+                    &mut fs
+                } else {
+                    &mut vs
+                };
+                match (!no_fix)
+                    .then(|| shader::fix_glsl_from_log(code, &log))
+                    .flatten()
+                {
+                    Some(fixed) => *code = fixed,
+                    None => {
+                        dump_failed(stage, code, &log);
+                        break;
+                    }
+                }
             }
+        }
+        Err(last_err)
+    }
 
+    unsafe fn finish(gl: &glow::Context, program: glow::Program, src: &ShaderSource) -> Program {
+        unsafe {
             let mut uniforms = HashMap::new();
             for i in 0..gl.get_active_uniforms(program) {
                 let Some(u) = gl.get_active_uniform(program, i) else {
@@ -126,12 +178,12 @@ impl Program {
                     );
                 }
             }
-            Ok(Program {
+            Program {
                 id: program,
                 uniforms,
                 params: src.params(),
                 samplers: src.samplers(),
-            })
+            }
         }
     }
 
@@ -166,6 +218,21 @@ impl Program {
             }
         }
     }
+}
+
+/// With RUSTPAPER_DUMP_SHADERS=<dir>, keep the translated source + log of
+/// every shader that fails to compile (for debugging translations).
+fn dump_failed(label: &str, code: &str, log: &str) {
+    let Some(dir) = std::env::var_os("RUSTPAPER_DUMP_SHADERS") else {
+        return;
+    };
+    let dir = std::path::PathBuf::from(dir);
+    let _ = std::fs::create_dir_all(&dir);
+    let n = std::fs::read_dir(&dir).map(|d| d.count()).unwrap_or(0);
+    let _ = std::fs::write(
+        dir.join(format!("{n:04}_{label}.glsl")),
+        format!("{code}\n/* LOG:\n{log}\n*/\n"),
+    );
 }
 
 fn first_lines(s: &str, n: usize) -> String {

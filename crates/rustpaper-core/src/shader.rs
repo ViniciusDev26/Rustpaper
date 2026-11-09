@@ -111,7 +111,6 @@ pub fn translate(
 /// set by name at runtime. Only the HLSL-isms and legacy GLSL keywords need macros.
 const GL_PRELUDE: &str = "#version 330 core\n\
     #define mul(x, y) ((y) * (x))\n\
-    #define max(x, y) max(y, x)\n\
     #define lerp mix\n\
     #define frac fract\n\
     #define CAST2(x) (vec2(x))\n\
@@ -134,6 +133,44 @@ const GL_PRELUDE: &str = "#version 330 core\n\
     #define ddx dFdx\n\
     #define ddy(x) dFdy(-(x))\n\
     #define GLSL 1\n";
+
+/// HLSL promotes a scalar argument of max/min/pow to the vector size;
+/// GLSL only has some of those overloads (e.g. no `max(float, vec3)`, no
+/// `pow(vec3, float)`). Route them through overloads covering every mix. They
+/// are declared before the macros, so their bodies call the GLSL built-ins.
+const GL_SCALAR_PROMOTION: &str = "\
+    float _rp_max(float a, float b) { return max(a, b); }\n\
+    int _rp_max(int a, int b) { return max(a, b); }\n\
+    vec2 _rp_max(vec2 a, vec2 b) { return max(a, b); }\n\
+    vec3 _rp_max(vec3 a, vec3 b) { return max(a, b); }\n\
+    vec4 _rp_max(vec4 a, vec4 b) { return max(a, b); }\n\
+    vec2 _rp_max(vec2 a, float b) { return max(a, b); }\n\
+    vec3 _rp_max(vec3 a, float b) { return max(a, b); }\n\
+    vec4 _rp_max(vec4 a, float b) { return max(a, b); }\n\
+    vec2 _rp_max(float a, vec2 b) { return max(b, a); }\n\
+    vec3 _rp_max(float a, vec3 b) { return max(b, a); }\n\
+    vec4 _rp_max(float a, vec4 b) { return max(b, a); }\n\
+    float _rp_min(float a, float b) { return min(a, b); }\n\
+    int _rp_min(int a, int b) { return min(a, b); }\n\
+    vec2 _rp_min(vec2 a, vec2 b) { return min(a, b); }\n\
+    vec3 _rp_min(vec3 a, vec3 b) { return min(a, b); }\n\
+    vec4 _rp_min(vec4 a, vec4 b) { return min(a, b); }\n\
+    vec2 _rp_min(vec2 a, float b) { return min(a, b); }\n\
+    vec3 _rp_min(vec3 a, float b) { return min(a, b); }\n\
+    vec4 _rp_min(vec4 a, float b) { return min(a, b); }\n\
+    vec2 _rp_min(float a, vec2 b) { return min(b, a); }\n\
+    vec3 _rp_min(float a, vec3 b) { return min(b, a); }\n\
+    vec4 _rp_min(float a, vec4 b) { return min(b, a); }\n\
+    float _rp_pow(float a, float b) { return pow(a, b); }\n\
+    vec2 _rp_pow(vec2 a, vec2 b) { return pow(a, b); }\n\
+    vec3 _rp_pow(vec3 a, vec3 b) { return pow(a, b); }\n\
+    vec4 _rp_pow(vec4 a, vec4 b) { return pow(a, b); }\n\
+    vec2 _rp_pow(vec2 a, float b) { return pow(a, vec2(b)); }\n\
+    vec3 _rp_pow(vec3 a, float b) { return pow(a, vec3(b)); }\n\
+    vec4 _rp_pow(vec4 a, float b) { return pow(a, vec4(b)); }\n\
+    #define max(x, y) _rp_max(x, y)\n\
+    #define min(x, y) _rp_min(x, y)\n\
+    #define pow(x, y) _rp_pow(x, y)\n";
 
 const GL_FRAGMENT_DEFINES: &str = "out vec4 out_FragColor;\n#define varying in\n";
 const GL_VERTEX_DEFINES: &str = "#define attribute in\n#define varying out\n";
@@ -164,6 +201,7 @@ pub fn translate_gl(
     for (name, value) in combos {
         out.push_str(&format!("#define {} {}\n", name.to_uppercase(), value));
     }
+    out.push_str(GL_SCALAR_PROMOTION);
     out.push_str(&samplers);
     // `#line 1` keeps driver error line numbers close to the WE source.
     out.push_str("#line 1\n");
@@ -193,6 +231,391 @@ fn hoist_samplers(body: &str) -> (String, String) {
         rest.push('\n');
     }
     (decls, rest)
+}
+
+/// HLSL tolerates a `varying` declared vec4 in one stage and vec2 in the
+/// other; GLSL won't link. Promote the smaller declaration to the bigger type
+/// (its uses then become vec4 -> vec2 truncations, which the fixer swizzles).
+/// Returns the rewritten (vertex, fragment).
+pub fn match_varyings(vertex: &str, fragment: &str) -> (String, String) {
+    fn decl(l: &str) -> Option<(String, String)> {
+        let mut it = l.trim().strip_prefix("varying ")?.split_whitespace();
+        let ty = it.next()?.to_string();
+        let name: String = it
+            .next()?
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        Some((name, ty))
+    }
+    let types = |src: &str| -> std::collections::HashMap<String, String> {
+        src.lines().filter_map(decl).collect()
+    };
+    let (tv, tf) = (types(vertex), types(fragment));
+    let promote = |src: &str,
+                   mine: &std::collections::HashMap<String, String>,
+                   other: &std::collections::HashMap<String, String>| {
+        src.lines()
+            .map(|l| match decl(l) {
+                Some((name, ty)) => match other.get(&name) {
+                    Some(o)
+                        if *o != ty
+                            && o.starts_with("vec")
+                            && ty.starts_with("vec")
+                            && components(o) > components(&ty)
+                            && mine.contains_key(&name) =>
+                    {
+                        l.replacen(&format!("varying {ty} "), &format!("varying {o} "), 1)
+                    }
+                    _ => l.to_string(),
+                },
+                None => l.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n"
+    };
+    (promote(vertex, &tv, &tf), promote(fragment, &tf, &tv))
+}
+
+/// Repairs HLSL-isms a GLSL compiler rejected, using its error log: for each
+/// error line, wrap the assigned/returned expression in the target type's
+/// constructor (HLSL truncates/converts implicitly: `vec2 uv = someVec4;`) or
+/// turn `a % b` on floats into `fmod`. Only the lines the compiler pointed at
+/// are touched. Returns None when nothing could be fixed.
+///
+/// Line numbers are relative to the `#line 1` marker `translate_gl` emits.
+/// Understands NVIDIA (`0(12) : error C7011: implicit cast from "vec4" to
+/// "vec2"`) and Mesa (`0:12(5): error: ... from `vec4' to `vec2'`) logs.
+pub fn fix_glsl_from_log(source: &str, log: &str) -> Option<String> {
+    let mut lines: Vec<String> = source.lines().map(String::from).collect();
+    let base = lines.iter().position(|l| l.trim() == "#line 1")?;
+    let mut changed = false;
+    let mut done = HashSet::new();
+    for err in log.lines() {
+        let Some(n) = error_line(err) else { continue };
+        if !done.insert(n) {
+            continue; // one fix per line per round; the next compile re-reports
+        }
+        let idx = base + n;
+        let Some(line) = lines.get(idx).cloned() else {
+            continue;
+        };
+        let fixed = if err.contains("unmatched #endif") {
+            Some(format!("// (stray #endif removed) {line}"))
+        } else if err.contains("non constant expression")
+            || err.contains("constant expression required")
+        {
+            // HLSL allows `const` locals with runtime values
+            line.contains("const ")
+                .then(|| line.replacen("const ", "", 1))
+        } else if let Some((from, to)) = conversion_types(err) {
+            let local = |name: &str| declared_type_before(&lines, idx, name);
+            multi_declarator(&line, &to)
+                .or_else(|| ternary_condition(&line, &to))
+                .or_else(|| uint_operands(&line, &to, &local))
+                .or_else(|| swizzle_operands(&line, &from, &to, &local))
+                .or_else(|| wrap_rhs(&line, &to))
+        } else if err.contains('%') && (err.contains("integral") || err.contains("integer")) {
+            integer_or_float_modulo(&line)
+        } else {
+            None
+        };
+        if let Some(f) = fixed
+            && f != line
+        {
+            lines[idx] = f;
+            changed = true;
+        }
+    }
+    changed.then(|| lines.join("\n") + "\n")
+}
+
+/// Type of `name` from its nearest declaration above line `idx` (shaders
+/// reuse names with different types in different functions).
+fn declared_type_before(lines: &[String], idx: usize, name: &str) -> Option<String> {
+    for l in lines[..=idx.min(lines.len() - 1)].iter().rev() {
+        let toks: Vec<&str> = l
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .filter(|t| !t.is_empty())
+            .collect();
+        for w in toks.windows(2) {
+            if w[1] == name && GLSL_TYPES.contains(&w[0]) {
+                return Some(w[0].to_string());
+            }
+        }
+    }
+    None
+}
+
+/// `vec2 a = 0.0, b = 0.0, c = x;` (HLSL broadcasts the scalar to each).
+fn multi_declarator(line: &str, to: &str) -> Option<String> {
+    let t = line.trim_start();
+    let indent = &line[..line.len() - t.len()];
+    let rest = t.strip_prefix(to)?.strip_prefix(' ')?;
+    let semi = rest.rfind(';')?;
+    let (body, tail) = rest.split_at(semi);
+    let parts = split_top_level(body, ',');
+    if parts.len() < 2 {
+        return None;
+    }
+    let decls: Vec<String> = parts
+        .iter()
+        .map(|p| match p.split_once('=') {
+            Some((name, expr)) => format!("{} = {to}({})", name.trim(), expr.trim()),
+            None => p.trim().to_string(),
+        })
+        .collect();
+    Some(format!("{indent}{to} {}{tail}", decls.join(", ")))
+}
+
+fn split_top_level(s: &str, sep: char) -> Vec<&str> {
+    let (mut depth, mut start, mut out) = (0i32, 0, Vec::new());
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth -= 1,
+            c if c == sep && depth == 0 => {
+                out.push(&s[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(&s[start..]);
+    out
+}
+
+/// `X ? a : b` with an int condition (a combo) -> `bool(X) ? a : b`.
+fn ternary_condition(line: &str, to: &str) -> Option<String> {
+    if to != "bool" {
+        return None;
+    }
+    let q = line.find('?')?;
+    let before = line[..q].trim_end();
+    let start = before
+        .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '.'))
+        .map_or(0, |k| k + 1);
+    let cond = &before[start..];
+    if cond.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "{}bool({cond}){}",
+        &line[..start],
+        &line[before.len()..]
+    ))
+}
+
+/// Unsigned targets (no implicit int -> uint in GLSL): `1` -> `1u`, int
+/// variables and combo macros (ALL_CAPS) -> `uint(x)`.
+fn uint_operands(line: &str, to: &str, ty_of: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    if !to.starts_with('u') {
+        return None;
+    }
+    let code_end = line.find("//").unwrap_or(line.len());
+    let (code, comment) = line.split_at(code_end);
+    let lhs_end = code.find('=').map_or(0, |e| e + 1);
+    let (lhs, rhs) = code.split_at(lhs_end);
+    let mut out = String::from(lhs);
+    let b = rhs.as_bytes();
+    let mut i = 0;
+    let mut changed = false;
+    while i < b.len() {
+        let c = b[i] as char;
+        let prev_word = i > 0
+            && ((b[i - 1] as char).is_ascii_alphanumeric() || b[i - 1] == b'_' || b[i - 1] == b'.');
+        if prev_word || !(c.is_ascii_alphanumeric() || c == '_') {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < b.len() && ((b[i] as char).is_ascii_alphanumeric() || b[i] == b'_') {
+            i += 1;
+        }
+        let tok = &rhs[start..i];
+        let next = rhs[i..].chars().next();
+        if tok.chars().all(|c| c.is_ascii_digit()) {
+            out.push_str(tok);
+            if !matches!(next, Some('.') | Some('e') | Some('E')) {
+                out.push('u');
+                changed = true;
+            }
+        } else if next != Some('(')
+            && tok != "uint"
+            && (ty_of(tok).as_deref() == Some("int")
+                || (tok.len() > 1
+                    && tok
+                        .chars()
+                        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')))
+        {
+            out.push_str(&format!("uint({tok})"));
+            changed = true;
+        } else {
+            out.push_str(tok);
+        }
+    }
+    out.push_str(comment);
+    changed.then_some(out)
+}
+
+/// "0(352) : error ..." (NVIDIA) or "0:352(12): error: ..." (Mesa) -> 352
+fn error_line(err: &str) -> Option<usize> {
+    let rest = err.trim_start().strip_prefix('0')?;
+    let rest = rest.strip_prefix('(').or_else(|| rest.strip_prefix(':'))?;
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
+}
+
+const GLSL_TYPES: &[&str] = &[
+    "float", "int", "uint", "bool", "vec2", "vec3", "vec4", "ivec2", "ivec3", "ivec4", "uvec2",
+    "uvec3", "uvec4",
+];
+
+/// (from, to) of an implicit-conversion error.
+fn conversion_types(err: &str) -> Option<(String, String)> {
+    if !(err.contains("implicit cast")
+        || err.contains("implicit narrowing")
+        || err.contains("implicit conversion")
+        || err.contains("cannot convert"))
+    {
+        return None;
+    }
+    let ty_after = |s: &str| -> String {
+        s.trim_start_matches(['"', '`', '\'', ' '])
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric())
+            .collect()
+    };
+    let to = ty_after(&err[err.rfind(" to ")? + 4..]);
+    let from = ty_after(&err[err.find(" from ")? + 6..]);
+    (GLSL_TYPES.contains(&to.as_str()) && GLSL_TYPES.contains(&from.as_str())).then_some((from, to))
+}
+
+fn components(ty: &str) -> usize {
+    ty.chars()
+        .last()
+        .and_then(|c| c.to_digit(10))
+        .map_or(1, |d| d as usize)
+}
+
+/// HLSL truncates bigger vectors used with smaller ones (`vec4 * vec2`):
+/// append the swizzle to identifiers declared with the source type.
+fn swizzle_operands(
+    line: &str,
+    from: &str,
+    to: &str,
+    ty_of: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    let (nf, nt) = (components(from), components(to));
+    if !from.contains("vec") || nt >= nf {
+        return None;
+    }
+    let swz = &"xyzw"[..nt];
+    let code_end = line.find("//").unwrap_or(line.len());
+    let mut out = String::new();
+    let mut changed = false;
+    let mut i = 0;
+    let b = line.as_bytes();
+    while i < line.len() {
+        let c = b[i] as char;
+        if i < code_end
+            && (c.is_ascii_alphabetic() || c == '_')
+            && (i == 0
+                || !((b[i - 1] as char).is_ascii_alphanumeric()
+                    || b[i - 1] == b'_'
+                    || b[i - 1] == b'.'))
+        {
+            let start = i;
+            while i < line.len() && ((b[i] as char).is_ascii_alphanumeric() || b[i] == b'_') {
+                i += 1;
+            }
+            let ident = &line[start..i];
+            out.push_str(ident);
+            let next = line[i..].trim_start().chars().next();
+            if ty_of(ident).as_deref() == Some(from)
+                && !matches!(next, Some('.') | Some('(') | Some('['))
+            {
+                out.push('.');
+                out.push_str(swz);
+                changed = true;
+            }
+            continue;
+        }
+        out.push(c);
+        i += 1;
+    }
+    changed.then_some(out)
+}
+
+/// `x = expr;` / `T x = expr;` / `for (int i = expr; ...` / `return expr;`
+/// -> wrap expr in `ty(...)`, once. With several statements on one line, the
+/// first one not wrapped yet is fixed (the next compile reports the rest).
+fn wrap_rhs(line: &str, ty: &str) -> Option<String> {
+    let mut start = 0;
+    while start < line.len() {
+        let end = line[start..].find(';').map_or(line.len(), |k| start + k);
+        if let Some(fixed) = wrap_statement(&line[start..end], ty) {
+            return Some(format!("{}{fixed}{}", &line[..start], &line[end..]));
+        }
+        start = end + 1;
+    }
+    None
+}
+
+fn wrap_statement(stmt: &str, ty: &str) -> Option<String> {
+    let already = |e: &str| e.starts_with(&format!("{ty}(")) && e.ends_with(')');
+    if let Some(i) = stmt.find("return ") {
+        let expr = stmt[i + 7..].trim();
+        if expr.is_empty() || already(expr) {
+            return None;
+        }
+        return Some(format!("{}return {ty}({expr})", &stmt[..i]));
+    }
+    // first '=' that is an assignment (not ==, <=, >=, !=)
+    let b = stmt.as_bytes();
+    let eq = (0..b.len()).find(|&k| {
+        b[k] == b'=' && b.get(k + 1) != Some(&b'=') && (k == 0 || !b"=<>!".contains(&b[k - 1]))
+    })?;
+    let expr = stmt[eq + 1..].trim();
+    if expr.is_empty() || already(expr) {
+        return None;
+    }
+    Some(format!("{} {ty}({expr})", &stmt[..eq + 1]))
+}
+
+/// `a % b` with a float operand: in an integer declaration cast both operands
+/// to that integer type, otherwise it's HLSL's fmod.
+fn integer_or_float_modulo(line: &str) -> Option<String> {
+    let t = line.trim_start();
+    let int_ty = ["uint ", "int "]
+        .iter()
+        .find(|p| t.starts_with(**p))
+        .map(|p| p.trim());
+    let i = line.find('%')?;
+    let is_operand = |c: char| c.is_ascii_alphanumeric() || "_.[]".contains(c);
+    let left_start = line[..i]
+        .trim_end()
+        .rfind(|c: char| !is_operand(c))
+        .map_or(0, |k| k + 1);
+    let left = line[left_start..i].trim();
+    let right_part = line[i + 1..].trim_start();
+    let right_len = right_part
+        .find(|c: char| !is_operand(c))
+        .unwrap_or(right_part.len());
+    let right = &right_part[..right_len];
+    if left.is_empty() || right.is_empty() {
+        return None;
+    }
+    let after = &right_part[right_len..];
+    Some(match int_ty {
+        Some(ty) => format!("{}{ty}({left}) % {ty}({right}){after}", &line[..left_start]),
+        None => format!(
+            "{}fmod(float({left}), float({right})){after}",
+            &line[..left_start]
+        ),
+    })
 }
 
 /// Annotation of a `uniform sampler2D` declaration in a WE shader.
@@ -577,6 +1000,96 @@ mod tests {
         // módulo desconhecido vira comentário, não some nem quebra
         let unk = resolve_requires("#require Foo\n");
         assert!(unk.contains("// #require Foo"));
+    }
+
+    #[test]
+    fn fixes_hlsl_implicit_conversions_from_the_log() {
+        let src = "#version 330 core\n#line 1\nvec4 c = vec4(1.0);\nvec2 uv = c;\nfloat f = c;\nfloat m = a % 3.0;\n";
+        let log = "0(2) : error C7011: implicit cast from \"vec4\" to \"vec2\"\n\
+                   0(3) : error C7623: implicit narrowing of type from \"vec4\" to \"float\"\n\
+                   0(4) : error C1021: operands to \"%\" must be integral\n";
+        let out = fix_glsl_from_log(src, log).unwrap();
+        assert!(out.contains("vec2 uv = c.xy;"), "{out}");
+        assert!(out.contains("float f = c.x;"), "{out}");
+        assert!(
+            out.contains("float m = fmod(float(a), float(3.0));"),
+            "{out}"
+        );
+        // Mesa format
+        let mesa = "0:2(6): error: cannot convert from `vec4' to `vec2'\n";
+        assert!(
+            fix_glsl_from_log(src, mesa)
+                .unwrap()
+                .contains("vec2 uv = c.xy;")
+        );
+        // comparisons are not assignments
+        assert_eq!(
+            wrap_rhs("if (a <= b) x = y;", "int").as_deref(),
+            Some("if (a <= b) x = int(y);")
+        );
+        // for-loop init: only up to the first ';'
+        assert_eq!(
+            wrap_rhs("for (int i = -r; i <= r; ++i)", "int").as_deref(),
+            Some("for (int i = int(-r); i <= r; ++i)")
+        );
+        // wrapped once
+        assert_eq!(wrap_rhs("vec2 a = vec2(b);", "vec2"), None);
+        // two statements on one line: the second gets fixed next
+        assert_eq!(
+            wrap_rhs("l *= float(a); r *= b;", "float").as_deref(),
+            Some("l *= float(a); r *= float(b);")
+        );
+    }
+
+    #[test]
+    fn fixes_operands_not_just_assignments() {
+        // HLSL truncation of an operand: vec4 * vec2
+        let src = "#line 1\nvarying vec4 v_P;\nuniform vec2 g_S;\nvec2 d = v_P * g_S;\n";
+        let log = "0(3) : error C7011: implicit cast from \"vec4\" to \"vec2\"\n";
+        assert!(
+            fix_glsl_from_log(src, log)
+                .unwrap()
+                .contains("vec2 d = v_P.xy * g_S;")
+        );
+        // int literal added to a uint
+        let src = "#line 1\nuint a = 3u;\nuint b = (a + 1) % RES;\n";
+        let log = "0(2) : error C7011: implicit cast from \"int\" to \"uint\"\n";
+        assert!(
+            fix_glsl_from_log(src, log)
+                .unwrap()
+                .contains("uint b = (a + 1u) % uint(RES);")
+        );
+        // multiple declarators with a scalar
+        let src = "#line 1\nvec2 r = 0.0, t = 0.0, c = (1.0 - u) * g;\n";
+        let log = "0(1) : error C7011: implicit cast from \"float\" to \"vec2\"\n";
+        assert!(
+            fix_glsl_from_log(src, log)
+                .unwrap()
+                .contains("vec2 r = vec2(0.0), t = vec2(0.0), c = vec2((1.0 - u) * g);")
+        );
+        // int combo as a ternary condition
+        let src = "#line 1\nmask = INVERT ? 1 - mask : mask;\n";
+        let log = "0(1) : error C7011: implicit cast from \"int\" to \"bool\"\n";
+        assert!(
+            fix_glsl_from_log(src, log)
+                .unwrap()
+                .contains("mask = bool(INVERT) ? 1 - mask : mask;")
+        );
+        // uint declaration with a float % : integer modulo
+        let src = "#line 1\nuint f = frequency % RESOLUTION;\n";
+        let log = "0(1) : error C1021: operands to \"%\" must be integral\n";
+        assert!(
+            fix_glsl_from_log(src, log)
+                .unwrap()
+                .contains("uint f = uint(frequency) % uint(RESOLUTION);")
+        );
+        // runtime value in a const local, stray #endif
+        let src = "#line 1\nconst float k = pow(u.x, 2.0);\n#endif\n";
+        let log = "0(1) : error C1059: non constant expression in initialization\n0(2) : error C7102: unmatched #endif\n";
+        let out = fix_glsl_from_log(src, log).unwrap();
+        assert!(
+            out.contains("\nfloat k = pow(u.x, 2.0);") && out.contains("// (stray #endif removed)")
+        );
     }
 
     #[test]

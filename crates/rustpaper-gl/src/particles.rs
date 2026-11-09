@@ -285,8 +285,13 @@ pub enum RendererKind {
         max: f32,
         min: f32,
     },
-    /// Ropes use a different shader (genericropeparticle) — not supported yet.
+    /// A rope through every live particle, in spawn order (genericropeparticle).
     Rope,
+    /// Each particle drags a rope made of its own recent positions, `length`
+    /// seconds long (genericropeparticle).
+    RopeTrail {
+        length: f32,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -486,7 +491,10 @@ impl ParticleDef {
                     max: f(r, "maxlength", 10.0),
                     min: f(r, "minlength", 0.0),
                 },
-                "rope" | "ropetrail" => RendererKind::Rope,
+                "rope" => RendererKind::Rope,
+                "ropetrail" => RendererKind::RopeTrail {
+                    length: f(r, "length", 0.2).max(0.01),
+                },
                 _ => RendererKind::Sprite,
             },
             None => RendererKind::Sprite,
@@ -605,6 +613,9 @@ struct Particle {
     frame_phase: f32,
     /// Accumulated child emissions (eventfollow).
     child_acc: f32,
+    /// ropetrail: recent positions, newest first, and time since the last sample.
+    trail: Vec<V3>,
+    trail_t: f32,
     // values computed by operators for the current step (drawn as-is)
     draw_alpha: f32,
     draw_size: f32,
@@ -748,6 +759,8 @@ impl ParticleSim {
             seed: self.next_seed,
             frame_phase: 0.0,
             child_acc: 0.0,
+            trail: Vec::new(),
+            trail_t: 0.0,
             draw_alpha: 1.0,
             draw_size: 20.0,
             draw_color: [1.0; 3],
@@ -874,6 +887,10 @@ impl ParticleSim {
         }
 
         let time = self.time;
+        let trail_len = match self.def.renderer {
+            RendererKind::RopeTrail { length } => Some(length),
+            _ => None,
+        };
         let ops = &self.def.ops;
         let def_cps = &self.def.control_points;
         let mut deaths = Vec::new();
@@ -996,6 +1013,15 @@ impl ParticleSim {
             let _ = def_cps;
             p.pos = add(p.pos, scale(p.vel, dt));
             p.osc_offset = osc_offset;
+            if let Some(len) = trail_len {
+                p.trail_t += dt;
+                let interval = len / ROPE_SEGMENTS as f32;
+                if p.trail.is_empty() || p.trail_t >= interval {
+                    p.trail_t = 0.0;
+                    p.trail.insert(0, add(p.pos, osc_offset));
+                    p.trail.truncate(ROPE_SEGMENTS + 1);
+                }
+            }
             p.draw_alpha = alpha.clamp(0.0, 1.0);
             p.draw_size = size.max(0.0);
             p.draw_color = color;
@@ -1043,6 +1069,71 @@ impl ParticleSim {
                     phase,
                 ]);
             }
+        }
+    }
+}
+
+/// History samples of a `ropetrail` (segments per particle).
+const ROPE_SEGMENTS: usize = 16;
+
+/// Floats per rope vertex: a_PositionVec4 (start, size), a_TexCoordVec4 (end,
+/// rope length), a_TexCoordVec4C1 (spline cp0, segment index), a_TexCoordVec3C2
+/// (spline cp1), a_TexCoordC3 (uv), a_Color.
+pub const ROPE_FLOATS: usize = 21;
+
+impl ParticleSim {
+    /// Rope vertex stream (4 vertices per segment). Spline control points are
+    /// set to the segment ends, i.e. straight segments with the right tangent.
+    pub fn rope_vertices(&self, out: &mut Vec<f32>) {
+        out.clear();
+        let mut push_rope = |pts: &[(V3, f32, [f32; 4])]| {
+            let n = pts.len();
+            if n < 2 {
+                return;
+            }
+            for i in 0..n - 1 {
+                let (a, size, c) = pts[i];
+                let (b, _, _) = pts[i + 1];
+                for (u, v) in [(0.0f32, 0.0f32), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
+                    out.extend_from_slice(&[
+                        a[0], a[1], a[2], size, // start, size
+                        b[0], b[1], b[2], n as f32, // end, rope length
+                        a[0], a[1], a[2], i as f32, // cp0 (= start), segment index
+                        b[0], b[1], b[2], // cp1 (= end)
+                        u, v, // uv: across, along
+                        c[0], c[1], c[2], c[3],
+                    ]);
+                }
+            }
+        };
+        let point = |p: &Particle, pos: V3| {
+            (
+                pos,
+                p.draw_size,
+                [
+                    p.draw_color[0],
+                    p.draw_color[1],
+                    p.draw_color[2],
+                    p.draw_alpha,
+                ],
+            )
+        };
+        match self.def.renderer {
+            RendererKind::Rope => {
+                let pts: Vec<_> = self
+                    .particles
+                    .iter()
+                    .map(|p| point(p, add(p.pos, p.osc_offset)))
+                    .collect();
+                push_rope(&pts);
+            }
+            RendererKind::RopeTrail { .. } => {
+                for p in &self.particles {
+                    let pts: Vec<_> = p.trail.iter().map(|&q| point(p, q)).collect();
+                    push_rope(&pts);
+                }
+            }
+            _ => {}
         }
     }
 }

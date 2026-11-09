@@ -10,7 +10,7 @@ need hyprctl; need grim; need ffmpeg; need nsenter
 
 id=${1:?workshop id}; out=${2:?out dir}; secs=${3:-8}
 warmup=${WE_WARMUP:-6}
-project="$WORKSHOP/$id/project.json"
+project="$(wallpaper_dir "$id" || true)/project.json"
 [ -f "$project" ] || die "$project not found"
 mkdir -p "$out"
 title="rpref_$id"
