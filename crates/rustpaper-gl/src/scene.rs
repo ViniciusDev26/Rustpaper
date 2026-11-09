@@ -185,6 +185,8 @@ pub struct SceneRenderer {
     skylight: [f32; 3],
     /// `general.fov` (degrees), for perspective particle systems.
     fov: f32,
+    /// `general.zoom`: the camera zooms in around the scene center.
+    zoom: f32,
     layers: Vec<Layer>,
     particle_objs: Vec<ParticleObject>,
     texts: Vec<TextRt>,
@@ -314,6 +316,7 @@ impl SceneRenderer {
             ambient: value::get_vec3(&general, "ambientcolor", [0.3; 3]),
             skylight: value::get_vec3(&general, "skylightcolor", [0.3; 3]),
             fov: value::get_f32(&general, "fov", 50.0),
+            zoom: value::get_f32(&general, "zoom", 1.0).max(0.01),
             layers: Vec::new(),
             particle_objs: Vec::new(),
             texts: Vec::new(),
@@ -987,7 +990,19 @@ impl SceneRenderer {
     /// ignores them when playing a wallpaper (measured: Yor, camera at
     /// (67, -37), aligns with WE at offset 0 and scale 1).
     fn view_proj(&self) -> Mat4 {
-        math::scene_ortho(self.width as f32, self.height as f32)
+        let (w, h) = (self.width as f32, self.height as f32);
+        let ortho = math::scene_ortho(w, h);
+        if (self.zoom - 1.0).abs() < 1e-4 {
+            return ortho;
+        }
+        // zoom around the center: translate(c) * scale(z) * translate(-c)
+        let z = self.zoom;
+        let zoom = math::model(
+            [w / 2.0 * (1.0 - z), h / 2.0 * (1.0 - z), 0.0],
+            0.0,
+            [z, z, 1.0],
+        );
+        math::mul(&ortho, &zoom)
     }
 
     /// `view_proj` shifted by the camera parallax for an object at `depth`.

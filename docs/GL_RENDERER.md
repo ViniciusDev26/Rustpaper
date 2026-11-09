@@ -168,6 +168,9 @@ coordinates). `view_proj()` is therefore the plain scene ortho. Earlier
 misalignments blamed on the camera were the harness stretching non-16:9
 scenes; `--screen WxH` renders through the same cover crop as a monitor.
 
+`general.zoom` zooms the camera around the scene center (CITRUS 2704773569,
+zoom 1.1: mean SSIM 0.43 -> 0.98).
+
 ## Text (`text.rs`)
 
 Text objects are rasterized on the CPU with `ab_glyph` into a texture that is
