@@ -17,7 +17,10 @@ secs=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$rp" | cut -d
 secs=$(( secs < 1 ? 1 : (secs > 16 ? 16 : secs) ))
 # both sides are 1920x1080 screens already (rustpaper-render --screen):
 # never stretch here, a non-16:9 scene would be distorted
-norm="scale=1920:1080:force_original_aspect_ratio=increase:flags=lanczos,crop=1920:1080,crop=1920:1048:0:32,format=rgb24"
+# The top 32 px (desktop bar) are dropped and the top-right corner where
+# desktop notifications pop up on the headless output is blacked out on both
+# sides (a notification there contaminated several WE captures).
+norm="scale=1920:1080:force_original_aspect_ratio=increase:flags=lanczos,crop=1920:1080,crop=1920:1048:0:32,drawbox=x=1460:y=0:w=460:h=64:color=black:t=fill,format=rgb24"
 
 for side in rp we; do
     src=$rp; [ $side = we ] && src=$we
