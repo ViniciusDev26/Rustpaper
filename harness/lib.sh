@@ -13,6 +13,7 @@ REPO_DIR="$(dirname "$HARNESS_DIR")"
 HEADLESS="${RPREF_OUTPUT:-RPREF}"
 WORKSHOP="${WE_WORKSHOP_DIR:-$HOME/.local/share/Steam/steamapps/workshop/content/431960}"
 TESTSET="${RUSTPAPER_TESTSET_DIR:-$HOME/.local/share/rustpaper-testset}/steamapps/workshop/content/431960"
+WE_DIR="${WE_DIR:-$HOME/.local/share/Steam/steamapps/common/wallpaper_engine}"
 
 # wallpaper_dir <id>: folder of a wallpaper (Steam Workshop or test corpus)
 wallpaper_dir() {
@@ -54,6 +55,29 @@ we_crashed() {
     hyprctl clients -j | python3 -c "import json,sys; sys.exit(0 if any(c['class'] == 'steam_app_431960' and c['title'] == 'Error' for c in json.load(sys.stdin)) else 1)"
 }
 
+# WE marks `safemode: true` in its config.json while running and clears it on
+# a clean exit; after a kill the next start shows a "Safe Start" dialog that
+# blocks every -control command. Clear just that flag (what a clean exit
+# does); a one-time backup is kept next to it.
+clear_safe_start() {
+    local cfg="$WE_DIR/config.json"
+    [ -f "$cfg" ] || return 0
+    [ -f "$cfg.rustpaper-backup" ] || cp "$cfg" "$cfg.rustpaper-backup"
+    python3 - "$cfg" <<'PY'
+import json, sys
+p = sys.argv[1]
+j = json.load(open(p, encoding="utf-8-sig"))
+changed = False
+for user in j.values():
+    g = user.get("general", {}).get("user") if isinstance(user, dict) else None
+    if isinstance(g, dict) and g.get("safemode"):
+        g["safemode"] = False
+        changed = True
+if changed:
+    json.dump(j, open(p, "w"), indent="\t")
+PY
+}
+
 # Kills WE (crashed or wedged: windows that never open or close) and starts
 # it again.
 restart_we() {
@@ -62,6 +86,7 @@ restart_we() {
     pkill -x wallpaperui.exe 2>/dev/null || true
     pkill -x wallpaper64.exe 2>/dev/null || true
     for _ in $(seq 1 30); do pgrep -x wallpaper64.exe >/dev/null || break; sleep 1; done
+    clear_safe_start
     start_we >/dev/null || die "could not restart Wallpaper Engine"
 }
 
@@ -74,8 +99,10 @@ we_control() {
     while IFS= read -r -d '' e; do
         case "$e" in WINESERVERSOCKET=* | WINELOADERNOEXEC=* | WINEPRELOADRESERVE=*) ;; *) env+=("$e") ;; esac
     done <"/proc/$pid/environ"
+    # Z: (the host root) always exists; the S: library drive is only mapped
+    # in some Proton sessions ("wine: failed to open S:\\...").
     nsenter -t "$pid" -U -m --preserve-credentials env -i "${env[@]}" \
-        wine 'S:\steamapps\common\wallpaper_engine\wallpaper64.exe' "$@" >/dev/null 2>&1
+        wine "$(wine_path "$WE_DIR/wallpaper64.exe")" "$@" >/dev/null 2>&1
 }
 
 # Linux path -> path as seen by Wine (Z: is the host root).
@@ -114,7 +141,7 @@ park_window() { # park_window <address> <workspace name> [address to refocus]
     hyprctl dispatch "hl.dsp.focus({ workspace = 'name:$ws' })" >/dev/null
     hyprctl dispatch "hl.dsp.window.move({ window = 'address:$addr', workspace = 'name:$ws', follow = false })" >/dev/null
     hyprctl dispatch "hl.dsp.window.fullscreen({ window = 'address:$addr' })" >/dev/null
-    [ -n "$me" ] && hyprctl dispatch "hl.dsp.focus({ window = 'address:$me' })" >/dev/null
+    refocus "$me" "${PARK_MONITOR:-}"
     return 0
 }
 
@@ -126,4 +153,14 @@ capture_clock() { # capture_clock <capture dir> <seconds>
 }
 
 close_window() { hyprctl dispatch "hl.dsp.window.close({ window = 'address:$1' })" >/dev/null 2>&1 || true; }
-refocus() { [ -n "${1:-}" ] && hyprctl dispatch "hl.dsp.focus({ window = 'address:$1' })" >/dev/null 2>&1; return 0; }
+# refocus <window address> [monitor]: back to the user's window, or at least
+# their monitor when nothing was focused (empty workspace).
+refocus() {
+    if [ -n "${1:-}" ]; then
+        hyprctl dispatch "hl.dsp.focus({ window = 'address:$1' })" >/dev/null 2>&1
+    elif [ -n "${2:-}" ]; then
+        hyprctl dispatch "hl.dsp.focus({ monitor = '$2' })" >/dev/null 2>&1
+    fi
+    return 0
+}
+focused_monitor() { hyprctl monitors -j | python3 -c "import json,sys; print(next((m['name'] for m in json.load(sys.stdin) if m['focused']), ''))"; }

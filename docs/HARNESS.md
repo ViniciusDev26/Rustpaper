@@ -48,6 +48,16 @@ parking and on exit (otherwise the keyboard ends up on the invisible output).
   `steam -applaunch 431960` and moves its own windows (UI, dialogs) to the
   `rpref` workspace (`WE_AUTOSTART=0` disables this).
 
+- **Safe Start:** WE sets `safemode: true` in its `config.json` while running
+  and clears it on a clean exit; after a forced restart the "Safe Start"
+  dialog blocks every `-control` command. `restart_we` clears only that flag
+  (one-time backup: `config.json.rustpaper-backup`).
+- **Executable path:** the control instance is started through `Z:` (host
+  root). The `S:` library drive is not mapped in every Proton session
+  ("wine: failed to open S:\\..."), which made WE look wedged.
+- Focus goes back to the user's window, or to their monitor when no window
+  was focused.
+
 ### Recovering a stuck WE
 
 If every capture fails with "did not open a window", WE is wedged (a leftover
