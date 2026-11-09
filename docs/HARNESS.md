@@ -137,6 +137,23 @@ items from its own folder. With `STEAM_USER` set it uses `steamcmd` instead.
 `rustpaper_core::paths` and the harness pick the corpus up automatically. Web items are kept to verify
 they are listed but refused.
 
+## Particle calibration (`harness/calibration/run_particles.sh`)
+
+`make_particles.py <dir> <experiment>` builds a black scene with ONE particle
+system varying one feature (turbulentvelocityrandom offset/scale, turbulence
+operator, velocity baseline); `run_particles.sh` captures each in WE,
+renders it from the same scene time and prints `measure_particles.py`
+statistics for both: centroid, spread, share of light above the emitter,
+motion. Calibrating one feature at a time is what found the real
+turbulentvelocityrandom model (GL_RENDERER.md). Dark captures are allowed
+there (`WE_ALLOW_DARK=1`).
+
+## Exclusions (`harness/excluded.tsv`)
+
+Scenes that cannot be compared are listed with the reason and skipped by
+`batch.sh`: WE crashes or shows a black window for them, or they are built
+entirely by SceneScript (which Rustpaper never runs).
+
 ## Calibration scenes (`harness/calibration/`)
 
 `make_scene.py` writes a synthetic scene whose texture encodes scene

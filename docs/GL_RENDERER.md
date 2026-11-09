@@ -108,11 +108,15 @@ quad, the trail (`TRAILRENDERER`) or the sprite-sheet frame (`SPRITESHEET`,
 - Calibrated against WE with the harness (each choice is commented in code):
   rendered size = `size` x 0.5; oscillation frequencies are rad/s and oscillate
   between scalemin..scalemax; turbulence makes particles FOLLOW a slowly
-  evolving noise field (not accelerate, not curl); `offset` of
-  turbulentvelocityrandom shifts the noise sample (a phase). Pushing along
-  `forward` by `|offset|`, by `-offset`, or using it as a minimum cosine with
-  `forward` were measured too: with every other fix in place the phase
-  reading passes 5 of 9 affected scenes, `|offset|` 4, the others fewer.
+  evolving noise field (not accelerate, not curl).
+- **turbulentvelocityrandom** (calibrated on single-system scenes from
+  `harness/calibration/make_particles.py`, measured with
+  `measure_particles.py`): the direction is `forward` (default up) rotated
+  in the scene plane by `offset` radians plus a random angle of up to
+  `+-2 * scale` rad. WE vs Rustpaper: offset 0 -> 82% / 83% of the light
+  above the emitter; offset 3 -> 25% / 31% (down, slightly left); scale 0.1
+  -> x spread 0.029 / 0.029. Earlier readings (offset as a noise phase or a
+  push along forward) were fitted on whole scenes and were wrong.
 - **Embedded sprite sheets (`TEXS0003`)**: the header is `count, frame_w,
   frame_h`; the per-frame records carry the exact (possibly fractional) size
   (rosepetals: 5 frames of 102.5 x 128). Reading the header as
