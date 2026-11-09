@@ -204,6 +204,17 @@ enum Init {
         offset: f32,
         forward: V3,
     },
+    /// mapsequencearoundcontrolpoint: the n-th particle gets the velocity
+    /// rotated by 2*pi * (n % count) / count around z (N even directions).
+    SequenceAround {
+        count: u32,
+        speed: (V3, V3),
+    },
+    /// mapsequencebetweencontrolpoints: the n-th particle is placed at
+    /// (n % count) / (count - 1) of the way from control point 0 to 1.
+    SequenceBetween {
+        count: u32,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -430,6 +441,16 @@ impl ParticleDef {
                     "angularvelocityrandom" => {
                         Init::AngularVelocity(v3(i, "min", [0.0; 3]), v3(i, "max", [0.0; 3]))
                     }
+                    "mapsequencearoundcontrolpoint" => Init::SequenceAround {
+                        count: f(i, "count", 1.0).max(1.0) as u32,
+                        speed: (
+                            v3(i, "speedmin", [0.0; 3]),
+                            v3(i, "speedmax", v3(i, "speedmin", [0.0; 3])),
+                        ),
+                    },
+                    "mapsequencebetweencontrolpoints" => Init::SequenceBetween {
+                        count: f(i, "count", 2.0).max(1.0) as u32,
+                    },
                     "turbulentvelocityrandom" => Init::Turbulent {
                         speed: (f(i, "speedmin", 100.0), f(i, "speedmax", 250.0)),
                         scale: f(i, "scale", 1.0),
@@ -850,6 +871,23 @@ impl ParticleSim {
                         rng.range(a[1], b[1]),
                         rng.range(a[2], b[2]),
                     ]
+                }
+                Init::SequenceAround { count, speed } => {
+                    let k = (p.seed.wrapping_sub(1) % count) as f32;
+                    let a = std::f32::consts::TAU * k / count as f32;
+                    let v = lerp3(speed.0, speed.1, rng.f());
+                    let (sa, ca) = a.sin_cos();
+                    p.vel = add(p.vel, [v[0] * ca - v[1] * sa, v[0] * sa + v[1] * ca, v[2]]);
+                }
+                Init::SequenceBetween { count } => {
+                    let k = (p.seed.wrapping_sub(1) % count) as f32;
+                    let t = if count > 1 {
+                        k / (count - 1) as f32
+                    } else {
+                        0.0
+                    };
+                    let (a, b) = (cps[0], cps[1]);
+                    p.pos = add(p.pos, [0, 1, 2].map(|c| a[c] + (b[c] - a[c]) * t));
                 }
                 Init::Turbulent {
                     speed,
@@ -1287,6 +1325,27 @@ mod tests {
         }
         assert_eq!(s.len(), 0);
         assert_eq!(deaths, 3);
+    }
+
+    #[test]
+    fn sequence_around_spreads_in_even_directions() {
+        let mut s = sim(json!({
+            "maxcount": 10,
+            "emitter": [{ "name": "sphererandom", "rate": 0, "instantaneous": 4 }],
+            "initializer": [
+                { "name": "lifetimerandom", "min": 100, "max": 100 },
+                { "name": "mapsequencearoundcontrolpoint", "count": 4, "speedmin": "0 100 0", "speedmax": "0 100 0" }
+            ]
+        }));
+        let cps = [[0.0; 3]; 8];
+        s.step(STEP, &cps, true);
+        let mut dirs: Vec<(i32, i32)> = s
+            .particles
+            .iter()
+            .map(|p| (p.vel[0].round() as i32, p.vel[1].round() as i32))
+            .collect();
+        dirs.sort();
+        assert_eq!(dirs, vec![(-100, 0), (0, -100), (0, 100), (100, 0)]);
     }
 
     #[test]

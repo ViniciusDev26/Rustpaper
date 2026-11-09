@@ -745,7 +745,16 @@ impl SceneRenderer {
             }
             if let Some(c) = j.get("constantshadervalues").and_then(|c| c.as_object()) {
                 for (k, v) in c {
-                    constants.insert(k.clone(), value::plain(v).clone());
+                    // keep timelines whole (evaluated per frame in set_params)
+                    let keep = v.get("animation").is_some_and(|a| a.is_object());
+                    constants.insert(
+                        k.clone(),
+                        if keep {
+                            v.clone()
+                        } else {
+                            value::plain(v).clone()
+                        },
+                    );
                 }
             }
             if let Some(t) = j.get("textures").and_then(|t| t.as_array()) {
@@ -1192,7 +1201,7 @@ impl SceneRenderer {
             prog.set(gl, &format!("g_Texture{unit}"), &[unit as f32]);
             prog.set(gl, &format!("g_Texture{unit}Resolution"), &tex.resolution());
         }
-        set_params(gl, prog, constants);
+        set_params(gl, prog, constants, self.time);
         for (name, v) in vars {
             prog.set(gl, name, v);
         }
@@ -1649,7 +1658,7 @@ impl SceneRenderer {
         }
 
         // 2) annotated material parameters: default, overridden by constants
-        set_params(gl, prog, &constants);
+        set_params(gl, prog, &constants, self.time);
 
         // 3) the object's own properties (image pass only)
         if is_material {
@@ -2193,7 +2202,7 @@ impl SceneRenderer {
                 prog.set(gl, &format!("g_Texture{unit}"), &[*unit as f32]);
                 prog.set(gl, &format!("g_Texture{unit}Resolution"), &tex.resolution());
             }
-            set_params(gl, prog, &constants);
+            set_params(gl, prog, &constants, self.time);
             if rope {
                 self.rope_mesh.draw(gl, &verts);
             } else {
@@ -2278,7 +2287,9 @@ fn set_audio(gl: &glow::Context, prog: &Program, audio: &crate::audio::AudioFram
 /// Sets the shader's annotated material parameters (`uniform float g_Speed;
 /// // {"material":"speed","default":1}`): the annotated default, overridden by
 /// the pass constants (exact name first, then case-insensitive).
-fn set_params(gl: &glow::Context, prog: &Program, constants: &HashMap<String, Value>) {
+/// Constants can carry a timeline (`{"value": v, "animation": {...}}`):
+/// evaluated at the scene time `time`.
+fn set_params(gl: &glow::Context, prog: &Program, constants: &HashMap<String, Value>, time: f32) {
     for p in &prog.params {
         let v = p
             .material
@@ -2291,7 +2302,10 @@ fn set_params(gl: &glow::Context, prog: &Program, constants: &HashMap<String, Va
                         .map(|(_, v)| v)
                 })
             })
-            .map(value::floats)
+            .map(|c| match crate::keyframes::Track::parse(c) {
+                Some(track) => track.eval(time),
+                None => value::floats(c),
+            })
             .filter(|v| !v.is_empty())
             .unwrap_or_else(|| p.default.clone());
         prog.set(gl, &p.uniform, &v);
