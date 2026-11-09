@@ -4,8 +4,8 @@
 // Reverse-engineered layout (little endian; strings are NUL-terminated):
 //
 //   MDLV00xx\0  u32 flags, u32 1, u32 1, material path
-//               padding: 4 bytes (v16) / 28 bytes (v17+)
-//               u32 vertex flags, u32 vertex byte size, vertices,
+//               padding: 4 bytes (v13, v16) / 28 bytes (v17+)
+//               u32 vertex flags (v16+; v13: fixed 0x1800009), u32 vertex byte size, vertices,
 //               u32 index byte size, u16 triangle indices
 //     vertex = position f32x3 [+ normal f32x3 if 0x2] [+ tangent f32x4 if 0x4]
 //              [+ bone indices u32x4 if 0x800000] [+ weights f32x4 if 0x1000000]
@@ -131,7 +131,9 @@ impl Puppet {
         c.u32()?;
         let material = c.cstr()?;
         c.take(if version >= 17 { 28 } else { 4 })?;
-        let vflags = c.u32()?;
+        // v16+ store the vertex layout flags; older versions (MDLV0013) use a
+        // fixed layout: position, 4 bone indices, 4 weights, uv (52 bytes)
+        let vflags = if version >= 16 { c.u32()? } else { 0x0180_0009 };
         let vbytes = c.u32()? as usize;
         let mut stride = 12;
         for (bit, size) in [
@@ -203,7 +205,13 @@ impl Puppet {
                 });
             }
             c.p = anim_at;
-            if c.p + 9 <= d.len() && c.magic()?.starts_with("MDLA") {
+            let mdla = if c.p + 9 <= d.len() {
+                c.magic()?
+            } else {
+                String::new()
+            };
+            if let Some(v) = mdla.strip_prefix("MDLA") {
+                let mdla_version: u32 = v.parse().unwrap_or(3);
                 c.u32()?;
                 let count = c.u32()?;
                 for n in 0..count {
@@ -222,7 +230,11 @@ impl Puppet {
                         "single" => PlayMode::Single,
                         _ => PlayMode::Loop,
                     };
-                    let fps = c.f32()?;
+                    // MDLA0001 stores a playback rate over the editor's 30 fps
+                    // (Summer Feeling 2477602742: trains of 360 frames at
+                    // "1.0" pass every 12 s); 0003+ store frames per second.
+                    let rate = c.f32()?;
+                    let fps = if mdla_version < 2 { rate * 30.0 } else { rate };
                     let frames = c.u32()?;
                     c.u32()?;
                     let mut tracks = Vec::new();
@@ -241,6 +253,7 @@ impl Puppet {
                         c.p = end;
                         tracks.push(keys);
                     }
+                    skip_events(d, &mut c.p);
                     animations.push(Animation {
                         id,
                         name,
@@ -261,6 +274,23 @@ impl Puppet {
     }
 }
 
+/// Skips an animation's event list when one is there: u32 count, then per
+/// event f32 frame + JSON string (`{"frame":0,"name":"flashStart"}`). Left
+/// alone when it doesn't parse (`next_animation` resyncs instead).
+fn skip_events(d: &[u8], p: &mut usize) {
+    let mut c = Cursor { d, p: *p };
+    let Ok(n) = c.u32() else { return };
+    if n == 0 || n > 4096 {
+        return;
+    }
+    for _ in 0..n {
+        if c.f32().is_err() || c.cstr().is_err() {
+            return;
+        }
+    }
+    *p = c.p;
+}
+
 /// Offset of the next MDLA animation header at or after `from` (within a
 /// few bytes): `u32 id, u32, name\0, mode\0` with a known play mode.
 fn next_animation(d: &[u8], from: usize) -> Option<usize> {
@@ -271,7 +301,7 @@ fn next_animation(d: &[u8], from: usize) -> Option<usize> {
         let mode_end = mode.iter().take(16).position(|&b| b == 0)?;
         matches!(&mode[..mode_end], b"loop" | b"mirror" | b"single").then_some(())
     };
-    (from..from + 64).find(|&at| is_header(at).is_some())
+    (from..(from + 4096).min(d.len())).find(|&at| is_header(at).is_some())
 }
 
 #[cfg(test)]
