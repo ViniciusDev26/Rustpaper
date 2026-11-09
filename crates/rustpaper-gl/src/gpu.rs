@@ -71,11 +71,19 @@ pub fn upload_texture(gl: &glow::Context, tex: &rustpaper_core::tex::DecodedText
             glow::UNSIGNED_BYTE,
             glow::PixelUnpackData::Slice(Some(&content)),
         );
-        gl.generate_mipmap(glow::TEXTURE_2D);
+        // Mipmap only textures that ship mipmaps: WE samples single-level ones
+        // (noise, flow maps...) at full detail even when minified; mipmapping
+        // them averages e.g. film grain into flat gray.
+        let mipmapped = tex.mip_count > 1;
+        if mipmapped {
+            gl.generate_mipmap(glow::TEXTURE_2D);
+        }
         let (min, mag) = if nearest {
             (glow::NEAREST, glow::NEAREST)
-        } else {
+        } else if mipmapped {
             (glow::LINEAR_MIPMAP_LINEAR, glow::LINEAR)
+        } else {
+            (glow::LINEAR, glow::LINEAR)
         };
         let wrap = if clamp {
             glow::CLAMP_TO_EDGE
@@ -92,6 +100,59 @@ pub fn upload_texture(gl: &glow::Context, tex: &rustpaper_core::tex::DecodedText
             height: h,
             format: tex.format,
         }
+    }
+}
+
+/// RGBA8 texture without data (linear filter, clamped), filled later with
+/// `write_texture` — rasterized text.
+pub fn empty_texture(gl: &glow::Context, w: u32, h: u32) -> Tex {
+    unsafe {
+        let id = gl.create_texture().expect("glGenTextures");
+        gl.bind_texture(glow::TEXTURE_2D, Some(id));
+        gl.tex_image_2d(
+            glow::TEXTURE_2D,
+            0,
+            glow::RGBA8 as i32,
+            w as i32,
+            h as i32,
+            0,
+            glow::RGBA,
+            glow::UNSIGNED_BYTE,
+            glow::PixelUnpackData::Slice(None),
+        );
+        for (p, v) in [
+            (glow::TEXTURE_MIN_FILTER, glow::LINEAR),
+            (glow::TEXTURE_MAG_FILTER, glow::LINEAR),
+            (glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE),
+            (glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE),
+        ] {
+            gl.tex_parameter_i32(glow::TEXTURE_2D, p, v as i32);
+        }
+        Tex {
+            id,
+            width: w,
+            height: h,
+            format: 0,
+        }
+    }
+}
+
+/// Replaces the whole content of an RGBA8 texture.
+pub fn write_texture(gl: &glow::Context, tex: &Tex, rgba: &[u8]) {
+    unsafe {
+        gl.bind_texture(glow::TEXTURE_2D, Some(tex.id));
+        gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
+        gl.tex_sub_image_2d(
+            glow::TEXTURE_2D,
+            0,
+            0,
+            0,
+            tex.width as i32,
+            tex.height as i32,
+            glow::RGBA,
+            glow::UNSIGNED_BYTE,
+            glow::PixelUnpackData::Slice(Some(rgba)),
+        );
     }
 }
 
@@ -415,6 +476,58 @@ impl ParticleMesh {
     }
 }
 
+/// Indexed triangle mesh of (x, y, z, u, v) vertices on attributes 0 and 1
+/// (a_Position / a_TexCoord): puppet meshes. Vertices are re-uploaded each
+/// frame (CPU skinning), indices once.
+pub struct MeshGpu {
+    vao: glow::VertexArray,
+    vbo: glow::Buffer,
+    count: i32,
+}
+
+impl MeshGpu {
+    pub fn new(gl: &glow::Context, indices: &[u32]) -> MeshGpu {
+        unsafe {
+            let vao = gl.create_vertex_array().expect("glGenVertexArrays");
+            let vbo = gl.create_buffer().expect("glGenBuffers");
+            let ebo = gl.create_buffer().expect("glGenBuffers");
+            gl.bind_vertex_array(Some(vao));
+            gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
+            gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(ebo));
+            gl.buffer_data_u8_slice(
+                glow::ELEMENT_ARRAY_BUFFER,
+                slice_bytes(indices),
+                glow::STATIC_DRAW,
+            );
+            gl.enable_vertex_attrib_array(0);
+            gl.vertex_attrib_pointer_f32(0, 3, glow::FLOAT, false, 20, 0);
+            gl.enable_vertex_attrib_array(1);
+            gl.vertex_attrib_pointer_f32(1, 2, glow::FLOAT, false, 20, 12);
+            gl.bind_vertex_array(None);
+            MeshGpu {
+                vao,
+                vbo,
+                count: indices.len() as i32,
+            }
+        }
+    }
+
+    pub fn upload(&self, gl: &glow::Context, vertices: &[f32]) {
+        unsafe {
+            gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.vbo));
+            gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, slice_bytes(vertices), glow::STREAM_DRAW);
+        }
+    }
+
+    pub fn draw(&self, gl: &glow::Context) {
+        unsafe {
+            gl.bind_vertex_array(Some(self.vao));
+            gl.draw_elements(glow::TRIANGLES, self.count, glow::UNSIGNED_INT, 0);
+            gl.bind_vertex_array(None);
+        }
+    }
+}
+
 fn slice_bytes<T: Copy>(v: &[T]) -> &[u8] {
     // SAFETY: plain-old-data numeric slices; the byte view covers exactly v.
     unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, std::mem::size_of_val(v)) }
@@ -438,6 +551,28 @@ pub fn cover_rect(src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) -> (i32, i32, 
         (x0 + cw).round() as i32,
         (y0 + ch).round() as i32,
     )
+}
+
+/// Cover-blits a finished frame into another target (same convention: row 0
+/// = top), e.g. to emulate a 1920x1080 screen offscreen.
+pub fn cover_into(gl: &glow::Context, src: &Target, dst: &Target) {
+    let (x0, y0, x1, y1) = cover_rect(src.tex.width, src.tex.height, dst.tex.width, dst.tex.height);
+    unsafe {
+        gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(src.fbo));
+        gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(dst.fbo));
+        gl.blit_framebuffer(
+            x0,
+            y0,
+            x1,
+            y1,
+            0,
+            0,
+            dst.tex.width as i32,
+            dst.tex.height as i32,
+            glow::COLOR_BUFFER_BIT,
+            glow::LINEAR,
+        );
+    }
 }
 
 /// Copies a finished frame to the current window surface (default framebuffer)

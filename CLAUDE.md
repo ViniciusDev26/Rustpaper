@@ -22,7 +22,16 @@ Projeto de aprendizado de Rust — priorize clareza e explicação didática ao 
   buffers via wp_viewporter); videos still use the wgpu path below. Stop it with
   `kill $(pgrep -x rustpaper)` (exact name: `pkill -f` matches your own shell).
 - WE paths come from `rustpaper_core::paths` (Steam library, or
-  `WE_ASSETS_DIR` / `WE_WORKSHOP_DIR`).
+  `WE_ASSETS_DIR` / `WE_WORKSHOP_DIR`; test corpus in
+  `~/.local/share/rustpaper-testset` or `RUSTPAPER_TESTSET_DIR`).
+- **Selector** (`./target/release/rustpaper-selector`): gallery + WE-style
+  customization panel; saved values go to
+  `~/.config/rustpaper/properties/<id>.json` and the engine gets them with
+  `--props`. Details: **`docs/SELECTOR.md`**.
+- **Never execute Workshop JavaScript** (SceneScript, web wallpapers, property
+  conditions): only static values or native, data-driven code.
+- Fidelity gate: `harness/batch.sh` -> `harness-out/report.md` (PASS = mean
+  SSIM >= 0.95 and motion energy ratio 0.7..1.4).
 
 ## Workspace (Cargo)
 
@@ -48,8 +57,9 @@ Monorepo com 3 crates em `crates/`:
   `wayland-backend` (feature `client_system`), `calloop` 0.14, `calloop-wayland-source` 0.4.
   Precisa do **glslangValidator** em runtime (compila os shaders do WE).
 - **`rustpaper-selector`** — app desktop Tauri v2. Binário **`rustpaper-selector`**.
-  Backend Rust (`main`, `settings`) + frontend web estático em `ui/`. Comandos:
-  `list_wallpapers`, `apply`, `get_settings`, `set_autostart`. Deps: `tauri` 2
+  Backend Rust (`main`, `settings`) + frontend web estático em `ui/`
+  (`index.html`, `properties.js`). Comandos: `list_wallpapers`, `apply`,
+  `get_properties`, `save_properties`, `get_settings`, `set_autostart`. Deps: `tauri` 2
   (feature `protocol-asset`), `serde`, `serde_json`, `rustpaper-core`.
 
 ## Como buildar e rodar

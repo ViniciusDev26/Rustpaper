@@ -133,6 +133,9 @@ pub struct DecodedTexture {
     /// WE texture format id (0 = RGBA8888, 4/6/7 = DXT5/3/1, 8 = RG88, 9 = R8;
     /// embedded JPEG/PNG count as 0). Shaders get it as the TEXnFORMAT combo.
     pub format: u32,
+    /// Mipmap levels stored in the file. 1 = the texture is meant to be
+    /// sampled without mipmaps (e.g. util/noise, sampled at high frequency).
+    pub mip_count: u32,
 }
 
 struct Cursor<'a> {
@@ -206,7 +209,7 @@ pub fn parse(data: &[u8]) -> Result<DecodedTexture, String> {
     let is_texb0004 = container == "TEXB0004";
 
     // --- primeiro mipmap (o maior) da primeira imagem ---
-    let _mipmap_count = c.u32()?;
+    let mip_count = c.u32()?;
     // The extra per-mipmap header only exists for video (mp4) textures; for
     // regular TEXB0004 images the width/height follow the mipmap count directly.
     if is_texb0004 && is_mp4 {
@@ -248,6 +251,7 @@ pub fn parse(data: &[u8]) -> Result<DecodedTexture, String> {
         return Ok(DecodedTexture {
             flags,
             format: 0,
+            mip_count,
             width: w,
             height: h,
             real_width: width,
@@ -260,6 +264,7 @@ pub fn parse(data: &[u8]) -> Result<DecodedTexture, String> {
         Ok(DecodedTexture {
             flags,
             format,
+            mip_count,
             width: mip_w,
             height: mip_h,
             real_width: width,

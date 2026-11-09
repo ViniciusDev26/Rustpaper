@@ -13,9 +13,10 @@ warmup=${WE_WARMUP:-6}
 project="$(wallpaper_dir "$id" || true)/project.json"
 [ -f "$project" ] || die "$project not found"
 mkdir -p "$out"
-title="rpref_$id"
+title="rpref_$(basename "$id")"
 
 ensure_headless
+user_focus=$(active_address) # WE's new window grabs focus: give it back
 we_control -control openWallpaper -file "$(wine_path "$project")" \
     -playInWindow "$title" -width 1920 -height 1080
 addr=""
@@ -23,8 +24,8 @@ for _ in $(seq 1 60); do
     addr=$(window_address "$title"); [ -n "$addr" ] && break; sleep 0.5
 done
 [ -n "$addr" ] || die "Wallpaper Engine did not open a window for $id"
-park_window "$addr" "rpref"
-trap 'close_window "$addr"' EXIT
+park_window "$addr" "rpref" "$user_focus"
+trap 'close_window "$addr"; refocus "$user_focus"' EXIT
 
 sleep "$warmup"
 grim -o "$HEADLESS" "$out/we.png"

@@ -26,6 +26,8 @@ struct Args {
     width: Option<u32>,
     start: f32,
     only: Option<Vec<i64>>,
+    /// Emulate a screen: cover-crop the scene into WxH like the live wallpaper.
+    screen: Option<(u32, u32)>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -42,6 +44,7 @@ fn parse_args() -> Result<Args, String> {
     let mut width = None;
     let mut start = 0.0;
     let mut only = None;
+    let mut screen = None;
     let floats = |s: String| -> Result<Vec<f32>, String> {
         s.split(',')
             .map(|t| t.trim().parse::<f32>().map_err(|e| format!("{t:?}: {e}")))
@@ -66,6 +69,14 @@ fn parse_args() -> Result<Args, String> {
                         .map(|v| *v as i64)
                         .collect(),
                 )
+            }
+            "--screen" => {
+                let v = it.next().ok_or("--screen needs WxH")?;
+                let (w, h) = v.split_once('x').ok_or("--screen needs WxH")?;
+                screen = Some((
+                    w.parse().map_err(|_| "bad width")?,
+                    h.parse().map_err(|_| "bad height")?,
+                ));
             }
             "--start" => start = floats(it.next().ok_or("--start needs seconds")?)?[0],
             "--width" => width = Some(floats(it.next().ok_or("--width needs pixels")?)?[0] as u32),
@@ -104,7 +115,24 @@ fn parse_args() -> Result<Args, String> {
         width,
         start,
         only,
+        screen,
     })
+}
+
+/// The finished frame as it would be displayed: the scene itself, or cover-
+/// cropped into a `--screen` sized target.
+fn frame_pixels(
+    gl: &glow::Context,
+    scene: &SceneRenderer,
+    screen: &Option<rustpaper_gl::gpu::Target>,
+) -> (Vec<u8>, u32, u32) {
+    match screen {
+        Some(t) => {
+            rustpaper_gl::gpu::cover_into(gl, scene.output(), t);
+            (t.read_rgba(gl), t.tex.width, t.tex.height)
+        }
+        None => (scene.output().read_rgba(gl), scene.width, scene.height),
+    }
 }
 
 fn out_path(base: &Path, time: f32, many: bool) -> PathBuf {
@@ -126,7 +154,7 @@ fn main() -> ExitCode {
                 eprintln!("error: {e}");
             }
             eprintln!(
-                "usage: rustpaper-render <workshop id | folder> [--time 0,1.5] [--out x.png] [--pointer x,y] [--describe] [--dump-passes dir] [--only id,id]\n       [--video out.mp4 --duration 10 --fps 30 --start 0] [--width 1920]"
+                "usage: rustpaper-render <workshop id | folder> [--time 0,1.5] [--out x.png] [--pointer x,y] [--describe] [--dump-passes dir] [--only id,id]\n       [--video out.mp4 --duration 10 --fps 30 --start 0] [--width 1920] [--screen 1920x1080]"
             );
             return ExitCode::from(2);
         }
@@ -184,6 +212,9 @@ fn main() -> ExitCode {
             }
         };
     }
+    let screen = args
+        .screen
+        .map(|(w, h)| rustpaper_gl::gpu::Target::new(gl, w, h));
     for &time in &args.times {
         let t = std::time::Instant::now();
         scene.render(
@@ -194,15 +225,9 @@ fn main() -> ExitCode {
                 ..Default::default()
             },
         );
-        let px = scene.output().read_rgba(gl);
+        let (px, pw, ph) = frame_pixels(gl, &scene, &screen);
         let path = out_path(&args.out, time, args.times.len() > 1);
-        if let Err(e) = image::save_buffer(
-            &path,
-            &px,
-            scene.width,
-            scene.height,
-            image::ExtendedColorType::Rgba8,
-        ) {
+        if let Err(e) = image::save_buffer(&path, &px, pw, ph, image::ExtendedColorType::Rgba8) {
             eprintln!("error: writing {}: {e}", path.display());
             return ExitCode::FAILURE;
         }
@@ -229,7 +254,10 @@ fn record_video(
     out: &Path,
 ) -> Result<(), String> {
     use std::io::Write;
-    let (w, h) = (scene.width, scene.height);
+    let screen = args
+        .screen
+        .map(|(w, h)| rustpaper_gl::gpu::Target::new(gl, w, h));
+    let (w, h) = args.screen.unwrap_or((scene.width, scene.height));
     let scale = match args.width {
         Some(tw) => format!("scale={tw}:-2:flags=lanczos,"),
         None => String::new(),
@@ -270,7 +298,7 @@ fn record_video(
                 ..Default::default()
             },
         );
-        let px = scene.output().read_rgba(gl);
+        let (px, _, _) = frame_pixels(gl, scene, &screen);
         stdin
             .write_all(&px)
             .map_err(|e| format!("writing frame {n}: {e}"))?;

@@ -75,7 +75,16 @@ If the runtime fills uniforms/textures/combos like WE, every effect works.
 - **Hidden layers referenced by others** (`_rt_imageLayerComposite_<id>_a`) are
   still rendered into their own target before the layers that sample them.
 - **Linear, not sRGB.** Textures and targets are plain RGBA8; WE blends raw
-  8-bit values. Mipmaps are generated for every texture.
+  8-bit values.
+- **Mipmaps only when the .tex has them** (`mip_count > 1`). Generating them
+  for single-level textures made `filmgrain` noise (sampled minified) average
+  out to a flat gray: the grain was static.
+- **`colorBlendMode` on a layer drawn through a target** (it has effects) is
+  applied by an extra composite pass when the layer's result is drawn onto the
+  scene, not inside the layer's own FBO (that blended the layer with nothing
+  and produced a mini-scene).
+- **`createLayer` templates** (objects only referenced by SceneScript) are
+  hidden: SceneScript is never executed (security decision).
 - **TEXB0004:** the extra per-mipmap header only exists for mp4 textures.
 
 ## Particles (`particles.rs`)
@@ -100,7 +109,24 @@ quad, the trail (`TRAILRENDERER`) or the sprite-sheet frame (`SPRITESHEET`,
   rendered size = `size` x 0.5; oscillation frequencies are rad/s and oscillate
   between scalemin..scalemax; turbulence makes particles FOLLOW a slowly
   evolving noise field (not accelerate, not curl); `offset` of
-  turbulentvelocityrandom is a noise phase, not a push.
+  turbulentvelocityrandom pushes the random direction along `forward` by
+  `|offset|` — the sign does not reverse it: the stock "ember" preset
+  (`offset: -0.5`) rises in WE (Akame 1215952856: motion energy ratio
+  0.21 -> 0.90).
+- **Sprite sheets crossfade.** WE always compiles `genericparticle` with the
+  runtime-only combo `SPRITESHEETBLEND` (mix of the current and next frame).
+  Without it, screen-sized flipbooks (fog) jump at every frame change:
+  Demon Angel 1851646226 motion energy ratio 4.3 -> 2.7, Caitlyn 2853052034
+  1.69 -> 1.28 (PASS).
+- **Child systems need a `type`.** `eventfollow` / `eventspawn` /
+  `eventdeath` / `static`. Legacy presets list children with no type (stock
+  "ember" -> "emberglow": 1000 px additive halos); WE does not draw them
+  (Akame 1215952856 mean SSIM 0.65 -> 0.93 once dropped).
+- **Rope renderers** (`rope`, `ropetrail`) use `genericropeparticle` with its
+  own 21-float vertex layout; `ropetrail` keeps 16 history samples per
+  particle.
+- **Audio response** (`audioprocessingmode` on emitters) scales the rate by the
+  band average (see Audio below).
 
 ## More WE behaviours found while adding particles
 
@@ -118,13 +144,88 @@ quad, the trail (`TRAILRENDERER`) or the sprite-sheet frame (`SPRITESHEET`,
 - Engine aliases (`_alias_lightCookie`, shadow atlases) only exist with scene
   lighting; they resolve to white.
 
+## Camera
+
+The WE window shows the scene with a centered "cover" crop and **ignores the
+scene camera's eye/center offsets** (measured with synthetic calibration
+scenes, `harness/calibration/`: a scene whose pixels encode their own scene
+coordinates). `view_proj()` is therefore the plain scene ortho. Earlier
+misalignments blamed on the camera were the harness stretching non-16:9
+scenes; `--screen WxH` renders through the same cover crop as a monitor.
+
+## Text (`text.rs`)
+
+Text objects are rasterized on the CPU with `ab_glyph` into a texture that is
+drawn by a synthetic image layer (so effects and blend modes apply).
+
+- Size: `pointsize` x 4.15 scene units per em (measured against WE).
+- Font: the object's font from the pkg, else a system font through
+  `fc-match`.
+- The canvas grows to fit the text (WE never clips).
+- Dynamic text comes only from **native presets** recognized by their static
+  values, never by running their script: `Clock` (12/24 h, seconds),
+  `Time and Date`, `Format`, `DigitalDate` (weekday, day, month, delimiter,
+  vertical). Anything else shows its static `value`.
+
+## Audio (`audio.rs`, `rustpaper-engine/src/audio_capture.rs`)
+
+- Live engine: `pw-record` captures the default sink monitor
+  (`stream.capture.sink=true`), 48 kHz stereo f32, on a thread.
+- 2048-sample Hann FFT -> 64 log bands (30 Hz .. 16 kHz), -60..0 dB -> 0..1,
+  instant attack and 0.85 decay per frame. `g_AudioSpectrum16/32/64Left/Right`
+  are averages of the 64 bands.
+- `rustpaper-render` and the harness use silence (what WE hears there too).
+- `--no-audio` disables capture.
+
+## Puppet warp (`puppet.rs`, `rustpaper_core::mdl`)
+
+`models/*_puppet.mdl` (MDLV/MDLS/MDLA, layout documented in `mdl.rs`) gives a
+skinned mesh, a bone hierarchy and keyframed animations. The scene object's
+`animationlayers` pick animations (rate, blend, additive). Bones are posed per
+frame and the mesh is skinned on the CPU (a few thousand vertices); the
+unchanged WE material shader draws it.
+
+- The MDLA per-animation float is read as **frames per second**. Reading it as
+  a duration (fps = frames / value) matched WE worse (2900431360: motion SSIM
+  0.57 vs 0.60).
+- Play modes `loop`, `mirror` (ping-pong), `single` (hold last frame).
+
+## Bloom
+
+`general.bloom` adds WE's post chain: LDR (`downsample_quarter_bloom` ->
+`downsample_eighth_blur_v` -> `blur_h_bloom` -> `combine`) or, with
+`hdr: true`, the dual-filter HDR chain (`hdr_downsample` with BLOOM/UPSAMPLE
+-> `combine_hdr`) on RGBA16F targets.
+
+## Shader fixer (`rustpaper_core::shader::fix_glsl_from_log`)
+
+Workshop shaders written for WE's HLSL path rely on implicit conversions GLSL
+rejects. `Program::build` compiles, parses the driver log (NVIDIA `0(N)` and
+Mesa `0:N(` formats) and applies targeted rewrites, up to 10 rounds:
+truncating/wrapping a conversion (`vec4 -> vec3` etc., per statement, once),
+ternary conditions, `uint` operands, swizzles of the nearest declaration,
+multi-declarators, `%` on floats (`mod`), non-constant `const`, stray
+`#endif`. Varyings whose vector sizes differ between stages are promoted to
+the larger type at link time. `RUSTPAPER_NO_FIX=1` disables it;
+`RUSTPAPER_DUMP_SHADERS=dir` writes sources that still fail.
+
+## User properties
+
+`SceneRenderer::load_with_properties` overrides `general.properties` values
+(name -> value) before `{"user": ...}` bindings are resolved. The live engine
+reads them from `rustpaper <dir> --props file.json`, written by the selector's
+customization panel (`docs/SELECTOR.md`).
+
 ## Known gaps
 
-- Text objects, puppet/skeletal animation, SceneScript (JS-driven properties,
-  e.g. audio visualizers), audio uniforms, camera parallax.
-- Particles: rope renderers (`rope`, `ropetrail`: genericropeparticle shader,
-  9 scenes), operator `remapvalue`, initializers `mapsequence*`, audio
-  response, `orientation` other than screen-facing.
-- ~10 Workshop shaders rely on HLSL implicit conversions (vec4 -> vec3,
-  int -> uint) that GLSL rejects; those passes are skipped (image passes
-  through unchanged).
+- **Not supported by design:** SceneScript (JavaScript) and `web` wallpapers —
+  executing Workshop code is a security risk. Properties driven only by a
+  script keep their static value.
+- Camera parallax (`cameraparallax`, `parallaxDepth` with the mouse), scene
+  lights (`LIGHTING=1` materials use ambient only), keyframed property
+  animations (`animation` blocks on object properties).
+- Particles: operator `remapvalue`, initializers `mapsequence*`,
+  `orientation` other than screen-facing.
+- Video wallpapers still use the older wgpu path in `rustpaper-engine`.
+- Shaders the fixer cannot repair are skipped (the image passes through) and
+  listed by `--describe`.

@@ -17,6 +17,8 @@ TESTSET="${RUSTPAPER_TESTSET_DIR:-$HOME/.local/share/rustpaper-testset}/steamapp
 # wallpaper_dir <id>: folder of a wallpaper (Steam Workshop or test corpus)
 wallpaper_dir() {
     local d
+    # a folder path works too (calibration scenes, unpacked projects)
+    if [ -f "$1/project.json" ]; then (cd "$1" && pwd); return 0; fi
     for d in "$WORKSHOP/$1" "$TESTSET/$1"; do
         [ -f "$d/project.json" ] && { echo "$d"; return 0; }
     done
@@ -61,9 +63,11 @@ active_address() { hyprctl activewindow -j | python3 -c "import json,sys; print(
 
 # Moves a window to its own workspace on the headless output, fullscreen,
 # and gives focus back to whatever the user had focused.
-park_window() { # park_window <address> <workspace name>
-    local addr=$1 ws=$2 me
-    me=$(active_address)
+# Pass the window to refocus as $3 when the caller knows it (a window that
+# just opened usually has taken focus already).
+park_window() { # park_window <address> <workspace name> [address to refocus]
+    local addr=$1 ws=$2 me=${3:-}
+    [ -n "$me" ] || me=$(active_address)
     hyprctl dispatch "hl.dsp.window.move({ window = 'address:$addr', workspace = 'name:$ws', follow = false })" >/dev/null
     hyprctl dispatch "hl.dsp.workspace.move({ workspace = 'name:$ws', monitor = '$HEADLESS' })" >/dev/null
     hyprctl dispatch "hl.dsp.focus({ workspace = 'name:$ws' })" >/dev/null
@@ -74,3 +78,4 @@ park_window() { # park_window <address> <workspace name>
 }
 
 close_window() { hyprctl dispatch "hl.dsp.window.close({ window = 'address:$1' })" >/dev/null 2>&1 || true; }
+refocus() { [ -n "${1:-}" ] && hyprctl dispatch "hl.dsp.focus({ window = 'address:$1' })" >/dev/null 2>&1; return 0; }
