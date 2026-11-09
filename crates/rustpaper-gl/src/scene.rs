@@ -445,6 +445,14 @@ impl SceneRenderer {
         for k in keys {
             r.program(gl, &k);
         }
+        // a hidden parent hides its descendants (unless `disablepropagation`)
+        let hidden = hidden_by_ancestor(objects);
+        for l in &mut r.layers {
+            l.visible &= !hidden.contains(&l.id);
+        }
+        for p in &mut r.particle_objs {
+            p.visible &= !hidden.contains(&p.id);
+        }
         r.attach_order = attach_order(&r.layers);
         Ok(r)
     }
@@ -2559,6 +2567,32 @@ fn attach_order(layers: &[Layer]) -> Vec<usize> {
         .collect();
     v.sort_by_key(|&i| depth(i));
     v
+}
+
+/// Ids of objects hidden because an ancestor is hidden.
+fn hidden_by_ancestor(objects: &[Value]) -> HashSet<i64> {
+    let by_id: HashMap<i64, &Value> = objects
+        .iter()
+        .filter_map(|o| Some((o.get("id")?.as_i64()?, o)))
+        .collect();
+    let mut out = HashSet::new();
+    for (&id, o) in &by_id {
+        if value::get_bool(o, "disablepropagation", false) {
+            continue;
+        }
+        let mut cur = o.get("parent").and_then(|p| p.as_i64());
+        let mut depth = 0;
+        while let (Some(pid), true) = (cur, depth < 64) {
+            let Some(p) = by_id.get(&pid) else { break };
+            if !object_visible(p) {
+                out.insert(id);
+                break;
+            }
+            cur = p.get("parent").and_then(|p| p.as_i64());
+            depth += 1;
+        }
+    }
+    out
 }
 
 #[cfg(test)]
