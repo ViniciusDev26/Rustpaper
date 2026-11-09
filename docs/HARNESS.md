@@ -44,6 +44,9 @@ parking and on exit (otherwise the keyboard ends up on the invisible output).
   `ensure_headless` switches only `RPREF` back on before every capture.
 - **Black captures** (WE failed to load the wallpaper in its window) are
   rejected instead of being used as a reference.
+- **Session lock:** the lock screen covers every output, RPREF included;
+  `ensure_headless` refuses to capture while Hyprland reports an active
+  session lock (`LOCK` in `solitaryBlockedBy`).
 - **WE crashes** (some wallpapers take it down): `we_control` restarts it via
   `steam -applaunch 431960` and moves its own windows (UI, dialogs) to the
   `rpref` workspace (`WE_AUTOSTART=0` disables this).
