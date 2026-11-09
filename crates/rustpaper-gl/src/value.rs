@@ -77,6 +77,25 @@ pub fn apply_user_properties(v: &mut Value, props: &serde_json::Map<String, Valu
             {
                 m.insert("value".into(), p.clone());
             }
+            // {"user": {"name": "size", "condition": "1"}, "value": ...}:
+            // true when the property's value equals the condition (combo
+            // options showing/hiding objects)
+            if let Some(Value::Object(u)) = m.get("user")
+                && let (Some(Value::String(name)), Some(cond)) = (u.get("name"), u.get("condition"))
+                && let Some(p) = props.get(name).and_then(|p| p.get("value"))
+                && m.contains_key("value")
+            {
+                let as_text = |v: &Value| match v {
+                    Value::String(s) => s.clone(),
+                    Value::Bool(b) => (*b as i32).to_string(),
+                    other => other.to_string(),
+                };
+                let eq = as_text(p) == as_text(cond)
+                    || p.as_f64()
+                        .zip(as_text(cond).parse::<f64>().ok())
+                        .is_some_and(|(a, b)| a == b);
+                m.insert("value".into(), Value::Bool(eq));
+            }
             for (_, child) in m.iter_mut() {
                 apply_user_properties(child, props);
             }

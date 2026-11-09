@@ -70,6 +70,12 @@ If the runtime fills uniforms/textures/combos like WE, every effect works.
   `MASK=1` only when a texture is actually provided (not for the default).
 - **Uniform hoisting:** includes (e.g. `common_blur.h`) use `g_Texture0` before
   the main file declares it. `translate_gl` hoists `uniform sampler2D` lines.
+- **Hidden parents hide their descendants** unless the child sets
+  `disablepropagation` (Kirito x Asuna 3463520581 keeps a hidden "lil" copy
+  of both characters; drawing its children duplicated them).
+- **Conditional visibility** `{"user": {"name": p, "condition": "1"}, "value": v}`
+  is true when property `p` equals the condition (combo options that swap
+  objects).
 - **User properties:** `{"user": "x", "value": v}` wrappers take their value
   from project.json `general.properties` (`value::apply_user_properties`).
 - **Hidden layers referenced by others** (`_rt_imageLayerComposite_<id>_a`) are
