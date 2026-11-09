@@ -249,7 +249,11 @@ Mesa `0:N(` formats) and applies targeted rewrites, up to 10 rounds:
 truncating/wrapping a conversion (`vec4 -> vec3` etc., per statement, once),
 ternary conditions, `uint` operands, swizzles of the nearest declaration,
 multi-declarators, `%` on floats (`mod`), non-constant `const`, stray
-`#endif`. Varyings whose vector sizes differ between stages are promoted to
+`#endif`, bools in arithmetic (`(a < b) * 6.0` -> `float(a < b)`), functions
+named like a prelude macro (`log10` -> `#undef` first), writes to fragment
+inputs (the varying is copied into a global at the start of `main`) and
+identifiers containing `__` (reserved in GLSL). A declared name is never
+swizzled (`vec4 c.xy =` was a fixer bug). Varyings whose vector sizes differ between stages are promoted to
 the larger type at link time. `RUSTPAPER_NO_FIX=1` disables it;
 `RUSTPAPER_DUMP_SHADERS=dir` writes sources that still fail.
 
