@@ -168,6 +168,9 @@ drawn by a synthetic image layer (so effects and blend modes apply).
 - Font: the object's font from the pkg, else a system font through
   `fc-match`.
 - The canvas grows to fit the text (WE never clips).
+- `horizontalalign` left/right puts the text's start/end AT the object's
+  origin (center: centered on it), not at the edge of the `size` box
+  (Toyota 3560329032's right-aligned clock; Asuna 3239767814).
 - Dynamic text comes only from **native presets** recognized by their static
   values, never by running their script: `Clock` (12/24 h, seconds),
   `Time and Date`, `Format`, `DigitalDate` (weekday, day, month, delimiter,

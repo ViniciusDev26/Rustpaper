@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# batch.sh [--recapture] [id...]
+# batch.sh [--recapture] [--update] [id...]
 #
+# --update keeps the other rows of results.tsv and re-runs only the given ids.
 # Runs the full comparison over many wallpapers and writes
 #   harness-out/results.tsv   one row per wallpaper (metrics + verdict)
 #   harness-out/report.md     table sorted worst-first + warnings per scene
@@ -10,8 +11,14 @@
 source "$(dirname "$0")/lib.sh"
 need ffmpeg
 
-recapture=0
-[ "${1:-}" = "--recapture" ] && { recapture=1; shift; }
+recapture=0; update=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --recapture) recapture=1; shift ;;
+        --update) update=1; shift ;;
+        *) break ;;
+    esac
+done
 secs=${BATCH_SECS:-8}
 OUT="$REPO_DIR/harness-out"
 bin="$REPO_DIR/target/release/rustpaper-render"
@@ -30,7 +37,14 @@ fi
 
 results="$OUT/results.tsv"
 mkdir -p "$OUT"
-printf 'id\tmean_ssim\tmotion_ssim\tenergy_rp\tenergy_we\tenergy_ratio\tverdict\ttitle\n' > "$results"
+header='id\tmean_ssim\tmotion_ssim\tenergy_rp\tenergy_we\tenergy_ratio\tverdict\ttitle\n'
+if [ $update = 1 ] && [ -f "$results" ]; then
+    keep=$(mktemp)
+    awk -F'\t' -v ids=" ${ids[*]} " 'NR > 1 && index(ids, " " $1 " ") == 0' "$results" > "$keep"
+    printf "$header" > "$results"; cat "$keep" >> "$results"; rm -f "$keep"
+else
+    printf "$header" > "$results"
+fi
 for id in "${ids[@]}"; do
     dir=$(wallpaper_dir "$id") || { echo "skip $id: not found"; continue; }
     o="$OUT/$id"; mkdir -p "$o"
