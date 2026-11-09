@@ -55,14 +55,10 @@ lum=$(ffmpeg -v error -i "$out/we.png" -vf "scale=1:1:flags=area,format=gray" -f
 # Video: grab frames as fast as the output refreshes, keep real timestamps,
 # then resample to 30 fps CFR so it lines up with rustpaper-render --fps 30.
 date -Iseconds > "$out/we_start.txt"
-# WE reads the real cursor even outside its window (clamped to the window):
-# record where it was relative to the headless output, for --pointer.
-hyprctl -j monitors | python3 -c "
-import json, subprocess, sys
-m = next(m for m in json.load(sys.stdin) if m['name'] == '$HEADLESS')
-x, y = (float(v) for v in subprocess.run(['hyprctl', 'cursorpos'], capture_output=True, text=True).stdout.split(','))
-c = lambda v: min(max(v, 0.0), 1.0)
-print(f\"{c((x - m['x']) / m['width']):.3f},{c((y - m['y']) / m['height']):.3f}\")" > "$out/we_pointer.txt" 2>/dev/null || rm -f "$out/we_pointer.txt"
+# WE reads the cursor even outside its window (clamped to the window), but
+# through XWayland: the X pointer, which only moves while the cursor is over
+# an X window (xpointer.py). Record what WE sees, for --pointer.
+"$HARNESS_DIR/xpointer.py" "$title" > "$out/we_pointer.txt" 2>/dev/null || rm -f "$out/we_pointer.txt"
 # Seconds WE's scene clock has run when recording starts (it opens the
 # wallpaper fresh): Rustpaper renders from the same time so time-driven
 # animations (puppets, paths, pulses) are in phase.

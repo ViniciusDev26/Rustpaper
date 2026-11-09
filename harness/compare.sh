@@ -45,9 +45,13 @@ ffmpeg -loglevel error -y -i "$out/mean_we.png" -i "$out/mean_rp.png" -i "$out/m
 
 ssim() { ffmpeg -i "$1" -i "$2" -lavfi ssim -f null - 2>&1 | grep -o 'All:[0-9.]*' | cut -d: -f2; }
 # Motion energy: mean |frame - previous frame| over the clip (0..255 scale).
+# Pairs with exactly zero difference are skipped: WE presents fewer distinct
+# frames than the capture grabs, so ~1/3 of its 15 fps pairs are repeats
+# (Zero Two 1384678183: 37 of 119), which halved the energy of content that
+# changes every frame (film grain: ratio 1.47 -> 1.02 without them).
 energy() {
     ffmpeg -loglevel error -i "$1" -vf "$norm,fps=15,tblend=all_mode=difference,format=gray,signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=-" \
-        -f null - | awk -F= '/YAVG/ { s += $2; n++ } END { printf "%.4f", n ? s / n : 0 }'
+        -f null - | awk -F= '/YAVG/ && $2 > 0 { s += $2; n++ } END { printf "%.4f", n ? s / n : 0 }'
 }
 mean_ssim=$(ssim "$out/mean_we.png" "$out/mean_rp.png")
 motion_ssim=$(ssim "$out/motion_we.png" "$out/motion_rp.png")

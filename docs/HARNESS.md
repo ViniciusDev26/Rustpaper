@@ -107,6 +107,10 @@ aspect stretched to 16:9 made every non-16:9 scene look misaligned.)
 SSIM >= 0.95 AND the motion energy ratio (mean |frame - previous| of RP over
 WE) is within 0.7..1.4 — the scene looks the same and moves about as much.
 Motion SSIM is reported but not gated (random particles never line up).
+The energy skips frame pairs with exactly zero difference: WE presents fewer
+distinct frames than the capture grabs (~1/3 of its 15 fps pairs repeat),
+which halved WE's energy for content that changes every frame (Zero Two
+1384678183's film grain: ratio 1.47 -> 1.02 without them).
 
 Clocks: `we-capture.sh` stores the capture start in `we_start.txt`; the
 renders run with `RUSTPAPER_CLOCK=<that time>` so clock/date texts show the
@@ -119,20 +123,27 @@ time-driven animations in phase: starting at a fixed 10 s instead cost
 Painting the Sharks 2468489223 0.966 -> 0.945, wlop sky2 2900431360
 0.975 -> 0.928, Dome 3113287126 0.949 -> 0.897.
 
-Cursor: WE reads the real system cursor even when it is outside its window,
-clamped to the window (Anime Girl 3118949804 with the cursor left of the
-headless output and halfway down fits best at pointer (0, 0.5)).
-`we-capture.sh` records it in `we_pointer.txt` and renders use it as
-`--pointer`; older captures assume the center. Parallax, `depthparallax`,
-iris-following effects depend on it.
+Cursor: WE runs under Wine on XWayland and reads the **X pointer**, clamped
+to its window. That is not the live Wayland cursor: XWayland only learns the
+position while the cursor is over an X window and keeps the last one (X said
+2003,39 while Hyprland's cursor was at 3536,696), and X coordinates differ
+from Hyprland's layout (the WE window Hyprland put at 4480,0 is at 1920,0
+for X). `harness/xpointer.py` reads the X pointer and the window's X
+geometry; `we-capture.sh` stores the result in `we_pointer.txt` and renders
+use it as `--pointer` (older captures assume the center). Captures before
+2026-11-09 13:00 recorded Hyprland's cursor instead (42 of them the same
+`0.000,0.681`), which is why the parallax scenes kept failing; the corpus was
+recaptured. Moving the X pointer with XWarpPointer does NOT work: it changes
+what XQueryPointer reports (the user's cursor stays put), but two captures
+warped to (0.5, 0.5) and (0.1, 0.2) were identical, so WE ignores warps and
+the reading would no longer be what WE saw.
 
-Every one of the 11 corpus scenes with `cameraparallax` failed against
-captures without `we_pointer.txt`, and the best-fitting pointer differs per
-capture (平泽唯 3835761947: (0, 0) gives frame SSIM 0.94 vs 0.48 at the
-center; 3366882745: center 0.96 vs 0.85 at (0, 0)) — the cursor was wherever
-the user left it. Those failures are capture metadata, not renderer bugs, so
-`pending.sh` recaptures every failing scene that has no `we_pointer.txt`
-instead of fitting a pointer per scene.
+`calibration/run_parallax.sh` measures WE's camera parallax: the coordinate
+scene (`make_scene.py`) at `parallaxDepth 1` with camera parallax on,
+captured from the moment the window opens (`WE_WARMUP=0`) for several
+`cameraparallaxdelay` values; `measure_parallax.py` prints which scene point
+is at the screen center over time, for WE and for Rustpaper rendered with
+the pointer WE saw.
 
 For random particles the motion SSIM is a weak signal (positions never match);
 compare the zoomed motion maps and measure sizes/brightness of features.
