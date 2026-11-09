@@ -135,6 +135,20 @@ struct ParticleObject {
     prewarm: f32,
 }
 
+/// Scene-level bloom (`general.bloom`), LDR or HDR (`general.hdr`), drawn with
+/// WE's own post-processing shaders.
+struct Bloom {
+    hdr: bool,
+    /// material constants for the shaders' annotated params (bloomstrength...)
+    constants: HashMap<String, Value>,
+    /// LDR: [downsample_quarter, blur_v, blur_h, combine]
+    /// HDR: [downsample (BLOOM), downsample, upsample, combine]
+    keys: [String; 4],
+    iterations: u32,
+    chain: Vec<Target>,
+    output: Option<Target>,
+}
+
 pub struct SceneRenderer {
     assets: Assets,
     pub width: u32,
@@ -156,10 +170,12 @@ pub struct SceneRenderer {
 
     quad: QuadMesh,
     pmesh: ParticleMesh,
+    rope_mesh: ParticleMesh,
     pverts: Vec<f32>,
     blit: Program,
     scene: Target,
     fullframe: Target,
+    bloom: Option<Bloom>,
     composites: HashMap<i64, Target>,
     pool: HashMap<(u32, u32), Vec<Target>>,
 
@@ -184,6 +200,18 @@ impl SceneRenderer {
         wallpaper_dir: &Path,
         base_assets: &Path,
     ) -> Result<Self, String> {
+        Self::load_with_properties(gl, wallpaper_dir, base_assets, &serde_json::Map::new())
+    }
+
+    /// Like `load`, with user property values (name -> value) overriding the
+    /// defaults in project.json `general.properties` — what the selector's
+    /// customization panel produces.
+    pub fn load_with_properties(
+        gl: &glow::Context,
+        wallpaper_dir: &Path,
+        base_assets: &Path,
+        overrides: &serde_json::Map<String, Value>,
+    ) -> Result<Self, String> {
         let assets = Assets::open(wallpaper_dir, base_assets).map_err(|e| e.to_string())?;
         let project = assets.read_json("project.json").unwrap_or_default();
         let scene_file = project
@@ -194,12 +222,17 @@ impl SceneRenderer {
         let mut scene = assets
             .read_json(&scene_file)
             .ok_or_else(|| format!("{scene_file} not found or invalid"))?;
-        if let Some(props) = project
+        let mut props = project
             .pointer("/general/properties")
             .and_then(|p| p.as_object())
-        {
-            value::apply_user_properties(&mut scene, props);
+            .cloned()
+            .unwrap_or_default();
+        for (name, v) in overrides {
+            if let Some(Value::Object(p)) = props.get_mut(name) {
+                p.insert("value".into(), v.clone());
+            }
         }
+        value::apply_user_properties(&mut scene, &props);
 
         let general = scene.get("general").cloned().unwrap_or_default();
         let proj = general
@@ -209,6 +242,7 @@ impl SceneRenderer {
         let width = proj.get("width").and_then(|v| v.as_u64()).unwrap_or(1920) as u32;
         let height = proj.get("height").and_then(|v| v.as_u64()).unwrap_or(1080) as u32;
         let cc = value::get_vec3(&general, "clearcolor", [0.0, 0.0, 0.0]);
+        let hdr = value::get_bool(&general, "hdr", false);
 
         let blit_src = ShaderSource {
             vert: BLIT_VERT.into(),
@@ -233,11 +267,13 @@ impl SceneRenderer {
             textures: HashMap::new(),
             white: solid_texture(gl, [255, 255, 255, 255]),
             quad: QuadMesh::new(gl),
-            pmesh: ParticleMesh::new(gl),
+            pmesh: ParticleMesh::new(gl, crate::gpu::SPRITE_LAYOUT, particles::VERTEX_FLOATS),
+            rope_mesh: ParticleMesh::new(gl, crate::gpu::ROPE_LAYOUT, particles::ROPE_FLOATS),
             pverts: Vec::new(),
             blit,
-            scene: Target::new(gl, width, height),
-            fullframe: Target::new(gl, width, height),
+            scene: Target::with_format(gl, width, height, hdr),
+            bloom: None,
+            fullframe: Target::with_format(gl, width, height, hdr),
             composites: HashMap::new(),
             pool: HashMap::new(),
             warnings: Vec::new(),
@@ -279,6 +315,13 @@ impl SceneRenderer {
                 }
             } else if obj.get("text").is_some() {
                 r.warn("text objects are not rendered yet".into());
+            }
+        }
+
+        if value::get_bool(&general, "bloom", false) {
+            match r.setup_bloom(gl, &general, hdr) {
+                Ok(b) => r.bloom = Some(b),
+                Err(e) => r.warn(format!("bloom disabled: {e}")),
             }
         }
 
@@ -747,11 +790,227 @@ impl SceneRenderer {
                 self.draw_direct(gl, i, frame);
             }
         }
+        self.post_process(gl);
     }
 
     /// The finished frame (scene resolution).
     pub fn output(&self) -> &Target {
-        &self.scene
+        self.bloom
+            .as_ref()
+            .and_then(|b| b.output.as_ref())
+            .unwrap_or(&self.scene)
+    }
+
+    // ------------------------------------------------------------------ bloom
+
+    fn setup_bloom(
+        &mut self,
+        gl: &glow::Context,
+        general: &Value,
+        hdr: bool,
+    ) -> Result<Bloom, String> {
+        let pass = |r: &mut Self, shader: &str, combos: Value| -> Result<String, String> {
+            let j = serde_json::json!({ "shader": shader, "combos": combos });
+            Ok(r.resolve_pass(gl, &j, None, &[], &BTreeMap::new(), false)?
+                .program_key)
+        };
+        let tint = value::get_vec3(general, "bloomtint", [1.0; 3]);
+        let mut constants: HashMap<String, Value> = HashMap::new();
+        let num = |v: f32| serde_json::json!(v);
+        constants.insert(
+            "bloomtint".into(),
+            serde_json::json!(format!("{} {} {}", tint[0], tint[1], tint[2])),
+        );
+        let keys = if hdr {
+            let t = value::get_f32(general, "bloomhdrthreshold", 1.0);
+            let knee = (t * value::get_f32(general, "bloomhdrfeather", 0.1)).max(1e-4);
+            constants.insert(
+                "bloomstrength".into(),
+                num(value::get_f32(general, "bloomhdrstrength", 2.0)),
+            );
+            // soft-knee threshold: (threshold, threshold - knee, 2 knee, 0.25 / knee)
+            constants.insert(
+                "blend".into(),
+                serde_json::json!(format!("{} {} {} {}", t, t - knee, 2.0 * knee, 0.25 / knee)),
+            );
+            constants.insert(
+                "scatter".into(),
+                num(value::get_f32(general, "bloomhdrscatter", 1.619)),
+            );
+            [
+                pass(self, "hdr_downsample", serde_json::json!({ "BLOOM": 1 }))?,
+                pass(self, "hdr_downsample", serde_json::json!({}))?,
+                pass(self, "hdr_downsample", serde_json::json!({ "UPSAMPLE": 1 }))?,
+                pass(self, "combine_hdr", serde_json::json!({ "LINEAR": 1 }))?,
+            ]
+        } else {
+            constants.insert(
+                "bloomstrength".into(),
+                num(value::get_f32(general, "bloomstrength", 2.0)),
+            );
+            constants.insert(
+                "bloomthreshold".into(),
+                num(value::get_f32(general, "bloomthreshold", 0.65)),
+            );
+            [
+                pass(self, "downsample_quarter_bloom", serde_json::json!({}))?,
+                pass(self, "downsample_eighth_blur_v", serde_json::json!({}))?,
+                pass(self, "blur_h_bloom", serde_json::json!({}))?,
+                pass(self, "combine", serde_json::json!({}))?,
+            ]
+        };
+        Ok(Bloom {
+            hdr,
+            constants,
+            keys,
+            iterations: value::get_f32(general, "bloomhdriterations", 8.0).clamp(1.0, 12.0) as u32,
+            chain: Vec::new(),
+            output: None,
+        })
+    }
+
+    /// Fullscreen post pass: `inputs` bound to g_Texture0.., `vars` set by name.
+    #[allow(clippy::too_many_arguments)]
+    fn post_pass(
+        &mut self,
+        gl: &glow::Context,
+        key: &str,
+        target: Target,
+        inputs: &[Tex],
+        vars: &[(&str, [f32; 4])],
+        constants: &HashMap<String, Value>,
+        blend: Blend,
+    ) {
+        if self.program(gl, key).is_none() {
+            return;
+        }
+        let prog = self.programs[key].as_ref().expect("checked above");
+        target.bind(gl);
+        blend.apply(gl);
+        unsafe {
+            gl.use_program(Some(prog.id));
+            for (unit, tex) in inputs.iter().enumerate() {
+                gl.active_texture(glow::TEXTURE0 + unit as u32);
+                gl.bind_texture(glow::TEXTURE_2D, Some(tex.id));
+            }
+        }
+        for (unit, tex) in inputs.iter().enumerate() {
+            prog.set(gl, &format!("g_Texture{unit}"), &[unit as f32]);
+            prog.set(gl, &format!("g_Texture{unit}Resolution"), &tex.resolution());
+        }
+        set_params(gl, prog, constants);
+        for (name, v) in vars {
+            prog.set(gl, name, v);
+        }
+        self.quad.draw(gl, &CLIP_QUAD);
+    }
+
+    /// Runs the bloom chain over the finished scene.
+    fn post_process(&mut self, gl: &glow::Context) {
+        let Some(mut b) = self.bloom.take() else {
+            return;
+        };
+        let (w, h) = (self.width, self.height);
+        let texel = [1.0 / w as f32, 1.0 / h as f32, 0.0, 0.0];
+        let scene = self.scene.tex;
+        let out = *b.output.get_or_insert_with(|| Target::new(gl, w, h));
+        if b.hdr {
+            if b.chain.is_empty() {
+                let (mut cw, mut ch) = (w / 2, h / 2);
+                for _ in 0..b.iterations {
+                    if cw < 8 || ch < 8 {
+                        break;
+                    }
+                    b.chain.push(Target::with_format(gl, cw, ch, true));
+                    (cw, ch) = (cw / 2, ch / 2);
+                }
+            }
+            let offsets = |t: &Tex| {
+                let (tx, ty) = (1.0 / t.width as f32, 1.0 / t.height as f32);
+                [-tx, -ty, tx, ty]
+            };
+            let n = b.chain.len();
+            for i in 0..n {
+                let src = if i == 0 { scene } else { b.chain[i - 1].tex };
+                let key = if i == 0 { &b.keys[0] } else { &b.keys[1] };
+                b.chain[i].clear(gl, [0.0, 0.0, 0.0, 1.0]);
+                self.post_pass(
+                    gl,
+                    key,
+                    b.chain[i],
+                    &[src],
+                    &[("g_RenderVar0", offsets(&src))],
+                    &b.constants,
+                    Blend::Opaque,
+                );
+            }
+            for i in (0..n.saturating_sub(1)).rev() {
+                let src = b.chain[i + 1].tex;
+                self.post_pass(
+                    gl,
+                    &b.keys[2],
+                    b.chain[i],
+                    &[src],
+                    &[("g_RenderVar0", offsets(&src))],
+                    &b.constants,
+                    Blend::Add,
+                );
+            }
+            if let Some(first) = b.chain.first().map(|t| t.tex) {
+                let t = [
+                    1.0 / first.width as f32,
+                    1.0 / first.height as f32,
+                    0.0,
+                    0.0,
+                ];
+                self.post_pass(
+                    gl,
+                    &b.keys[3],
+                    out,
+                    &[scene, first],
+                    &[("g_TexelSize", t), ("g_RenderVar0", [1.0, 0.0, 0.0, 0.0])],
+                    &b.constants,
+                    Blend::Opaque,
+                );
+            }
+        } else {
+            if b.chain.is_empty() {
+                b.chain.push(Target::new(gl, w / 4, h / 4));
+                b.chain.push(Target::new(gl, w / 8, h / 8));
+                b.chain.push(Target::new(gl, w / 8, h / 8));
+            }
+            let (q, e1, e2) = (b.chain[0], b.chain[1], b.chain[2]);
+            let v = [("g_TexelSize", texel)];
+            self.post_pass(gl, &b.keys[0], q, &[scene], &v, &b.constants, Blend::Opaque);
+            self.post_pass(
+                gl,
+                &b.keys[1],
+                e1,
+                &[q.tex],
+                &v,
+                &b.constants,
+                Blend::Opaque,
+            );
+            self.post_pass(
+                gl,
+                &b.keys[2],
+                e2,
+                &[e1.tex],
+                &v,
+                &b.constants,
+                Blend::Opaque,
+            );
+            self.post_pass(
+                gl,
+                &b.keys[3],
+                out,
+                &[scene, e2.tex],
+                &v,
+                &b.constants,
+                Blend::Opaque,
+            );
+        }
+        self.bloom = Some(b);
     }
 
     fn keep_composite(&mut self, gl: &glow::Context, i: usize, t: Target) {
@@ -1190,19 +1449,23 @@ impl SceneRenderer {
         if let Some((_, _, _, Some(max))) = parent {
             def.max_count = max;
         }
-        if def.renderer == RendererKind::Rope {
-            self.warn("particles: rope renderer not supported yet".into());
-            return Ok(());
-        }
         let mat = self
             .assets
             .read_json(&def.material)
             .ok_or_else(|| format!("material {} not found", def.material))?;
-        let pass_json = mat
+        let mut pass_json = mat
             .get("passes")
             .and_then(|p| p.get(0))
             .cloned()
             .ok_or("particle material has no passes")?;
+        // Rope renderers draw with WE's rope shader, whatever the material says.
+        let rope = matches!(
+            def.renderer,
+            RendererKind::Rope | RendererKind::RopeTrail { .. }
+        );
+        if rope {
+            pass_json["shader"] = Value::from("genericropeparticle");
+        }
 
         // Sprite sheet: embedded in the .tex (Workshop sprites) or described by
         // a companion .tex-json (base assets).
@@ -1248,10 +1511,16 @@ impl SceneRenderer {
         let trail = matches!(def.renderer, RendererKind::Trail { .. });
         let render_var0 = match def.renderer {
             RendererKind::Trail { length, max, min } => [length, max, min, 0.0],
+            // rope: (segment count unscaled, -, segment uv time offset, count)
+            RendererKind::Rope | RendererKind::RopeTrail { .. } => {
+                let n = def.max_count as f32;
+                [n, 0.0, 1.0, n]
+            }
             _ => [0.0; 4],
         };
+        let sheet = sheet && !rope;
         let mut combos = BTreeMap::new();
-        if sheet || trail {
+        if (sheet || trail) && !rope {
             combos.insert("THICKFORMAT".to_string(), 1);
         }
         if trail {
@@ -1390,8 +1659,16 @@ impl SceneRenderer {
             let constants = sys.pass.constants.clone();
             let blend = sys.pass.blend;
             let (rv0, rv1) = (sys.render_var0, sys.render_var1);
+            let rope = matches!(
+                sys.sim.def.renderer,
+                RendererKind::Rope | RendererKind::RopeTrail { .. }
+            );
             let mut verts = std::mem::take(&mut self.pverts);
-            sys.sim.vertices(&mut verts);
+            if rope {
+                sys.sim.rope_vertices(&mut verts);
+            } else {
+                sys.sim.vertices(&mut verts);
+            }
 
             let mut bound = Vec::new();
             for (unit, src) in &slots {
@@ -1435,7 +1712,11 @@ impl SceneRenderer {
                 prog.set(gl, &format!("g_Texture{unit}Resolution"), &tex.resolution());
             }
             set_params(gl, prog, &constants);
-            self.pmesh.draw(gl, &verts);
+            if rope {
+                self.rope_mesh.draw(gl, &verts);
+            } else {
+                self.pmesh.draw(gl, &verts);
+            }
             self.pverts = verts;
         }
     }

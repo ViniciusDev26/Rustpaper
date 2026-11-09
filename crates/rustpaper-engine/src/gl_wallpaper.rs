@@ -43,7 +43,17 @@ use wayland_protocols::wp::viewporter::client::{
     wp_viewport::WpViewport, wp_viewporter::WpViewporter,
 };
 
-const FRAME_INTERVAL: Duration = Duration::from_millis(33);
+/// Runtime options of the live wallpaper (CLI flags of `rustpaper`).
+pub struct Options {
+    /// Frames per second (the scene animates in real time regardless).
+    pub fps: u32,
+    /// User property values (`general.properties` of project.json) chosen in
+    /// the selector, overriding the wallpaper defaults.
+    pub properties: serde_json::Map<String, serde_json::Value>,
+}
+
+/// How often (in frames) fullscreen state is re-read from the compositor.
+const MONITOR_POLL_FRAMES: u32 = 30;
 
 /// One output: its layer surface and the EGL window drawn into it.
 struct Screen {
@@ -54,6 +64,8 @@ struct Screen {
     surface: Option<Surface>,
     window: Option<WlEglSurface>,
     buffer_size: (u32, u32),
+    /// Output name ("DP-1"), to match compositor IPC data.
+    name: Option<String>,
 }
 
 struct GlWallpaper {
@@ -65,11 +77,17 @@ struct GlWallpaper {
     gl: GlContext,
     scene: SceneRenderer,
     screens: Vec<Screen>,
-    start: Instant,
     vsync_off: bool,
+    /// Animation clock: advances with real time except while every output is
+    /// covered by a fullscreen window (then the wallpaper is fully paused).
+    clock: f32,
+    last_tick: Instant,
+    frame: u32,
+    hypr: Vec<crate::hyprland::Monitor>,
+    pointer: [f32; 2],
 }
 
-pub fn run(dir: &Path) {
+pub fn run(dir: &Path, opts: Options) {
     let conn = Connection::connect_to_env().expect("failed to connect to Wayland");
     let (globals, event_queue) = registry_queue_init(&conn).expect("wayland registry");
     let qh = event_queue.handle();
@@ -91,10 +109,11 @@ pub fn run(dir: &Path) {
         eprintln!("error: WE base assets not found (set WE_ASSETS_DIR)");
         std::process::exit(1);
     });
-    let scene = SceneRenderer::load(&gl.gl, dir, &base).unwrap_or_else(|e| {
-        eprintln!("error: {}: {e}", dir.display());
-        std::process::exit(1);
-    });
+    let scene = SceneRenderer::load_with_properties(&gl.gl, dir, &base, &opts.properties)
+        .unwrap_or_else(|e| {
+            eprintln!("error: {}: {e}", dir.display());
+            std::process::exit(1);
+        });
     println!("scene {}x{}", scene.width, scene.height);
     for w in &scene.warnings {
         eprintln!("warning: {w}");
@@ -109,9 +128,14 @@ pub fn run(dir: &Path) {
         gl,
         scene,
         screens: Vec::new(),
-        start: Instant::now(),
         vsync_off: false,
+        clock: 0.0,
+        last_tick: Instant::now(),
+        frame: 0,
+        hypr: Vec::new(),
+        pointer: [0.5, 0.5],
     };
+    let interval = Duration::from_secs_f64(1.0 / opts.fps.clamp(1, 240) as f64);
 
     let mut event_loop: EventLoop<GlWallpaper> = EventLoop::try_new().expect("event loop");
     let handle = event_loop.handle();
@@ -119,9 +143,9 @@ pub fn run(dir: &Path) {
         .insert(handle.clone())
         .expect("insert WaylandSource");
     handle
-        .insert_source(Timer::from_duration(FRAME_INTERVAL), |_, _, state| {
+        .insert_source(Timer::from_duration(interval), move |_, _, state| {
             state.render_all();
-            TimeoutAction::ToDuration(FRAME_INTERVAL)
+            TimeoutAction::ToDuration(interval)
         })
         .expect("insert timer");
     event_loop
@@ -131,14 +155,30 @@ pub fn run(dir: &Path) {
 
 impl GlWallpaper {
     fn render_all(&mut self) {
-        let ready: Vec<(Surface, (u32, u32))> = self
+        // compositor state: who is covered by a fullscreen window
+        if self.frame.is_multiple_of(MONITOR_POLL_FRAMES) {
+            self.hypr = crate::hyprland::monitors().unwrap_or_default();
+        }
+        self.frame = self.frame.wrapping_add(1);
+        let covered = |name: &Option<String>| {
+            name.as_ref()
+                .and_then(|n| self.hypr.iter().find(|m| &m.name == n))
+                .is_some_and(|m| m.covered)
+        };
+        let ready: Vec<(Surface, (u32, u32), Option<String>)> = self
             .screens
             .iter()
-            .filter_map(|s| s.surface.map(|surf| (surf, s.buffer_size)))
+            .filter(|s| !covered(&s.name))
+            .filter_map(|s| s.surface.map(|surf| (surf, s.buffer_size, s.name.clone())))
             .collect();
-        let Some(&(first, _)) = ready.first() else {
-            return; // nothing configured yet
+
+        let now = Instant::now();
+        let dt = now.duration_since(self.last_tick).as_secs_f32().min(0.1);
+        self.last_tick = now;
+        let Some(&(first, _, _)) = ready.first() else {
+            return; // nothing visible: paused (the clock doesn't advance)
         };
+        self.clock += dt;
         if let Err(e) = self.gl.make_current(Some(first)) {
             eprintln!("warning: {e}");
             return;
@@ -148,13 +188,15 @@ impl GlWallpaper {
             self.vsync_off = true;
         }
 
+        self.update_pointer();
         let frame = FrameInput {
-            time: self.start.elapsed().as_secs_f32(),
+            time: self.clock,
+            pointer: self.pointer,
             ..Default::default()
         };
         self.scene.render(&self.gl.gl, frame);
 
-        for (surface, (w, h)) in ready {
+        for (surface, (w, h), _) in ready {
             if self.gl.make_current(Some(surface)).is_err() {
                 continue;
             }
@@ -163,6 +205,40 @@ impl GlWallpaper {
                 eprintln!("warning: {e}");
             }
         }
+    }
+
+    /// Cursor -> the output under it -> scene uv (through that output's cover
+    /// crop), (0,0) = top-left. Keeps the last value when the cursor is on an
+    /// output we don't draw to.
+    fn update_pointer(&mut self) {
+        let Some((gx, gy)) = crate::hyprland::cursor() else {
+            return;
+        };
+        let Some(m) = self.hypr.iter().find(|m| {
+            let (x, y, w, h) = m.rect;
+            gx >= x && gx < x + w && gy >= y && gy < y + h
+        }) else {
+            return;
+        };
+        let Some(screen) = self
+            .screens
+            .iter()
+            .find(|s| s.name.as_deref() == Some(&m.name))
+        else {
+            return;
+        };
+        let (x, y, w, h) = m.rect;
+        let (u, v) = (((gx - x) / w) as f32, ((gy - y) / h) as f32);
+        let (sw, sh) = (self.scene.width, self.scene.height);
+        let (bw, bh) = screen.buffer_size;
+        if bw == 0 || bh == 0 {
+            return;
+        }
+        let (x0, y0, x1, y1) = rustpaper_gl::gpu::cover_rect(sw, sh, bw, bh);
+        self.pointer = [
+            (x0 as f32 + u * (x1 - x0) as f32) / sw as f32,
+            (y0 as f32 + v * (y1 - y0) as f32) / sh as f32,
+        ];
     }
 
     /// Buffer size for an output: its physical mode when we can show it through
@@ -218,6 +294,7 @@ impl OutputHandler for GlWallpaper {
             surface: None,
             window: None,
             buffer_size: (0, 0),
+            name: None,
         });
     }
 
@@ -282,6 +359,7 @@ impl LayerShellHandler for GlWallpaper {
             }
         }
         screen.buffer_size = (bw, bh);
+        screen.name = self.output_state.info(&screen.output).and_then(|i| i.name);
         println!("output {idx}: {lw}x{lh} logical, buffer {bw}x{bh}");
     }
 }

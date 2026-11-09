@@ -3,6 +3,7 @@
 pub mod compositor;
 pub mod gl_wallpaper;
 pub mod gpu;
+pub mod hyprland;
 pub mod particles;
 pub mod postprocess;
 pub mod program;

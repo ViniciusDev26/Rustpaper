@@ -39,7 +39,21 @@ ffmpeg -loglevel error -y -i "$out/mean_we.png" -i "$out/mean_rp.png" -i "$out/m
 [a][b][c]hstack=3[top];[d][e][f]hstack=3[bot];[top][bot]vstack" -frames:v 1 "$out/sheet.png"
 
 ssim() { ffmpeg -i "$1" -i "$2" -lavfi ssim -f null - 2>&1 | grep -o 'All:[0-9.]*' | cut -d: -f2; }
+# Motion energy: mean |frame - previous frame| over the clip (0..255 scale).
+energy() {
+    ffmpeg -loglevel error -i "$1" -vf "$norm,fps=15,tblend=all_mode=difference,format=gray,signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=-" \
+        -f null - | awk -F= '/YAVG/ { s += $2; n++ } END { printf "%.4f", n ? s / n : 0 }'
+}
+mean_ssim=$(ssim "$out/mean_we.png" "$out/mean_rp.png")
+motion_ssim=$(ssim "$out/motion_we.png" "$out/motion_rp.png")
+e_we=$(energy "$we"); e_rp=$(energy "$rp")
+ratio=$(awk -v a="$e_rp" -v b="$e_we" 'BEGIN { if (b < 0.02 && a < 0.02) print "1.000"; else if (b == 0) print "inf"; else printf "%.3f", a / b }')
+# Pass: fidelity (mean SSIM) >= 0.95 and comparable animation (energy ratio 0.7..1.4).
+verdict=$(awk -v m="$mean_ssim" -v r="$ratio" 'BEGIN { print (m >= 0.95 && r != "inf" && r >= 0.7 && r <= 1.4) ? "PASS" : "FAIL" }')
 {
-    echo "mean   SSIM (1 = identical): $(ssim "$out/mean_we.png" "$out/mean_rp.png")"
-    echo "motion SSIM (1 = identical): $(ssim "$out/motion_we.png" "$out/motion_rp.png")"
+    echo "mean   SSIM (1 = identical): $mean_ssim"
+    echo "motion SSIM (1 = identical): $motion_ssim"
+    echo "motion energy: rp=$e_rp we=$e_we ratio=$ratio"
+    echo "fidelity: $verdict"
 } | tee "$out/summary.txt"
+printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$mean_ssim" "$motion_ssim" "$e_rp" "$e_we" "$ratio" "$verdict" > "$out/metrics.tsv"

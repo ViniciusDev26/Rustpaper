@@ -55,3 +55,30 @@ pub fn workshop_dir() -> Option<PathBuf> {
         &format!("steamapps/workshop/content/{WE_APP_ID}"),
     )
 }
+
+/// Folder of the downloaded test corpus (harness/download-testset.sh):
+/// `$RUSTPAPER_TESTSET_DIR` or ~/.local/share/rustpaper-testset.
+pub fn testset_dir() -> Option<PathBuf> {
+    let root = std::env::var_os("RUSTPAPER_TESTSET_DIR")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(|h| PathBuf::from(h).join(".local/share/rustpaper-testset"))
+        })?;
+    let p = root.join(format!("steamapps/workshop/content/{WE_APP_ID}"));
+    p.is_dir().then_some(p)
+}
+
+/// Every folder that holds wallpapers (`<id>/project.json`): the Steam Workshop
+/// folder and the test corpus, in that order.
+pub fn wallpaper_dirs() -> Vec<PathBuf> {
+    workshop_dir().into_iter().chain(testset_dir()).collect()
+}
+
+/// Resolves a Workshop id to its folder, searching `wallpaper_dirs()`.
+pub fn find_wallpaper(id: &str) -> Option<PathBuf> {
+    wallpaper_dirs()
+        .into_iter()
+        .map(|d| d.join(id))
+        .find(|d| d.join("project.json").is_file())
+}
