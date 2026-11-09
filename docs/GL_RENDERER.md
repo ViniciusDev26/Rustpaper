@@ -268,8 +268,7 @@ alpha, color, brightness, origin, angles and scale every frame (blinking
 crossing lights, flashes in Summer Feeling 2477602742). Effect constants
 with a timeline (`constantshadervalues` entries carrying `animation`) are
 kept whole and evaluated every frame (13 scenes use them; こきん 3146507587
-0.915 -> 0.928). Particle objects with timelines (1 scene) are not animated
-yet.
+0.915 -> 0.928). Particle objects animate origin / angles / scale timelines the same way.
 
 ## Bloom
 
@@ -325,8 +324,7 @@ customization panel (`docs/SELECTOR.md`).
 - **Not supported by design:** SceneScript (JavaScript) and `web` wallpapers —
   executing Workshop code is a security risk. Properties driven only by a
   script keep their static value.
-- Scene lights (`LIGHTING=1` materials use ambient only); timelines on
-  particle objects.
+- Scene lights (`LIGHTING=1` materials use ambient only).
 - Particles: `remapvalue` only for `output: velocity` + `operation: remap`
   (unverified: no captured scene shows its rain); other outputs are reported
   as unsupported. `mapsequencearoundcontrolpoint` (N even directions,

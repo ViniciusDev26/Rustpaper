@@ -147,6 +147,8 @@ struct ParticleObject {
     /// parent transforms * own transform (objects can be parented).
     world: Mat4,
     parallax: [f32; 2],
+    /// Timeline animations of origin / angles / scale.
+    anim: Option<LayerAnim>,
     systems: Vec<SystemRt>,
     /// Seconds simulated before t = 0 (`starttime`, so it starts "warm").
     prewarm: f32,
@@ -969,6 +971,12 @@ impl SceneRenderer {
             if let Some((rt, mesh)) = &mut l.puppet {
                 rt.update(frame.time);
                 mesh.upload(gl, &rt.vertices);
+            }
+        }
+        for o in &mut self.particle_objs {
+            if let Some(a) = &o.anim {
+                let (mut c, mut al, mut b) = ([1.0; 3], 1.0, 1.0);
+                a.apply(frame.time, &mut o.world, &mut c, &mut al, &mut b);
             }
         }
         // layers hanging from a puppet's attachment follow its current pose
@@ -1877,6 +1885,7 @@ impl SceneRenderer {
                 .to_string(),
             visible: object_visible(obj),
             world: self.world_of(obj),
+            anim: LayerAnim::parse(obj, self.world_of(obj)),
             systems,
             prewarm: prewarm.min(60.0),
         })
