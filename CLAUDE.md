@@ -45,7 +45,8 @@ comments, with the measurement that justified it.
   Scenes go through rustpaper-gl (`gl_wallpaper.rs`, one EGL surface per
   output, layer `Bottom`); videos use the older wgpu path (`wallpaper.rs`,
   `gpu.rs`, `video.rs`). `hyprland.rs` (fullscreen pause, cursor),
-  `audio_capture.rs` (PipeWire). `RUSTPAPER_LEGACY_SCENE=1` = old wgpu scenes.
+  `audio_capture.rs` (PipeWire), `sound.rs` (plays scene `sound` objects
+  with ffplay; `--mute`). `RUSTPAPER_LEGACY_SCENE=1` = old wgpu scenes.
 - **`rustpaper-selector`** — Tauri v2 app, binary **`rustpaper-selector`**;
   static UI in `ui/` (`index.html`, `properties.js`).
 
@@ -54,7 +55,7 @@ comments, with the measurement that justified it.
 ```sh
 cargo build --release                       # toolchain pinned by mise.toml
 ./target/release/rustpaper-selector         # gallery; applies via the engine
-./target/release/rustpaper <wallpaper dir> [--props file.json] [--fps N] [--no-audio]
+./target/release/rustpaper <wallpaper dir> [--props file.json] [--fps N] [--no-audio] [--mute]
 ./target/release/rustpaper-render <workshop id> --describe
 ./scripts/install.sh                        # ~/.local/bin + launcher entry
 ```
@@ -67,7 +68,7 @@ cargo build --release                       # toolchain pinned by mise.toml
 - Only one engine at a time (two on the same layer flicker); the selector
   hands over automatically. Disable other wallpaper daemons
   (`linux-wallpaperengine`, the shell's own background on `Background`).
-- Runtime deps: ffmpeg (video), `pw-record` (audio, optional), Hyprland IPC
+- Runtime deps: ffmpeg (video; ffplay for scene sounds), `pw-record` (audio, optional), Hyprland IPC
   for fullscreen pause/cursor (optional; other compositors just don't pause).
 
 ## WE formats (accumulated knowledge)

@@ -202,6 +202,20 @@ fn main() -> ExitCode {
         for l in scene.describe() {
             println!("  {l}");
         }
+        for s in &scene.sounds {
+            println!(
+                "  sound {:?}: {} file(s), {}, volume {:.2}{}",
+                s.name,
+                s.files.len(),
+                s.mode,
+                s.volume,
+                if s.start_silent {
+                    ", starts silent"
+                } else {
+                    ""
+                }
+            );
+        }
     }
 
     if let Some(ids) = &args.only {

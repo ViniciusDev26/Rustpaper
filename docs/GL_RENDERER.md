@@ -254,6 +254,17 @@ drawn by a synthetic image layer (so effects and blend modes apply).
   `we_audio.wav`, recorded during the WE capture); without it, silence.
 - `--no-audio` disables capture.
 
+## Scene sounds (`SceneSound`, `rustpaper-engine/src/sound.rs`)
+
+`sound` objects (`sound: [files]`, `playbackmode` loop / single / random with
+a `mintime`..`maxtime` pause, `volume` after user properties, `startsilent`,
+`visible`) are collected at load (`--describe` lists them) and played by the
+live engine with `ffplay` through the default output, paused with the
+wallpaper. WE plays them too, and its audio-reactive layers react to that
+music: CITRUS 2719898311's audio ring only moves with its own track
+(energy ratio 0.18 silent, 1.42 with the track). The harness records the
+audio WE played (`we_audio.wav`), so offline renders get it from there.
+
 ## Puppet warp (`puppet.rs`, `rustpaper_core::mdl`)
 
 `models/*_puppet.mdl` (MDLV/MDLS/MDLA, layout documented in `mdl.rs`) gives a

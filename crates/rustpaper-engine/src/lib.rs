@@ -9,5 +9,6 @@ pub mod particles;
 pub mod postprocess;
 pub mod program;
 pub mod shader_compile;
+pub mod sound;
 pub mod video;
 pub mod wallpaper;
