@@ -111,9 +111,12 @@ time-driven animations in phase: starting at a fixed 10 s instead cost
 Painting the Sharks 2468489223 0.966 -> 0.945, wlop sky2 2900431360
 0.975 -> 0.928, Dome 3113287126 0.949 -> 0.897.
 
-Parallax: WE's window never sees the cursor during a capture; scenes with
-`cameraparallax` behave as if the pointer sat near the bottom edge (see
-GL_RENDERER.md, Known gaps).
+Cursor: WE reads the real system cursor even when it is outside its window,
+clamped to the window (Anime Girl 3118949804 with the cursor left of the
+headless output and halfway down fits best at pointer (0, 0.5)).
+`we-capture.sh` records it in `we_pointer.txt` and renders use it as
+`--pointer`; older captures assume the center. Parallax, `depthparallax`,
+iris-following effects depend on it.
 
 For random particles the motion SSIM is a weak signal (positions never match);
 compare the zoomed motion maps and measure sizes/brightness of features.

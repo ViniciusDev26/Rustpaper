@@ -1606,7 +1606,13 @@ impl SceneRenderer {
         prog.set(gl, "g_Frametime", &[1.0 / 30.0]);
         prog.set(gl, "g_PointerPosition", &f.pointer);
         prog.set(gl, "g_PointerPositionLast", &f.pointer);
-        prog.set(gl, "g_ParallaxPosition", &[0.5, 0.5]);
+        // the (smoothed) cursor, like g_PointerPosition: depthparallax and
+        // similar effects shift layers with it
+        let par = self
+            .parallax
+            .as_ref()
+            .map_or(f.pointer, |p| [p.offset[0] + 0.5, p.offset[1] + 0.5]);
+        prog.set(gl, "g_ParallaxPosition", &par);
         prog.set(gl, "g_TexelSize", &[1.0 / tw, 1.0 / th]);
         prog.set(gl, "g_TexelSizeHalf", &[0.5 / tw, 0.5 / th]);
         prog.set(gl, "g_Screen", &[sw, sh, sw / sh]);
