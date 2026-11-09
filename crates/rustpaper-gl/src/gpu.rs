@@ -8,16 +8,32 @@ pub struct Tex {
     pub id: glow::Texture,
     pub width: u32,
     pub height: u32,
+    /// Size of the real image inside (smaller than width/height only for
+    /// textures uploaded WITH their power-of-two padding).
+    pub content_width: u32,
+    pub content_height: u32,
     /// WE format id of the source .tex (see DecodedTexture::format).
     pub format: u32,
 }
 
 impl Tex {
-    /// Value for `g_TextureNResolution`: (texture w, h, content w, h). We crop
-    /// the power-of-two padding on upload, so both pairs are equal.
+    /// Value for `g_TextureNResolution`: (texture w, h, content w, h). Most
+    /// textures are uploaded cropped, so both pairs are equal.
     pub fn resolution(&self) -> [f32; 4] {
-        let (w, h) = (self.width as f32, self.height as f32);
-        [w, h, w, h]
+        [
+            self.width as f32,
+            self.height as f32,
+            self.content_width as f32,
+            self.content_height as f32,
+        ]
+    }
+
+    /// Share of the texture the real image covers: (content / size).
+    pub fn content_uv(&self) -> [f32; 2] {
+        [
+            self.content_width as f32 / self.width.max(1) as f32,
+            self.content_height as f32 / self.height.max(1) as f32,
+        ]
     }
 }
 
@@ -26,7 +42,22 @@ impl Tex {
 /// Textures are LINEAR (not sRGB): WE does all its math and blending on the raw
 /// 8-bit values, so treating them as sRGB changes how every blend looks.
 pub fn upload_texture(gl: &glow::Context, tex: &rustpaper_core::tex::DecodedTexture) -> Tex {
-    let (w, h) = (tex.real_width.max(1), tex.real_height.max(1));
+    upload(gl, tex, false)
+}
+
+/// Same, keeping the power-of-two padding (WE's own layout: an image layer's
+/// material pass samples its textures at UV 0..content/size, see scene.rs).
+pub fn upload_texture_padded(gl: &glow::Context, tex: &rustpaper_core::tex::DecodedTexture) -> Tex {
+    upload(gl, tex, true)
+}
+
+fn upload(gl: &glow::Context, tex: &rustpaper_core::tex::DecodedTexture, padded: bool) -> Tex {
+    let (cw, ch) = (tex.real_width.max(1), tex.real_height.max(1));
+    let (w, h) = if padded {
+        (tex.width.max(cw), tex.height.max(ch))
+    } else {
+        (cw, ch)
+    };
     let mut content = vec![0u8; (w * h * 4) as usize];
     for y in 0..h.min(tex.height) {
         let src = (y * tex.width * 4) as usize;
@@ -98,6 +129,8 @@ pub fn upload_texture(gl: &glow::Context, tex: &rustpaper_core::tex::DecodedText
             id,
             width: w,
             height: h,
+            content_width: cw.min(w),
+            content_height: ch.min(h),
             format: tex.format,
         }
     }
@@ -132,6 +165,8 @@ pub fn empty_texture(gl: &glow::Context, w: u32, h: u32) -> Tex {
             id,
             width: w,
             height: h,
+            content_width: w,
+            content_height: h,
             format: 0,
         }
     }
@@ -186,6 +221,8 @@ pub fn solid_texture(gl: &glow::Context, rgba: [u8; 4]) -> Tex {
             id,
             width: 1,
             height: 1,
+            content_width: 1,
+            content_height: 1,
             format: 0,
         }
     }
@@ -248,6 +285,8 @@ impl Target {
                     id,
                     width: w,
                     height: h,
+                    content_width: w,
+                    content_height: h,
                     format: 0,
                 },
             }

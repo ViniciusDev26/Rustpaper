@@ -55,6 +55,24 @@ If the runtime fills uniforms/textures/combos like WE, every effect works.
 
 ## WE behaviours we had to match (each one broke ALL effects when wrong)
 
+- **Texture padding.** .tex images are stored padded to a power of two. WE
+  keeps the padding and an image layer's quad gets UVs 0..content/size of
+  texture 0, so the material pass samples every other texture over the same
+  share of ITS padded size. Flow-map wallpapers depend on it: Water effect 13
+  820654165 (a 800x600 flow mask in 1024x1024) 0.856 -> 0.993, nebula
+  833227004 0.924 -> 0.985. Rustpaper uploads textures cropped (effects and
+  particles rescale their UVs with `g_TextureNResolution`, which is
+  equivalent) and, for plain image layers (no puppet, no flipbook), binds
+  padded copies in the material pass with scaled quad UVs.
+- **Object brightness** overrides the material's `Brightness` constant only
+  when the object sets `brightness` (Water effect 13: "Bright": 0.86 in the
+  material, none on the object).
+- **Effect command passes and persistent FBOs.** `"command": "copy"` passes
+  blit one FBO into another, and FBOs marked `"unique": true` keep their
+  content across frames (motion blur accumulates into one). A cold render
+  (first frame, or a jump in time) of a scene that has them first runs 1 s
+  of frames, so the accumulator does not start black.
+
 - **Coordinates.** Scene space is Y-up. Every render target keeps the TOP of
   the image in row 0 (like a texture from disk), so uv (0,0) = top-left
   everywhere. Projections map "top" to clip y = -1. See `math.rs`.
@@ -108,7 +126,13 @@ quad, the trail (`TRAILRENDERER`) or the sprite-sheet frame (`SPRITESHEET`,
   oscillate alpha/size/position, turbulence, controlpointattract, vortex,
   angularmovement; renderers `sprite`, `spritetrail`; child systems
   (`eventfollow`, `eventspawn`, `eventdeath`); `starttime` prewarm;
-  `instanceoverride` multipliers. Sprite sheets come from the `TEXS` block
+  `instanceoverride` multipliers, also applied to child systems (count
+  included), except the color: `colorn` / `color` REPLACE the initializer's
+  color (wind v7 2884352976 draws orange `Light shafts` lavender; rain
+  1444077782's gray smoke is white). Children without the override broke
+  Elden Ring 3276312017 (a full-size ember glow band: 0.979 -> 0.992,
+  energy ratio 1.66 -> 1.03) and Early Morning Forest 1959836574 (leaves
+  at count 0.5 with full-count children: energy 1.48 -> 1.34). Sprite sheets come from the `TEXS` block
   inside the .tex (Workshop) or the `.tex-json` (base assets).
 - Deterministic: seeded RNG + fixed 1/60 s steps; going back in time replays.
 - Calibrated against WE with the harness (each choice is commented in code):
@@ -174,13 +198,13 @@ coordinates). `view_proj()` is therefore the plain scene ortho. Earlier
 misalignments blamed on the camera were the harness stretching non-16:9
 scenes; `--screen WxH` renders through the same cover crop as a monitor.
 
-`general.camerashake` (amplitude, speed, roughness) moves the camera along a
-smooth random path of about `amplitude x 1.2%` of the width, without zoom
-(Kirito x Asuna 3463520581, amplitude 0.5, fits best unzoomed). Fitted on
-the captures of Ice Princess 2800248288/2802243144 (motion energy ratio
-0.25 -> 1.2, mean SSIM 0.54 -> 0.68); not yet calibrated on a dedicated
-scene. Ice Princess still fits best 2% zoomed in, cause unknown (it also
-has camera parallax on).
+`general.camerashake` (amplitude, speed, roughness) moves the camera without
+zoom (Kirito x Asuna 3463520581, amplitude 0.5, fits best unzoomed). WE's
+path, tracked as the whole-image shift of Ice Princess 2800248288 over 8 s
+(amplitude 0.35, speed 1): near-sinusoids of +-4.1 px in x (period ~6 s)
+and +-4.4 px in y (~4.8 s) on a 1920 screen, i.e. `0.0064 x amplitude` of the
+width; the previous `1.2%` path was twice too large (energy ratio 1.30,
+mean SSIM 0.79 -> 0.81). Roughness adds a faster component (not measured).
 
 `general.zoom` zooms the camera around the scene center (CITRUS 2704773569,
 zoom 1.1: mean SSIM 0.43 -> 0.98).
@@ -354,13 +378,16 @@ customization panel (`docs/SELECTOR.md`).
 - `g_ParallaxPosition` follows the (smoothed) cursor like the camera
   parallax (it was fixed at the center): `depthparallax` effects shift layers
   with it.
-- Camera parallax is implemented (`Parallax` in scene.rs): cursor offset
-  from the center x `amount` x `mouseinfluence` x `parallaxDepth` x scene
-  size, content moving away from the cursor. Only one data point so far: in
-  the harness WE's window never sees the cursor, and Saki Ayase 2617953025
-  (depth `0 1`) matches WE with `--pointer 0.5,0.9` (mean SSIM 0.63 ->
-  0.94), i.e. WE assumes the pointer near the bottom edge there. Calibrating
-  the magnitude needs a capture with a known cursor position.
+- Camera parallax (`Parallax` in scene.rs): cursor offset from the center x
+  `amount` x `mouseinfluence` x `parallaxDepth` x scene size, content moving
+  away from the cursor, following it exponentially with `delay` as the time
+  constant. WE reads the cursor through XWayland: the last position the
+  cursor had over an X window, in X coordinates (harness/xpointer.py records
+  it; the harness's earlier hyprctl reading was wrong). XWarpPointer changes
+  that reading but not what WE sees. The follow model is NOT settled: a
+  per-frame `1 - delay` lerp fit 3366882745 (delay 1.0: 0.79 -> 0.90) but
+  broke Ice Princess 2800248288 (delay 1.1: 0.81 -> 0.66).
+  `harness/calibration/run_parallax.sh` measures it.
 - Video wallpapers still use the older wgpu path in `rustpaper-engine`.
 - Shaders the fixer cannot repair are skipped (the image passes through) and
   listed by `--describe`.

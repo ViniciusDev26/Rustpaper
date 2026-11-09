@@ -81,7 +81,12 @@ struct EffectPass {
 struct Effect {
     file: String,
     passes: Vec<EffectPass>,
-    fbos: Vec<(String, f32)>, // (name, downscale factor)
+    /// `"command": "copy"` passes: (run before material pass n, source,
+    /// target); n == passes.len() runs after the last one.
+    copies: Vec<(usize, String, String)>,
+    /// (name, downscale factor, unique). A `unique` FBO keeps its content
+    /// from one frame to the next (motion blur's accumulator).
+    fbos: Vec<(String, f32, bool)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -106,6 +111,10 @@ struct Layer {
     color: [f32; 3],
     alpha: f32,
     brightness: f32,
+    /// The object sets `brightness` itself: only then does it override the
+    /// material's own Brightness constant (Water effect 13 820654165 has
+    /// "Bright": 0.86 in the material and no object brightness).
+    own_brightness: bool,
     /// Keyframed properties (timeline animations), applied every frame.
     anim: Option<LayerAnim>,
     /// Animated image (GIF scenes, `spritesheet` combo): frames over images.
@@ -208,6 +217,8 @@ pub struct SceneRenderer {
     combos_by_key: HashMap<String, (String, BTreeMap<String, i64>)>,
     programs: HashMap<String, Option<Program>>,
     textures: HashMap<String, Tex>,
+    /// Padded uploads for image material passes (None: no padding).
+    padded_textures: HashMap<String, Option<Tex>>,
     white: Tex,
 
     quad: QuadMesh,
@@ -220,6 +231,10 @@ pub struct SceneRenderer {
     bloom: Option<Bloom>,
     composites: HashMap<i64, Target>,
     pool: HashMap<(u32, u32), Vec<Target>>,
+    /// `unique` effect FBOs, kept across frames: (layer, effect, name).
+    unique_fbos: HashMap<(usize, usize, String), Target>,
+    /// Scene time of the last render (None before the first one).
+    last_render: Option<f32>,
 
     /// Every object's world matrix by id (parent chains resolved).
     worlds: HashMap<i64, Mat4>,
@@ -345,6 +360,7 @@ impl SceneRenderer {
             combos_by_key: HashMap::new(),
             programs: HashMap::new(),
             textures: HashMap::new(),
+            padded_textures: HashMap::new(),
             white: solid_texture(gl, [255, 255, 255, 255]),
             quad: QuadMesh::new(gl),
             pmesh: ParticleMesh::new(gl, crate::gpu::SPRITE_LAYOUT, particles::VERTEX_FLOATS),
@@ -356,6 +372,8 @@ impl SceneRenderer {
             fullframe: Target::with_format(gl, width, height, hdr),
             composites: HashMap::new(),
             pool: HashMap::new(),
+            unique_fbos: HashMap::new(),
+            last_render: None,
             warnings: Vec::new(),
             pixelated: false,
             worlds: HashMap::new(),
@@ -623,6 +641,8 @@ impl SceneRenderer {
             color: value::get_vec3(obj, "color", [1.0; 3]),
             alpha: value::get_f32(obj, "alpha", 1.0),
             brightness: value::get_f32(obj, "brightness", 1.0),
+            own_brightness: obj.get("brightness").is_some()
+                || obj.pointer("/brightness/animation").is_some(),
             anim: LayerAnim::parse(obj, self.world_of(obj)),
             flipbook,
             attach: obj
@@ -649,6 +669,7 @@ impl SceneRenderer {
             .cloned()
             .unwrap_or_default();
         let mut passes = Vec::new();
+        let mut copies = Vec::new();
         for (i, p) in def
             .get("passes")
             .and_then(|p| p.as_array())
@@ -657,7 +678,16 @@ impl SceneRenderer {
             .enumerate()
         {
             let Some(mat_path) = p.get("material").and_then(|m| m.as_str()) else {
-                continue; // e.g. "command" passes (copy/swap) — not supported yet
+                let field = |k: &str| p.get(k).and_then(|v| v.as_str()).map(String::from);
+                match (
+                    field("command").as_deref(),
+                    field("source"),
+                    field("target"),
+                ) {
+                    (Some("copy"), Some(src), Some(dst)) => copies.push((passes.len(), src, dst)),
+                    _ => self.warn(format!("{file}: effect pass {i} has no material")),
+                }
+                continue;
             };
             let mat = self
                 .assets
@@ -704,12 +734,14 @@ impl SceneRenderer {
                         .and_then(|s| s.as_f64())
                         .unwrap_or(1.0)
                         .max(1.0) as f32,
+                    f.get("unique").and_then(|u| u.as_bool()).unwrap_or(false),
                 ))
             })
             .collect();
         Ok(Effect {
             file: file.to_string(),
             passes,
+            copies,
             fbos,
         })
     }
@@ -949,6 +981,33 @@ impl SceneRenderer {
 
     /// Renders one frame into the internal scene target.
     pub fn render(&mut self, gl: &glow::Context, frame: FrameInput) {
+        // Effects with `unique` FBOs (motion blur) accumulate over frames: a
+        // render that starts cold, or jumps in time, first runs 1 s of frames
+        // so it doesn't begin from a black accumulator (WE has been running
+        // for a while when the harness captures it).
+        let has_unique = self
+            .layers
+            .iter()
+            .any(|l| l.effects.iter().any(|e| e.fbos.iter().any(|f| f.2)));
+        let jumped = self
+            .last_render
+            .is_none_or(|t| frame.time < t || frame.time - t > 0.5);
+        if has_unique && jumped {
+            for k in (1..=30).rev() {
+                self.render_frame(
+                    gl,
+                    FrameInput {
+                        time: frame.time - k as f32 / 30.0,
+                        ..frame
+                    },
+                );
+            }
+        }
+        self.last_render = Some(frame.time);
+        self.render_frame(gl, frame);
+    }
+
+    fn render_frame(&mut self, gl: &glow::Context, frame: FrameInput) {
         unsafe {
             gl.disable(glow::DEPTH_TEST);
             gl.disable(glow::CULL_FACE);
@@ -1057,20 +1116,19 @@ impl SceneRenderer {
         let (w, h) = (self.width as f32, self.height as f32);
         let mut ortho = math::scene_ortho(w, h);
         if let Some((amp, speed, rough)) = self.shake {
-            // Smooth wandering offset: sum of incommensurate sines, more of
-            // the faster ones with roughness. Magnitude measured on Ice
-            // Princess 2800248288 (amplitude 0.35 -> ~0.4% of the width).
-            // Not calibrated on a dedicated capture yet.
+            // Smooth wandering offset. Measured on Ice Princess 2800248288
+            // (amplitude 0.35, speed 1) by tracking WE's whole-image shift
+            // over 8 s: near-sinusoids of +-4.1 px (x, period ~6 s) and
+            // +-4.4 px (y, ~4.8 s) on a 1920 screen = 0.0064 * amplitude of
+            // the width. Roughness adds a faster component (not measured).
             let t = self.time * speed;
-            let n = |a: f32, b: f32| {
-                ((t * 0.71 + a).sin()
-                    + (t * 1.13 + b).sin() * 0.6
-                    + (t * 2.9 + a + b).sin() * 0.4 * rough)
-                    / (1.6 + 0.4 * rough)
+            let n = |f: f32, a: f32| {
+                ((t * f + a).sin() + (t * f * 2.7 + a * 1.9).sin() * 0.4 * rough)
+                    / (1.0 + 0.4 * rough)
             };
-            let k = amp * 0.012;
+            let k = amp * 0.0064;
             let shake = math::model(
-                [n(0.3, 1.7) * k * w, n(2.1, 0.4) * k * w, 0.0],
+                [n(1.05, 0.3) * k * w, n(1.31, 2.1) * k * w, 0.0],
                 0.0,
                 [1.0; 3],
             );
@@ -1424,11 +1482,41 @@ impl SceneRenderer {
         let mut other = self.take(gl, fw, fh);
         for e in 0..self.layers[i].effects.len() {
             let mut named: HashMap<String, Target> = HashMap::new();
-            for (name, scale) in self.layers[i].effects[e].fbos.clone() {
+            for (name, scale, unique) in self.layers[i].effects[e].fbos.clone() {
                 let (w, h) = ((fw as f32 / scale) as u32, (fh as f32 / scale) as u32);
-                named.insert(name, self.take(gl, w.max(1), h.max(1)));
+                let t = if unique {
+                    let key = (i, e, name.clone());
+                    match self.unique_fbos.get(&key) {
+                        Some(t) => *t,
+                        None => {
+                            let t = Target::new(gl, w.max(1), h.max(1));
+                            t.clear(gl, [0.0; 4]);
+                            self.unique_fbos.insert(key, t);
+                            t
+                        }
+                    }
+                } else {
+                    self.take(gl, w.max(1), h.max(1))
+                };
+                named.insert(name, t);
             }
-            for p in 0..self.layers[i].effects[e].passes.len() {
+            let n_passes = self.layers[i].effects[e].passes.len();
+            for p in 0..=n_passes {
+                let copies: Vec<(String, String)> = self.layers[i].effects[e]
+                    .copies
+                    .iter()
+                    .filter(|c| c.0 == p)
+                    .map(|c| (c.1.clone(), c.2.clone()))
+                    .collect();
+                for (src, dst) in copies {
+                    match (named.get(&src), named.get(&dst)) {
+                        (Some(a), Some(b)) => a.blit_to(gl, b),
+                        _ => self.warn(format!("effect copy {src} -> {dst}: unknown FBO")),
+                    }
+                }
+                if p == n_passes {
+                    break;
+                }
                 // A pass whose shader failed to compile is skipped: the image
                 // flows through unchanged instead of the whole layer vanishing.
                 let key = self.layers[i].effects[e].passes[p].pass.program_key.clone();
@@ -1481,8 +1569,16 @@ impl SceneRenderer {
                     std::mem::swap(&mut current, &mut other);
                 }
             }
-            for (_, t) in named {
-                self.give(t);
+            let unique: Vec<String> = self.layers[i].effects[e]
+                .fbos
+                .iter()
+                .filter(|f| f.2)
+                .map(|f| f.0.clone())
+                .collect();
+            for (name, t) in named {
+                if !unique.contains(&name) {
+                    self.give(t);
+                }
             }
         }
         self.give(other);
@@ -1567,6 +1663,32 @@ impl SceneRenderer {
                 TexSource::Named(n) => self.named_texture(gl, n, call.effect_targets),
             };
             bound.push((*unit, tex));
+        }
+
+        // WE keeps the power-of-two padding of .tex files and gives an image
+        // layer's quad UVs 0..content/size of texture 0, so every other
+        // texture of that material pass is sampled over the same share of ITS
+        // padded size (flow maps, masks). Water effect 13 820654165 (flowmask
+        // 800x600 in 1024x1024) and nebula 833227004 depend on it: mean SSIM
+        // 0.856 -> 0.993 and 0.924 -> 0.985 when emulated. Effects and
+        // particles keep cropped textures (their shaders rescale UVs with
+        // g_TextureNResolution, which is equivalent).
+        let padded_mode = is_material && {
+            let l = &self.layers[call.layer];
+            l.kind == LayerKind::Image && l.puppet.is_none() && l.flipbook.is_none()
+        };
+        let mut uv_scale = [1.0f32, 1.0];
+        if padded_mode {
+            for ((_, src), b) in slots.iter().zip(bound.iter_mut()) {
+                if let TexSource::Named(n) = src
+                    && let Some(t) = self.padded_texture(gl, n, call.effect_targets)
+                {
+                    b.1 = t;
+                }
+            }
+            if let Some((_, t0)) = bound.iter().find(|(u, _)| *u == 0) {
+                uv_scale = t0.content_uv();
+            }
         }
 
         if self.program(gl, &key).is_none() {
@@ -1670,7 +1792,9 @@ impl SceneRenderer {
 
         // 3) the object's own properties (image pass only)
         if is_material {
-            prog.set(gl, "g_Brightness", &[l.brightness]);
+            if l.own_brightness {
+                prog.set(gl, "g_Brightness", &[l.brightness]);
+            }
             prog.set(gl, "g_UserAlpha", &[l.alpha]);
             prog.set(gl, "g_Alpha", &[l.alpha]);
             prog.set(gl, "g_Color", &l.color);
@@ -1683,8 +1807,42 @@ impl SceneRenderer {
 
         match (&call.which, &self.layers[call.layer].puppet) {
             (PassRef::Material, Some((_, mesh))) => mesh.draw(gl),
+            _ if uv_scale != [1.0, 1.0] => {
+                let mut v = call.verts;
+                for vert in v.chunks_mut(5) {
+                    vert[3] *= uv_scale[0];
+                    vert[4] *= uv_scale[1];
+                }
+                self.quad.draw(gl, &v);
+            }
             _ => self.quad.draw(gl, &call.verts),
         }
+    }
+
+    /// The padded (WE layout) upload of a file texture, when it has padding.
+    fn padded_texture(
+        &mut self,
+        gl: &glow::Context,
+        name: &str,
+        effect_targets: &HashMap<String, Target>,
+    ) -> Option<Tex> {
+        if name.starts_with("_rt_")
+            || composite_ref(name).is_some()
+            || effect_targets.contains_key(name)
+        {
+            return None;
+        }
+        if let Some(t) = self.padded_textures.get(name) {
+            return *t;
+        }
+        let t = self
+            .assets
+            .read(&format!("materials/{name}.tex"))
+            .and_then(|b| rustpaper_core::tex::parse(&b).ok())
+            .filter(|d| d.width > d.real_width || d.height > d.real_height)
+            .map(|d| crate::gpu::upload_texture_padded(gl, &d));
+        self.padded_textures.insert(name.to_string(), t);
+        t
     }
 
     fn named_texture(
@@ -2019,7 +2177,13 @@ impl SceneRenderer {
                     gl,
                     &c.file,
                     Some((index, c.event, c.origin, c.max_count)),
-                    Overrides::NONE,
+                    // children inherit the object's instance override (Elden
+                    // Ring 3276312017: its ember glow child drawn at full size
+                    // and rate washed a band over the screen; mean SSIM 0.979
+                    // -> 0.992, energy ratio 1.66 -> 1.00), count included
+                    // (Early Morning Forest 1959836574: leaves at count 0.5
+                    // with full-count children moved 1.48x WE, 1.34x with it).
+                    ov,
                     seed.wrapping_add(1000 + out.len() as u64),
                     out,
                     depth + 1,
@@ -2413,8 +2577,8 @@ const BLIT_FRAG: &str = "uniform sampler2D g_Texture0;\nvarying vec2 v_TexCoord;
 
 /// Camera parallax (`general.cameraparallax`): the camera leans toward the
 /// cursor, so objects shift the opposite way, each scaled by its
-/// `parallaxDepth`. Not calibrated against WE yet (the harness can't move the
-/// cursor without taking the user's); shift at the screen edge =
+/// `parallaxDepth`. WE reads the cursor through XWayland (harness/xpointer.py
+/// records what it saw); shift at the screen edge =
 /// `amount * mouseinfluence * depth * scene size / 2`.
 struct Parallax {
     amount: f32,
@@ -2440,6 +2604,9 @@ impl Parallax {
     fn follow(&mut self, pointer: [f32; 2], time: f32) {
         let dt = (time - self.last_time).clamp(0.0, 0.5);
         self.last_time = time;
+        // Exponential follow with `delay` as the time constant. Not calibrated:
+        // a per-frame "1 - delay" model fit 3366882745 (delay 1.0) but broke
+        // Ice Princess 2800248288 (delay 1.1, 0.81 -> 0.66), see GL_RENDERER.md.
         let k = if self.delay <= 0.0 {
             1.0
         } else {
