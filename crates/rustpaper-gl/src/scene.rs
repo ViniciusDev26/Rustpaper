@@ -110,6 +110,8 @@ struct Layer {
     anim: Option<LayerAnim>,
     /// Animated image (GIF scenes, `spritesheet` combo): frames over images.
     flipbook: Option<Flipbook>,
+    /// `"attachment": name` with a puppet `parent`: (parent id, name, local).
+    attach: Option<(i64, String, Mat4)>,
     material: Pass,
     /// Puppet warp: skeletal animation + its mesh (replaces the quad).
     puppet: Option<(crate::puppet::PuppetRt, crate::gpu::MeshGpu)>,
@@ -187,6 +189,8 @@ pub struct SceneRenderer {
     fov: f32,
     /// `general.zoom`: the camera zooms in around the scene center.
     zoom: f32,
+    /// Attached layers (index), parents before children.
+    attach_order: Vec<usize>,
     /// `general.camerashake`: (amplitude, speed, roughness).
     shake: Option<(f32, f32, f32)>,
     /// Scene time of the frame being rendered (camera shake).
@@ -328,6 +332,7 @@ impl SceneRenderer {
                     value::get_f32(&general, "camerashakeroughness", 0.0),
                 )
             }),
+            attach_order: Vec::new(),
             time: 0.0,
             layers: Vec::new(),
             particle_objs: Vec::new(),
@@ -440,6 +445,7 @@ impl SceneRenderer {
         for k in keys {
             r.program(gl, &k);
         }
+        r.attach_order = attach_order(&r.layers);
         Ok(r)
     }
 
@@ -609,6 +615,11 @@ impl SceneRenderer {
             brightness: value::get_f32(obj, "brightness", 1.0),
             anim: LayerAnim::parse(obj, self.world_of(obj)),
             flipbook,
+            attach: obj
+                .get("attachment")
+                .and_then(|a| a.as_str())
+                .zip(obj.get("parent").and_then(|p| p.as_i64()))
+                .map(|(name, parent)| (parent, name.to_string(), local_matrix(obj))),
             material,
             puppet,
             composite,
@@ -943,6 +954,21 @@ impl SceneRenderer {
                 mesh.upload(gl, &rt.vertices);
             }
         }
+        // layers hanging from a puppet's attachment follow its current pose
+        for k in 0..self.attach_order.len() {
+            let i = self.attach_order[k];
+            let Some((parent, name, local)) = self.layers[i].attach.clone() else {
+                continue;
+            };
+            let Some(pi) = self.layers.iter().position(|l| l.id == parent) else {
+                continue;
+            };
+            let p = &self.layers[pi];
+            if let Some(att) = p.puppet.as_ref().and_then(|(rt, _)| rt.attachment(&name)) {
+                let w = math::mul(&math::mul(&p.world, &att), &local);
+                self.layers[i].world = w;
+            }
+        }
         self.scene.clear(gl, self.clear);
 
         // Hidden-but-referenced layers first, so others can sample them.
@@ -1025,9 +1051,9 @@ impl SceneRenderer {
             );
             ortho = math::mul(&ortho, &shake);
         }
-        // camera shake also zooms in, so its offset never shows the edges
-        // (Ice Princess 2800248288, amplitude 0.35: best fit at zoom 1.02)
-        let zoom_total = self.zoom * self.shake.map_or(1.0, |(amp, _, _)| 1.0 + amp * 0.06);
+        // (camera shake does NOT zoom: Kirito x Asuna 3463520581, amplitude
+        // 0.5, fits best unzoomed)
+        let zoom_total = self.zoom;
         if (zoom_total - 1.0).abs() < 1e-4 {
             return ortho;
         }
@@ -2511,6 +2537,28 @@ impl Flipbook {
             [frame.x / w, frame.y / h],
         ))
     }
+}
+
+/// Attached layers ordered so that a parent is placed before its children.
+fn attach_order(layers: &[Layer]) -> Vec<usize> {
+    let depth = |mut i: usize| {
+        let mut d = 0;
+        while let Some((parent, _, _)) = &layers[i].attach {
+            match layers.iter().position(|l| l.id == *parent) {
+                Some(p) if d < 64 => {
+                    i = p;
+                    d += 1;
+                }
+                _ => break,
+            }
+        }
+        d
+    };
+    let mut v: Vec<usize> = (0..layers.len())
+        .filter(|&i| layers[i].attach.is_some())
+        .collect();
+    v.sort_by_key(|&i| depth(i));
+    v
 }
 
 #[cfg(test)]

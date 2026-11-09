@@ -169,10 +169,12 @@ misalignments blamed on the camera were the harness stretching non-16:9
 scenes; `--screen WxH` renders through the same cover crop as a monitor.
 
 `general.camerashake` (amplitude, speed, roughness) moves the camera along a
-smooth random path of about `amplitude x 1.2%` of the width and zooms in by
-`1 + amplitude x 0.06` so the edges never show. Fitted on the captures of
-Ice Princess 2800248288/2802243144 (motion energy ratio 0.25 -> 1.2, mean
-SSIM 0.54 -> 0.70); not yet calibrated on a dedicated scene.
+smooth random path of about `amplitude x 1.2%` of the width, without zoom
+(Kirito x Asuna 3463520581, amplitude 0.5, fits best unzoomed). Fitted on
+the captures of Ice Princess 2800248288/2802243144 (motion energy ratio
+0.25 -> 1.2, mean SSIM 0.54 -> 0.68); not yet calibrated on a dedicated
+scene. Ice Princess still fits best 2% zoomed in, cause unknown (it also
+has camera parallax on).
 
 `general.zoom` zooms the camera around the scene center (CITRUS 2704773569,
 zoom 1.1: mean SSIM 0.43 -> 0.98).
@@ -225,6 +227,15 @@ unchanged WE material shader draws it.
   a duration (fps = frames / value) matched WE worse (2900431360: motion SSIM
   0.57 vs 0.60).
 - Play modes `loop`, `mirror` (ping-pong), `single` (hold last frame).
+- **Attachments (MDAT0001)**: named points on bones (u32, u16 count, then per
+  attachment u16 bone, name, f32x16). Scene objects with `"attachment": name`
+  and a puppet as `parent` are placed at parent world x current bone pose x
+  attachment x their own local transform, every frame, parents first: hair
+  and bodies built from many puppets follow each other (Kirito x Asuna
+  3463520581: mean SSIM 0.76 -> 0.84).
+- MDLV0023 has extra blocks between the indices and MDLS (the parser looks
+  for the magic), and MDLS0004's animation offset points at the MDAT block
+  that precedes MDLA.
 
 ## GIF scenes (animated images)
 
