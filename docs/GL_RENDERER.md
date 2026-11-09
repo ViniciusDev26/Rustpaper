@@ -110,8 +110,9 @@ quad, the trail (`TRAILRENDERER`) or the sprite-sheet frame (`SPRITESHEET`,
   between scalemin..scalemax; turbulence makes particles FOLLOW a slowly
   evolving noise field (not accelerate, not curl); `offset` of
   turbulentvelocityrandom shifts the noise sample (a phase). Pushing along
-  `forward` by `|offset|` or `-offset` was measured too: after the sprite-sheet
-  fix below, the phase reading passes 3 of 6 affected scenes vs 2 and 0.
+  `forward` by `|offset|`, by `-offset`, or using it as a minimum cosine with
+  `forward` were measured too: with every other fix in place the phase
+  reading passes 5 of 9 affected scenes, `|offset|` 4, the others fewer.
 - **Embedded sprite sheets (`TEXS0003`)**: the header is `count, frame_w,
   frame_h`; the per-frame records carry the exact (possibly fractional) size
   (rosepetals: 5 frames of 102.5 x 128). Reading the header as
@@ -123,10 +124,10 @@ quad, the trail (`TRAILRENDERER`) or the sprite-sheet frame (`SPRITESHEET`,
   Without it, screen-sized flipbooks (fog) jump at every frame change:
   Demon Angel 1851646226 motion energy ratio 4.3 -> 2.7, Caitlyn 2853052034
   1.69 -> 1.28 (PASS).
-- **Child systems need a `type`.** `eventfollow` / `eventspawn` /
-  `eventdeath` / `static`. Legacy presets list children with no type (stock
-  "ember" -> "emberglow": 1000 px additive halos); WE does not draw them
-  (Akame 1215952856 mean SSIM 0.65 -> 0.93 once dropped).
+- **Children without a `type` are `static`** (an independent system at the
+  parent's origin). `rain_screen_4k`'s untyped static drops are drawn by WE
+  (3576135309: motion energy ratio 0.05 -> 0.68). A detour that dropped them
+  was fitting a glow excess actually caused by the sprite-sheet header bug.
 - **Rope renderers** (`rope`, `ropetrail`) use `genericropeparticle` with its
   own 21-float vertex layout; `ropetrail` keeps 16 history samples per
   particle.
@@ -243,8 +244,13 @@ customization panel (`docs/SELECTOR.md`).
   `mapsequence*` initializers are reported as unsupported. Sprite
   `orientation` modes coincide for the front-facing ortho camera (WE passes
   world camera axes; compensating object rotation broke White Angel).
-- Camera parallax is implemented (`Parallax` in scene.rs) but not calibrated:
-  the harness can't move the cursor without taking the user's.
+- Camera parallax is implemented (`Parallax` in scene.rs): cursor offset
+  from the center x `amount` x `mouseinfluence` x `parallaxDepth` x scene
+  size, content moving away from the cursor. Only one data point so far: in
+  the harness WE's window never sees the cursor, and Saki Ayase 2617953025
+  (depth `0 1`) matches WE with `--pointer 0.5,0.9` (mean SSIM 0.63 ->
+  0.94), i.e. WE assumes the pointer near the bottom edge there. Calibrating
+  the magnitude needs a capture with a known cursor position.
 - Video wallpapers still use the older wgpu path in `rustpaper-engine`.
 - Shaders the fixer cannot repair are skipped (the image passes through) and
   listed by `--describe`.

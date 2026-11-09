@@ -560,11 +560,9 @@ impl ParticleDef {
             .filter_map(|c| {
                 Some(ChildRef {
                     file: c.get("name")?.as_str()?.to_string(),
-                    // Legacy presets (e.g. the stock "ember" -> "emberglow")
-                    // list children without a `type`; WE does not draw them
-                    // (Akame 1215952856: no trace of the 1000 px halos in the
-                    // capture), so they are dropped. See GL_RENDERER.md.
-                    event: match c.get("type")?.as_str()? {
+                    // No `type` = static (rain_screen_4k's static drops are
+                    // untyped children and WE draws them).
+                    event: match c.get("type").and_then(|t| t.as_str()).unwrap_or("static") {
                         "eventspawn" => ChildEvent::Spawn,
                         "eventdeath" => ChildEvent::Death,
                         "eventfollow" => ChildEvent::Follow,
@@ -859,10 +857,10 @@ impl ParticleSim {
                     // Direction from a noise field sampled at the spawn point
                     // (neighbours move alike). `offset` shifts the noise
                     // sample (a phase), it does not push along `forward`:
-                    // re-measured after the sprite-sheet fix on 6 scenes
-                    // (Luffy, White Angel, Re:zero, Akame x2, 3366882745),
-                    // phase passes 3 vs 2 for a push by |offset| and 0 for a
-                    // push by -offset. Flattened to the plane when forward.z = 0.
+                    // measured on 9 scenes with every other fix in place,
+                    // phase passes 5 vs 4 for a push by |offset|, fewer for
+                    // a push by -offset or a "min cosine with forward" cone.
+                    // Flattened to the plane when forward.z = 0.
                     let n = noise_vec(add(
                         scale(p.pos, s * 0.01),
                         [self.time * timescale + offset; 3],
