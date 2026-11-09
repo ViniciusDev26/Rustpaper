@@ -1,296 +1,104 @@
-# Rustpaper (wallpaper-engine-rs)
+# Rustpaper
 
-Reimplementação (em Rust, do zero) de um "Wallpaper Engine" para Linux: um
-**engine** que renderiza wallpapers (vídeo e cenas do Wallpaper Engine da Steam)
-na GPU via Vulkan, exibidos no fundo do desktop (Wayland/KWin via wlr-layer-shell),
-e um **selector** (app desktop Tauri) para navegar o catálogo e aplicar.
+From-scratch Rust reimplementation of Wallpaper Engine (WE) for Linux/Wayland:
+an **engine** that renders WE scene and video wallpapers on the desktop, and a
+**selector** (Tauri app) to browse the library, customize and apply. It reads
+the user's own WE install (Steam): no wallpaper content ships with it.
 
-Projeto de aprendizado de Rust — priorize clareza e explicação didática ao mexer.
+Learning project — prefer clarity and explain non-obvious WE behaviour in
+comments, with the measurement that justified it.
 
-## New scene renderer + reference harness (host, Hyprland)
+## Rules
 
-- **`rustpaper-gl`** (OpenGL 3.3 via headless EGL, runs on the host — no
-  devcontainer): renders WE scenes with a generic effect runtime. CLI:
-  `rustpaper-render <workshop id> [--describe] [--dump-passes dir] [--only ids] [--video ...]`.
-  Layers, effects and particle systems all render through the real WE shaders.
-  WE behaviours it had to match and known gaps: **`docs/GL_RENDERER.md`**.
-- **Harness** (`harness/run.sh <id>`): captures the real WE (Proton) on a
-  headless output and compares mean / motion against Rustpaper:
-  **`docs/HARNESS.md`**. Validate rendering changes with it, not by eye.
-- **Live:** `target/release/rustpaper <wallpaper folder>` now renders scenes with
-  rustpaper-gl (EGL window per output, layer `Bottom`, physical-resolution
-  buffers via wp_viewporter); videos still use the wgpu path below. Stop it with
-  `kill $(pgrep -x rustpaper)` (exact name: `pkill -f` matches your own shell).
-- WE paths come from `rustpaper_core::paths` (Steam library, or
-  `WE_ASSETS_DIR` / `WE_WORKSHOP_DIR`; test corpus in
-  `~/.local/share/rustpaper-testset` or `RUSTPAPER_TESTSET_DIR`).
-- **Selector** (`./target/release/rustpaper-selector`): gallery + WE-style
-  customization panel; saved values go to
-  `~/.config/rustpaper/properties/<id>.json` and the engine gets them with
-  `--props`. Details: **`docs/SELECTOR.md`**.
-- **Never execute Workshop JavaScript** (SceneScript, web wallpapers, property
-  conditions): only static values or native, data-driven code.
-- Fidelity gate: `harness/batch.sh` -> `harness-out/report.md` (PASS = mean
-  SSIM >= 0.95 and motion energy ratio 0.7..1.4).
+- **Never execute Workshop JavaScript** (SceneScript, `web` wallpapers,
+  property `condition`s): it is untrusted code. Use static values or native,
+  data-driven reimplementations only (text presets, condition parser).
+- **Everything in the repo is in English**: code, comments, logs, docs,
+  commit messages.
+- **Validate rendering changes with the harness**, not by eye:
+  `harness/batch.sh` -> `harness-out/report.md`. PASS = mean SSIM >= 0.95
+  and motion energy ratio 0.7..1.4 against the real WE.
+- Gate before committing (CI runs the same): `cargo fmt --all`,
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+  `cargo test --workspace`.
 
-## Workspace (Cargo)
+## Docs
 
-Monorepo com 3 crates em `crates/`:
+- `docs/GL_RENDERER.md` — the OpenGL scene renderer and every WE behaviour
+  it had to match (each with its measurement), known gaps.
+- `docs/HARNESS.md` — capturing the real WE under Proton and comparing.
+- `docs/SELECTOR.md` — gallery, customization panel, persistence.
+- `docs/SHADER_TRANSLATION.md` — WE shader dialect (older wgpu path, still
+  relevant to `rustpaper_core::shader`).
 
-- **`rustpaper-core`** — lógica pura dos formatos do WE (sem GPU/UI). Módulos:
-  `project` (project.json), `pkg` (.pkg PKGV), `tex` (.tex → RGBA + `SpriteSheet`),
-  `scene` (scene.json → material/textura/partículas + `MaterialInfo`),
-  `particle` (particles/*.json), `layout` (cena INTEIRA → camadas com transform),
-  `effects` (grafo de efeitos), `shader` (tradução do dialeto WE → GLSL).
-  Deps: `serde`, `serde_json`, `lz4_flex`, `image` (só jpeg/png), `texpresso`.
-  Dev-dep: `naga` (valida o GLSL/SPIR-V produzido nos testes).
-- **`rustpaper-engine`** — o renderer (lib + binário **`rustpaper`**). Módulos:
-  `main`, `wallpaper` (layer-shell + event loop), `gpu` (wgpu: surface, cover-scale,
-  render por monitor), `compositor` (render multi-camada da cena),
-  `program` (material WE compilado: vert+frag linkados + UBO + blend),
-  `shader_compile` (translate → glslang → SPIR-V + reflexão via naga),
-  `postprocess` (primitiva de passe de efeito), `video` (ffmpeg), `particles`.
-  Shaders: `shader.wgsl` (blit final por monitor), `particle.wgsl` (sprites).
-  Deps: `rustpaper-core`, `wgpu` 29 (feature `spirv`), `naga` 29 (feature `spv-in`),
-  `serde_json`, `pollster`, `bytemuck`, `raw-window-handle` 0.6,
-  `smithay-client-toolkit` 0.19, `wayland-client` 0.31,
-  `wayland-backend` (feature `client_system`), `calloop` 0.14, `calloop-wayland-source` 0.4.
-  Precisa do **glslangValidator** em runtime (compila os shaders do WE).
-- **`rustpaper-selector`** — app desktop Tauri v2. Binário **`rustpaper-selector`**.
-  Backend Rust (`main`, `settings`) + frontend web estático em `ui/`
-  (`index.html`, `properties.js`). Comandos: `list_wallpapers`, `apply`,
-  `get_properties`, `save_properties`, `get_settings`, `set_autostart`. Deps: `tauri` 2
-  (feature `protocol-asset`), `serde`, `serde_json`, `rustpaper-core`.
+## Workspace (`crates/`)
 
-## Como buildar e rodar
+- **`rustpaper-core`** — pure WE formats, no GPU: `project`, `pkg` (PKGV),
+  `tex` (.tex -> RGBA, embedded sprite sheets), `scene`, `particle`, `layout`,
+  `effects`, `mdl` (puppet models), `shader` (dialect -> GLSL 330 +
+  log-driven fixer), `paths` (Steam library, test corpus).
+- **`rustpaper-gl`** — OpenGL 3.3 scene renderer (glow + EGL): layers, effects,
+  particles, text, audio spectrum, puppets, bloom, parallax. Binary
+  **`rustpaper-render`** (offline: PNG/MP4, `--describe`, `--dump-passes`,
+  `--only`, `--screen WxH`).
+- **`rustpaper-engine`** — binary **`rustpaper`**: the live wallpaper.
+  Scenes go through rustpaper-gl (`gl_wallpaper.rs`, one EGL surface per
+  output, layer `Bottom`); videos use the older wgpu path (`wallpaper.rs`,
+  `gpu.rs`, `video.rs`). `hyprland.rs` (fullscreen pause, cursor),
+  `audio_capture.rs` (PipeWire). `RUSTPAPER_LEGACY_SCENE=1` = old wgpu scenes.
+- **`rustpaper-selector`** — Tauri v2 app, binary **`rustpaper-selector`**;
+  static UI in `ui/` (`index.html`, `properties.js`).
 
-**Tudo roda DENTRO do devcontainer `vini-dev`** (é lá que estão Rust, ffmpeg,
-Vulkan, o socket Wayland e os mounts). O binário fica em `target/debug/` na raiz.
+## Build and run (host)
 
-```fish
-# entrar no container
-docker exec -it -u vscode vini-dev fish
-cd ~/projects/personal/wallpaper-engine-rs
-
-cargo build            # workspace inteiro
-cargo test             # ~32 testes (unitários inline + integração de shader/naga)
-
-# rodar um wallpaper direto no engine (pasta de um item do Workshop):
-./target/debug/rustpaper /home/vscode/wallpapers/<id>
-
-# rodar o selector (galeria); ele spawna o engine ao clicar:
-cargo run -p rustpaper-selector
+```sh
+cargo build --release                       # toolchain pinned by mise.toml
+./target/release/rustpaper-selector         # gallery; applies via the engine
+./target/release/rustpaper <wallpaper dir> [--props file.json] [--fps N] [--no-audio]
+./target/release/rustpaper-render <workshop id> --describe
+./scripts/install.sh                        # ~/.local/bin + launcher entry
 ```
 
-- O engine precisa de `WAYLAND_DISPLAY=/tmp/wayland-0` (já setado no container).
-- O selector **embute** no `main.rs` os envs de container (`GDK_BACKEND=x11`,
-  `WEBKIT_DISABLE_COMPOSITING_MODE/DMABUF`) — sem eles o webview crasha ou fica
-  em branco. Rodar via `docker exec` funciona porque `DISPLAY=:0` já vem no container.
-- Rode as ferramentas de inspeção de formato com os examples do rustpaper-core:
-  `cargo run -p rustpaper-core --example dump_pkg|dump_scene|dump_tex -- <arquivo>`.
+- WE paths: `rustpaper_core::paths` finds the Steam library; override with
+  `WE_ASSETS_DIR`, `WE_WORKSHOP_DIR`; test corpus in
+  `~/.local/share/rustpaper-testset` (`RUSTPAPER_TESTSET_DIR`).
+- Stop a running engine with `kill $(pgrep -x rustpaper)` — `pkill -f`
+  also matches your own shell and `rustpaper-selector`.
+- Only one engine at a time (two on the same layer flicker); the selector
+  hands over automatically. Disable other wallpaper daemons
+  (`linux-wallpaperengine`, the shell's own background on `Background`).
+- Runtime deps: ffmpeg (video), `pw-record` (audio, optional), Hyprland IPC
+  for fullscreen pause/cursor (optional; other compositors just don't pause).
 
-## Devcontainer (repo `~/.config/devcontainer`)
+## WE formats (accumulated knowledge)
 
-O `up.sh` monta e configura (é preciso recriar o container com o **env da sessão
-gráfica** — DISPLAY/WAYLAND_DISPLAY/XAUTHORITY; num login SSH puro eles não existem,
-puxe de `/proc/<plasmashell>/environ`):
+- **project.json**: `type` (`video` | `scene` | `web`, casing varies), `file`,
+  `title`, `general.properties` (user properties, see SELECTOR.md). An
+  "image" wallpaper is a `scene`.
+- **.pkg** (`PKGV0001`): sized-string version, `u32` file count, entries
+  (sized-string name, `u32` offset, `u32` length), data after the table.
+- **.tex** (`TEXV0005`/`TEXI0001`): format (0 = RGBA8888 despite the name —
+  never swap channels; 4/6/7 = DXT5/3/1; 8 = RG88; 9 = R8), flags, sizes.
+  Containers `TEXB0001..0004` (LZ4 when compressed; 0003/0004 may embed a
+  JPEG/PNG; 0004's extra per-mip header only for mp4). Strings are
+  NUL-terminated (unlike .pkg). RG88/R8 stay in GL layout and shaders get
+  `TEXnFORMAT`. Embedded flipbooks: `TEXS0003` = count, w, h, then exact
+  per-frame records.
+- **Scene chain**: `scene.json` object `image` -> `models/x.json`
+  (`material`, optional `puppet`) -> `materials/x.json` (passes: shader,
+  textures, combos, constants) -> `materials/<name>.tex`. Objects reference
+  effects (`effects/*/effect.json`), particle systems (`particles/*.json`),
+  text, parents (hierarchy).
+- **Particles**: `colorrandom` uses 0-255, `colorchange` 0-1; `colorrandom`
+  interpolates along one `t` (per-channel randomness gives rainbows).
+- Shaders: WE's dialect (HLSL-ish macros, `#include`, `#require`,
+  `[COMBO]` and uniform annotations — also inside includes).
 
-- **Workshop** do WE → `/home/vscode/wallpapers` (read-only). Contém as pastas
-  `<id>/` com `project.json` + assets/pkg de cada wallpaper.
-- **Assets base** do WE → `/home/vscode/we-assets` (read-only). Texturas/materiais
-  compartilhados (ex.: sprites de partícula `materials/particle/*.tex`) que as
-  cenas referenciam FORA do pkg.
-- **Socket Wayland** do compositor → `/tmp/wayland-0` (habilita layer-shell).
-- `NVIDIA_DRIVER_CAPABILITIES=all` → o nvidia-container-toolkit injeta o ICD do
-  Vulkan (senão o wgpu não acha a GPU pelo Vulkan).
+## Testing conventions
 
-## Formatos do Wallpaper Engine (conhecimento acumulado)
-
-- **project.json**: `type` (`video` | `scene` | `web`, casing VARIA), `file`
-  (arquivo principal), `title`. Wallpaper de "imagem" não existe como tipo — é `scene`.
-- **.pkg** (`scene.pkg`, header `PKGV0001`): sized-string de versão + `u32`
-  filesCount + entradas (nome sized-string, `u32` offset, `u32` length) + blob de
-  dados a partir de `base_offset`. Little-endian.
-- **.tex** (`TEXV0005`/`TEXI0001`): header com `format` (0=ARGB8888, 4=DXT5,
-  6=DXT3, 7=DXT1, ...), flags, dims. Container `TEXB0001..0004` (LZ4 quando
-  `compression==1`; TEXB0003/4 podem ter imagem **free-image** JPEG/PNG embutida).
-  **Suportamos ARGB8888, RG88, R8, DXT1/3/5 (via texpresso) e free-image.** ARGB8888 (apesar do
-  nome) já vem em ordem **RGBA** — NÃO trocar canais (o WE faz upload como
-  GL_RGBA; trocar R↔B faz vermelho virar azul, invisível em grayscale). RG88 =
-  luminância(R)+alpha(G) → expandido pra (R,R,R,G); R8 = máscara (R,R,R,R).
-  Strings do .tex
-  são null-terminated (diferente do .pkg, que é length-prefixed).
-- **Cadeia da cena**: `scene.json` → objeto com `image` → `models/x.json`
-  (`material`) → `materials/x.json` (`passes[0].textures[0]` = nome) →
-  `materials/<nome>.tex`. A textura tem padding pra potência de 2 (ex.: buffer
-  2048x2048, conteúdo 1920x1080) — usamos `content_norm` no shader pra recortar.
-- **Partículas**: objetos com `particle` → `particles/*.json`. Campos: `maxcount`,
-  `emitter` (rate/origin/distance), `initializer` (lifetime/size/velocity/**color**),
-  `operator` (movement gravity/drag, alphafade, oscillateposition, colorchange,
-  controlpointattract, turbulence, ...), `renderer` (`sprite` | `spritetrail`),
-  `material` → sprite (geralmente nos assets base). **Convenções de cor
-  inconsistentes**: `colorrandom` usa 0-255; `colorchange` usa 0-1. `colorrandom`
-  interpola numa LINHA (um `t` único) — sortear por-canal dá arco-íris (bug).
-
-## Pipeline de shaders do WE (tradução → GPU)
-
-Os shaders do WE (`.vert`/`.frag` nos assets) NÃO são GLSL puro: são um dialeto
-cross-compile (HLSL+GLSL) com `#include`, `#require`, combos (`#if`), macros estilo
-HLSL (`mul`, `frac`, `saturate`, `CAST3`, `texSample2D`) e GLSL legado (`varying`,
-`gl_FragColor`). Detalhes completos em **`docs/SHADER_TRANSLATION.md`**. Pipeline:
-
-    WE .vert/.frag
-      │  rustpaper_core::shader::translate  → prelúdio (dialeto→GLSL) + includes + #require
-      │                                + combos + SEPARA samplers (texture2D+sampler)
-      ▼  GLSL 450 (Vulkan-flavored)
-      │  glslangValidator -V -R --amb --aml --sdub WeGlobals 0 0   (subprocesso)
-      ▼  SPIR-V Vulkan
-      │  wgpu ShaderSource::SpirV  +  naga (reflexão do UBO/bindings)
-      ▼  wgpu::RenderPipeline
-
-- **naga glsl-in é fraco demais** (rejeita uniforms livres e qualifiers de sampler)
-  → por isso compilamos via glslang. **naga spv-in rejeita samplers COMBINADOS** e o
-  wgpu usa textura+sampler SEPARADOS → o `translate` reescreve `sampler2D` em
-  `texture2D`+`sampler` e as macros remontam na amostragem. Bindings determinísticos:
-  bloco `WeGlobals` = binding 0; textura `g_TextureN` = `2N+1`; sampler = `2N+2`.
-- **UBO unificado entre estágios**: vert e frag declaram membros diferentes no mesmo
-  bloco → compilar LINKADO (`glslang -l`) unifica o `WeGlobals` (mesmos offsets nos
-  dois) → `Program` usa o vertex do WE (que a maioria dos efeitos precisa) com um UBO
-  único. Ver `shader_compile::compile_linked`.
-- `Program::build` captura erros de validação (error scope) e devolve `Err` em vez de
-  dar panic — shaders com interface incompatível são pulados, não derrubam o engine.
-
-## Compositor multi-camada (o render de cena atual)
-
-Uma cena do WE é uma PILHA de camadas-imagem (a Ashe = 15 camadas: cabelo, luva,
-capa, corpo...). O `rustpaper_core::layout::parse_layout` lê a cena inteira: projeção
-ortográfica + cada objeto-imagem com transform (origin/scale/angles/size), material,
-blend, alpha/cor/brilho e efeitos, em ordem de desenho.
-
-- `rustpaper_engine::compositor::Compositor` pré-constrói cada camada (textura, `Program`, quad
-  no espaço da cena, constants) e renderiza TUDO numa textura de conteúdo por frame:
-  cada camada é um quad em espaço de cena (ortho → NDC, Y invertido) desenhado pelo
-  shader real do WE, com **alpha/additive blend** e sRGB.
-- No engine ao vivo (`gpu.rs`): `Source::SceneComposite(dir)` → o compositor preenche
-  a textura de conteúdo a cada `tick` (com `g_Time` avançando); o desenho por-monitor
-  (cover-scale, `shader.wgsl`) amostra essa textura. Reusa multi-monitor + timer.
-- **sem forçar alpha opaco** (o caminho antigo forçava): a composição usa alpha real
-  das texturas (é o que faz as camadas empilharem certo).
-
-## Decisões de arquitetura (e o porquê)
-
-- **Render dirigido por TIMER (calloop, ~30fps), não por frame callbacks do
-  Wayland.** Frame callbacks param quando a superfície é ocluída → o wallpaper
-  congelava. O timer desacopla e nunca congela. (`wallpaper::run` monta um
-  `calloop::EventLoop` com `WaylandSource` + um `Timer`; `render_all` roda a cada tick.)
-- **layer-shell (wlr), camada `Background`, uma layer surface por output**
-  (multi-monitor). A surface do wgpu é criada dos ponteiros crus da wl_surface
-  (`create_surface_unsafe`).
-- **Cover na CPU** (`gpu::cover_scale`, testado): a textura de conteúdo (que o
-  compositor preenche na resolução da cena) é escalada por monitor. O `content_norm`
-  ainda serve pro caminho de vídeo/imagem única (recorte de padding).
-- **Partículas**: simulação na CPU + render **instanciado** (uma draw call, N
-  instâncias) por cima das camadas, em espaço de cena. Suporta sprite sheet
-  (flipbook), escala do objeto, `turbulentvelocityrandom` + turbulência contínua,
-  gravidade/drag, alphafade, oscillate, colorchange. Aditivo é amortecido (sem HDR).
-- **NOTA**: o caminho antigo de 1 textura (`Source::Scene` + `scene_source` em
-  wallpaper.rs, `#[allow(dead_code)]`) foi substituído pelo compositor. Mantido só
-  como referência do modelo de partículas isolado.
-- **engine e selector são DECOPLADOS**: o selector spawna o engine como processo
-  filho (mata o anterior ao aplicar). Persistência do último wallpaper +
-  autostart via arquivos XDG (state.json + .desktop).
-
-## Estado de fidelidade (meta: vídeo + scenes fiéis — layers, partículas, animações)
-
-Sem áudio/widgets no escopo. Onde estamos vs. a meta:
-
-- **Vídeo**: ✅ fiel (loop, cover, multi-monitor).
-- **Layers**: ✅ fiel — composição multi-camada com transform/blend/alpha/sRGB.
-  Personagens que eram invisíveis (Ashe, GhostBlade, cyber girl) renderizam.
-- **Partículas**: 🟡 aproximação boa (sprite sheet, escala, dispersão), mas o
-  simulador é simples: faltam operadores (control points/attract, vortex, turbulência
-  de campo real), formas de emissor (box/line), e HDR pro aditivo. Só `sprite`
-  (spritetrail e afins pulados). Aditivo amortecido (×0.35) pra não estourar em branco.
-- **Efeitos/animações**: ❌ **DESLIGADOS** — é a maior lacuna (por isso cenas com
-  animação de efeito ficam estáticas). O scaffolding existe (`postprocess::Pass`,
-  `compositor::draw_effect`/`composite`, `effects::parse_effect`), mas está gated:
-  aplicar a cadeia parcial/quebrada destrói a imagem. Cenas de áudio/puppet (bones)
-  renderizam pretas (fora de escopo por ora).
-
-## Limitações e pegadinhas conhecidas
-
-- **DXT decodificado** (DXT1/3/5 via texpresso) — fundos e sprites DXT funcionam.
-- **Um engine por vez.** Dois engines na camada Background competem → flicker. O
-  `apply` do selector mata o anterior; launches MANUAIS (via `docker exec`) podem
-  acumular. Matar: `docker exec vini-dev pkill -9 -f "target/debug/rustpaper "`
-  (nota o espaço no fim — evita casar também `rustpaper-selector`, que começa
-  com o mesmo prefixo; o pkill do host e o do container veem PID namespaces
-  diferentes — use o do container).
-- **Concorrência com o `linux-wallpaperengine`**: se o autostart antigo dele subir,
-  compete na camada Background → flicker. Deve ser desabilitado.
-- **Autostart** dispara no login do **HOST**; hoje os binários/arquivos ficam no
-  container (não é sessão de login). Só vale de verdade após um passo de
-  **distribuição** (binários instalados no host + .desktop no ~/.config/autostart do host).
-- **`pkill -f "target/debug/..."` mata o próprio shell do `docker exec`** (o comando
-  casa o padrão) → use `pkill -f "debug/rustpaper "` (com o espaço, pra não pegar
-  `rustpaper-selector` também) num exec SEPARADO do launch, ou faça kill e launch
-  em execs distintos.
-- **Verificação ao vivo**: rodar o engine detached (`setsid ... </dev/null & disown`),
-  esperar, e `spectacle -b -n -f -o <png>` no HOST com o env da sessão Plasma (puxado
-  de `/proc/<plasmashell>/environ`). Pra ver partículas/detalhes, recortar+ampliar com
-  `ffmpeg -i shot.png -vf crop=W:H:X:Y out.png` (a tela cheia é 2 monitores lado a lado).
-
-## Convenções
-
-- **Testes**: unitários inline (`#[cfg(test)] mod tests`), lógica pura (parsers,
-  cover, layout de uniforms). GPU/Wayland/UI verificados VISUALMENTE (não dá pra
-  unit-testar). Ao capturar a tela pra verificar, use `spectacle -b -n -f` no host
-  com o env da sessão Plasma.
-- **Commits em INGLÊS** (o resto da conversa pode ser em português).
-- Ao mexer na API do `wgpu`/SCTK, **cheque a fonte** no cargo registry antes de
-  chutar — as APIs mudam bastante entre versões (já apanhamos várias vezes).
-- **CI** (`.github/workflows/ci.yml`, roda em push/PR pra `main`): `cargo fmt --check`,
-  `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
-  `cargo build --workspace --all-targets` e `cargo test --workspace`. Rode
-  `cargo fmt --all` e `cargo clippy --fix` localmente antes de commitar pra não
-  quebrar o gate.
-- **Imagem de CI** (`docker/ci/Dockerfile`): Ubuntu 24.04 + toolchain Rust (stable
-  + rustfmt/clippy) + as deps de sistema do workspace (wayland/xkbcommon/glslang
-  pro engine, webkit2gtk/gtk do Tauri pro selector), publicada em
-  `ghcr.io/viniciusdev26/rustpaper-ci`. O próprio `ci.yml` builda/publica essa
-  imagem (job `image`, com cache de camadas) ANTES dos outros jobs, então ela
-  nunca fica desatualizada em relação ao Dockerfile do commit — não precisa de
-  workflow separado nem de rebuild manual. Mudou uma dependência de sistema? Só
-  editar o Dockerfile; o próximo push já refaz a imagem.
-
-## Roadmap / frentes abertas
-
-**North Star**: replicar fielmente o comportamento do WE para wallpapers de **vídeo**
-e **scene** — layers, partículas e animações/efeitos. SEM áudio, música ou widgets
-(horário etc.).
-
-Ordenado por impacto de fidelidade:
-
-1. **Pipeline de efeitos** (MAIOR lacuna — destrava a animação das cenas). Religar e
-   consertar o caminho de efeitos por camada: renderizar a camada num FBO, aplicar a
-   cadeia de passes (cada um amostra o quadro anterior), com FBOs nomeados + multi-pass
-   pros complexos (godrays, blur). Resolver o mismatch de interface vertex↔fragment que
-   trava vários shaders de efeito (usar o vertex do WE via `compile_linked`), o
-   encadeamento por `bind`/`fbos` do `effect.json`, e os `combos`/`constantshadervalues`
-   por passe (parsers já existem em `effects`). Começar por efeitos de 1 passe (tint,
-   filmgrain, hue), depois multi-FBO.
-2. **Fidelidade de partículas**: completar o simulador — operadores restantes
-   (controlpoint/attract, vortex, turbulência de campo), formas de emissor (box/line),
-   spritetrail, e um aditivo com tonemap em vez do amortecimento fixo.
-3. **Animações de material** (g_Time nos shaders de camada): já rodam parcialmente;
-   validar/expandir (scroll, pulse, etc. embutidos no material).
-
-Infra/produto (menor prioridade): empacotamento/distribuição (AppImage/deb + instalar
-no host, desabilitando o linux-wallpaperengine) · filtros/busca e "wallpaper atual" na
-galeria do selector.
-
-**Como retomar o pipeline de efeitos** (frente 1): ver `compositor.rs`
-(`draw_effect`/`composite` já existem, gated), `postprocess::Pass`, `effects.rs`
-(`parse_effect` dá passes/fbos/binds), e o exemplo `render_effect` (prova tint 1-passe
-offscreen). O `PARTICLES_ENABLED`/gating de efeitos mostra o padrão de "ligar por peça
-quando estiver fiel".
+- Unit tests inline (`#[cfg(test)] mod tests`) for pure logic (parsers,
+  shader translation/fixer, simulation pieces, settings).
+- GPU/Wayland/UI: verified with the harness (renderer) or by screenshotting
+  on the headless `RPREF` output (UI) — never steal the user's focus.
+- When unsure about an API (glow, khronos-egl, SCTK, Tauri), read the source
+  in `~/.cargo/registry` instead of guessing.

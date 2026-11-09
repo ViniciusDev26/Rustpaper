@@ -16,7 +16,8 @@ use rustpaper_gl::scene::{FrameInput, SceneRenderer};
 struct Args {
     wallpaper: PathBuf,
     times: Vec<f32>,
-    out: PathBuf,
+    /// None: `render.png`, except with `--describe` (nothing is written).
+    out: Option<PathBuf>,
     pointer: [f32; 2],
     describe: bool,
     dump_passes: Option<PathBuf>,
@@ -34,7 +35,7 @@ fn parse_args() -> Result<Args, String> {
     let mut it = std::env::args().skip(1);
     let mut wallpaper = None;
     let mut times = vec![0.0];
-    let mut out = PathBuf::from("render.png");
+    let mut out = None;
     let mut pointer = [0.5, 0.5];
     let mut describe = false;
     let mut dump_passes = None;
@@ -53,7 +54,7 @@ fn parse_args() -> Result<Args, String> {
     while let Some(a) = it.next() {
         match a.as_str() {
             "--time" => times = floats(it.next().ok_or("--time needs a value")?)?,
-            "--out" => out = it.next().ok_or("--out needs a value")?.into(),
+            "--out" => out = Some(it.next().ok_or("--out needs a value")?.into()),
             "--pointer" => {
                 let p = floats(it.next().ok_or("--pointer needs x,y")?)?;
                 pointer = [p[0], *p.get(1).unwrap_or(&p[0])];
@@ -225,8 +226,13 @@ fn main() -> ExitCode {
                 ..Default::default()
             },
         );
+        let out = match (&args.out, args.describe) {
+            (Some(o), _) => o.clone(),
+            (None, true) => continue, // rendered for its warnings only
+            (None, false) => PathBuf::from("render.png"),
+        };
         let (px, pw, ph) = frame_pixels(gl, &scene, &screen);
-        let path = out_path(&args.out, time, args.times.len() > 1);
+        let path = out_path(&out, time, args.times.len() > 1);
         if let Err(e) = image::save_buffer(&path, &px, pw, ph, image::ExtendedColorType::Rgba8) {
             eprintln!("error: writing {}: {e}", path.display());
             return ExitCode::FAILURE;

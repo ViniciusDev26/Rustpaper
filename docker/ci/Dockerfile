@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
         pkg-config \
         libwayland-dev \
+        libegl-dev \
         libxkbcommon-dev \
         glslang-tools \
         libwebkit2gtk-4.1-dev \
