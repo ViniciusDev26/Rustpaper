@@ -21,6 +21,14 @@ Experiments (name -> what varies):
   sphere_dir   sphererandom 400 with directions "1 0.1 0" (flat)
   oscalpha     oscillatealpha frequencymax 20, scalemin 0.2
   persp        flags 4 (perspective), velocity +-300 in z too
+  trail_sx     the trail experiment on an object scaled "1.5 0.08 1"
+  trail_sy     the trail experiment on an object scaled "0.2 1 1"
+  sprite_sx    still sprites (size 40, box cloud) on an object scaled "0.2 1 1"
+  sprite_s2    the same on an object scaled "2 2 2" (uniform)
+  (object-scale experiments: does WE squash / scale the quads with the
+  object's scale, or only move the particles?)
+  rare         rate 0.05 (one every 20 s), lifetime 30, size 200, no starttime:
+               does WE emit the first particle at once? (capture WE_WARMUP=0)
 """
 import json, os, sys
 
@@ -54,13 +62,20 @@ elif exp in ("turb", "turb_mask_x"):
     ops.append(t)
 elif exp == "vel":
     inits.append({"name": "velocityrandom", "id": 5, "min": "-100 -100 0", "max": "100 100 0"})
-elif exp in ("trail", "trail_long"):
+elif exp in ("trail", "trail_long", "trail_sx", "trail_sy"):
     inits.append({"name": "velocityrandom", "id": 5, "min": "-50 200 0", "max": "50 200 0"})
 elif exp == "size":
     emitter = {"name": "sphererandom", "id": 1, "distancemax": 0, "distancemin": 0, "rate": 1, "instantaneous": 1}
     inits = [{"name": "lifetimerandom", "id": 2, "min": 100, "max": 100},
              {"name": "sizerandom", "id": 3, "min": 200, "max": 200},
              {"name": "colorrandom", "id": 4, "min": "255 255 255", "max": "255 255 255"}]
+elif exp == "rare":
+    emitter = {"name": "sphererandom", "id": 1, "distancemax": 0, "distancemin": 0, "rate": 0.05}
+    inits = [{"name": "lifetimerandom", "id": 2, "min": 30, "max": 30},
+             {"name": "sizerandom", "id": 3, "min": 200, "max": 200},
+             {"name": "colorrandom", "id": 4, "min": "255 255 255", "max": "255 255 255"}]
+elif exp in ("sprite_sx", "sprite_s2"):
+    emitter = {"name": "boxrandom", "id": 1, "distancemax": "600 300 0", "rate": 30}
 elif exp == "box":
     emitter = {"name": "boxrandom", "id": 1, "distancemax": "600 300 0", "rate": 30}
 elif exp == "sphere_dir":
@@ -75,11 +90,11 @@ else:
     sys.exit(f"unknown experiment {exp}")
 
 renderer = {"name": "sprite", "id": 20}
-if exp == "trail":
+if exp in ("trail", "trail_sx", "trail_sy"):
     renderer = {"name": "spritetrail", "id": 20, "length": 0.007}
 elif exp == "trail_long":
     renderer = {"name": "spritetrail", "id": 20, "length": 0.05, "maxlength": 100}
-system = {"maxcount": 400, "starttime": 4, "emitter": [emitter], "initializer": inits, "operator": ops,
+system = {"maxcount": 400, "starttime": 0 if exp == "rare" else 4, "emitter": [emitter], "initializer": inits, "operator": ops,
           "renderer": [renderer], "material": "materials/calibdot.json"}
 if exp == "persp":
     system["flags"] = 4
@@ -95,7 +110,9 @@ scene = {
     "general": {"clearcolor": "0 0 0", "clearenabled": True, "orthogonalprojection": {"width": W, "height": H},
                 "zoom": 1.0, "bloom": False, "hdr": False, "cameraparallax": False},
     "objects": [{"id": 1, "name": "calib", "particle": "particles/calib.json", "image": None,
-                 "origin": f"{W/2} {H/2} 0", "scale": "1 1 1", "angles": "0 0 0", "visible": True}],
+                 "origin": f"{W/2} {H/2} 0", "scale": {"trail_sx": "1.5 0.08 1", "trail_sy": "0.2 1 1",
+                                                        "sprite_sx": "0.2 1 1", "sprite_s2": "2 2 2"}.get(exp, "1 1 1"),
+                 "angles": "0 0 0", "visible": True}],
 }
 json.dump(scene, open(os.path.join(out, "scene.json"), "w"), indent=1)
 json.dump({"type": "scene", "file": "scene.json", "title": f"particle calib {exp}"},
