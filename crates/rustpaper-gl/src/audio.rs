@@ -230,6 +230,38 @@ impl Analyzer {
     }
 }
 
+/// WE publishes a new spectrum only every ~75 ms (~13 Hz), not every frame.
+/// Measured 2026-11-10 on the make_audio.py cells while real music played:
+/// 187 changes in 421 frames at 30 fps, gaps of 1 / 2 / 3 frames about
+/// equally often (irregular, as if driven by audio packets). In between,
+/// shaders keep reading the previous values. Updating at 60 Hz gave
+/// audio-driven scenes ~2x WE's motion energy (CITRUS 2719898311: the ring
+/// glow far from the ring changed 0.68 per frame vs WE's 0.36).
+pub const PUBLISH_INTERVAL: f32 = 0.075;
+
+/// Holds the analyzer's output between WE-style publications: feed it every
+/// 60 Hz analysis step, read what WE would show.
+#[derive(Default)]
+pub struct Publisher {
+    shown: AudioFrame,
+    /// Seconds of analysis since the last publication.
+    since: f32,
+    started: bool,
+}
+
+impl Publisher {
+    pub fn step(&mut self, fresh: AudioFrame, dt: f32) -> AudioFrame {
+        self.since += dt;
+        if !self.started || self.since >= PUBLISH_INTERVAL {
+            self.started = true;
+            // keep the remainder: 60 Hz steps then alternate 4 / 5 (13.3 Hz)
+            self.since = (self.since - PUBLISH_INTERVAL).max(0.0);
+            self.shown = fresh;
+        }
+        self.shown
+    }
+}
+
 /// A recorded audio file replayed in step with the scene clock (the harness
 /// records what WE heard, `we_audio.wav`, and renders Rustpaper with it).
 /// The analyzer advances in fixed 1/60 s steps, like the live capture
@@ -239,6 +271,7 @@ pub struct AudioTrack {
     samples: Vec<f32>,
     rate: f32,
     analyzer: Analyzer,
+    publisher: Publisher,
     /// Audio time of the last analysis step, seconds.
     pos: f32,
 }
@@ -255,6 +288,7 @@ impl AudioTrack {
             samples,
             rate,
             analyzer: Analyzer::new(rate),
+            publisher: Publisher::default(),
             pos: -1.0,
         }
     }
@@ -291,6 +325,7 @@ impl AudioTrack {
         let t = t - Self::WE_LATENCY;
         if t + Self::STEP < self.pos {
             self.analyzer = Analyzer::new(self.rate);
+            self.publisher = Publisher::default();
             self.pos = -1.0;
         }
         if self.pos < 0.0 {
@@ -305,15 +340,35 @@ impl AudioTrack {
             let have = &self.samples[start.min(self.samples.len())..end.min(self.samples.len())];
             let off = WINDOW * 2 - (end - start);
             window[off..off + have.len()].copy_from_slice(have);
-            self.analyzer.analyze(&window);
+            let fresh = self.analyzer.analyze(&window);
+            self.publisher.step(fresh, Self::STEP);
         }
-        self.analyzer.frame
+        self.publisher.shown
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn publisher_updates_at_we_rate() {
+        let mut p = Publisher::default();
+        let mut changes = 0;
+        let mut last = -1.0;
+        for i in 0..600 {
+            // 10 s of 60 Hz steps, each with a different value
+            let mut f = AudioFrame::default();
+            f.left[0] = i as f32;
+            let shown = p.step(f, 1.0 / 60.0).left[0];
+            if shown != last {
+                changes += 1;
+                last = shown;
+            }
+        }
+        // ~13.3 Hz: 133 publications in 10 s
+        assert!((130..=136).contains(&changes), "{changes}");
+    }
 
     fn sine(hz: f32, amp: f32, frames: usize) -> Vec<f32> {
         (0..frames)

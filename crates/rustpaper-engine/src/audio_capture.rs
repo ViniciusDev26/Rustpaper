@@ -9,7 +9,7 @@ use std::io::Read;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
-use rustpaper_gl::audio::{Analyzer, AudioFrame, WINDOW};
+use rustpaper_gl::audio::{Analyzer, AudioFrame, Publisher, WINDOW};
 
 const RATE: u32 = 48_000;
 
@@ -43,6 +43,7 @@ impl AudioCapture {
         let shared = latest.clone();
         std::thread::spawn(move || {
             let mut analyzer = Analyzer::new(RATE as f32);
+            let mut publisher = Publisher::default();
             let mut ring: Vec<f32> = Vec::with_capacity(WINDOW * 4);
             // ~60 analyses per second: 800 stereo frames per read
             let mut buf = vec![0u8; 800 * 2 * 4];
@@ -57,7 +58,7 @@ impl AudioCapture {
                     let excess = ring.len() - WINDOW * 2;
                     ring.drain(..excess);
                 }
-                let frame = analyzer.analyze(&ring);
+                let frame = publisher.step(analyzer.analyze(&ring), 800.0 / RATE as f32);
                 if let Ok(mut l) = shared.lock() {
                     *l = frame;
                 }

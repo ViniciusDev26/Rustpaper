@@ -259,6 +259,22 @@ drawn by a synthetic image layer (so effects and blend modes apply).
   - WE shows it ~0.167 s late; `AudioTrack` (replayed files) adds that delay.
   RMSE per band vs WE: 0.12 (the previous dB + 0.85-decay analyzer: 0.22).
   Known gap: WE lights 2-3x more bands than the model for tones below ~700 Hz.
+- **WE publishes a new spectrum only every ~75 ms (~13 Hz).** In between,
+  shaders read the same values. Measured 2026-11-10 on the cells scene while
+  real music played (`calib/audio_music`): 187 changes in 421 frames at
+  30 fps, with gaps of 1 / 2 / 3 frames about equally often (irregular). The
+  analyzer still steps at 60 Hz, because attack / release are fitted per step,
+  and `Publisher` holds its output. CITRUS 2719898311: energy ratio
+  1.56 -> 1.31 (PASS).
+- Known gap, music vs tones: with real music WE's bands all average ~0.22,
+  the high ones included (band 48: 0.25). The model, fitted on isolated
+  tones, gives band 32 0.05 and band 48 0.02. This suggests per-band (or
+  tilted) normalization that the single-tone sweep cannot show.
+- Harness caveat: `we_audio.wav` only covers the capture, but WE had been
+  hearing the scene's music during the warmup, so its adaptive reference
+  carries that history. Giving the replay 8 s of prior music lowered
+  CITRUS's ring-glow energy from 0.87 to 0.68 per frame (WE: 0.36),
+  measured with 60 Hz publishing, before `Publisher`.
 - `rustpaper-render --audio file` replays a recording (the harness passes
   `we_audio.wav`, recorded during the WE capture); without it, silence.
 - `--no-audio` disables capture.
