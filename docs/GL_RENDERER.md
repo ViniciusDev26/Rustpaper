@@ -172,6 +172,15 @@ quad, the trail (`TRAILRENDERER`) or the sprite-sheet frame (`SPRITESHEET`,
   particle.
 - **Audio response** (`audioprocessingmode` on emitters) scales the rate by the
   band values (see Audio below).
+- **The object's scale squashes the quads, not only the positions.** The
+  vertices go through the full object matrix. Calibration
+  (`make_particles.py` `sprite_sx`, `sprite_s2`, `trail_sx`, `trail_sy`): an
+  object scaled `0.2 1 1` shrinks the drawn brightness of a box cloud to 0.2x
+  (WE total 0.932 -> 0.185, Rustpaper 0.183), and trails on `1.5 0.08 1` /
+  `0.2 1 1` match WE in centroid, spread and brightness (within 0.005).
+- **No emission at t = 0.** A rate emitter accumulates `rate * dt` from zero.
+  At rate 0.05 (`rare`), WE and Rustpaper both show the first particle at
+  scene t = 20.1 s (25 s WE capture, warmup 0).
 
 ## More WE behaviours found while adding particles
 
