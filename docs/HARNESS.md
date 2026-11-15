@@ -18,7 +18,7 @@ Output in `harness-out/<id>/` (git-ignored): `sheet.png`, `side_by_side.mp4`,
 The goal is more than 95% of scenes passing. It is measured only on **scene
 wallpapers that use no SceneScript**. Web wallpapers and scenes that rely on
 SceneScript are out of scope for now. They will come later, once JS can run
-in a sandbox (Rustpaper never executes wallpaper JS today). `score.py` reports
+in a sandbox (Rustpaper does not execute wallpaper JS today). `score.py` reports
 this subset separately from the full corpus.
 
 ## Requirements
@@ -223,7 +223,7 @@ ignore SIGINT: the recorder is stopped with SIGTERM.
 
 Scenes that cannot be compared are listed with the reason and skipped by
 `batch.sh`: WE crashes or shows a black window for them, or they are built
-entirely by SceneScript (which Rustpaper never runs).
+entirely by SceneScript (which Rustpaper does not run yet).
 
 ## Calibration scenes (`harness/calibration/`)
 

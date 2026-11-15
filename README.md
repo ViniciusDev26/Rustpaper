@@ -83,9 +83,10 @@ average image (SSIM) and on how much it moves
   scaling, pauses while a fullscreen window covers the monitor (Hyprland),
   autostart.
 
-Not supported, by design: **SceneScript and web wallpapers** — they run
-the author's JavaScript, which Rustpaper never executes. Properties driven
-only by scripts keep their static values.
+Not supported yet: **SceneScript and web wallpapers** — they run the
+author's JavaScript, which Rustpaper will only execute inside a sandbox
+(planned, after the no-script renderer is done). Until then, properties
+driven only by scripts keep their static values.
 
 Details and known gaps: [`docs/GL_RENDERER.md`](./docs/GL_RENDERER.md),
 [`docs/SELECTOR.md`](./docs/SELECTOR.md).
