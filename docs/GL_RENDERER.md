@@ -146,8 +146,25 @@ quad, the trail (`TRAILRENDERER`) or the sprite-sheet frame (`SPRITESHEET`,
   inside the .tex (Workshop) or the `.tex-json` (base assets).
 - Deterministic: seeded RNG + fixed 1/60 s steps; going back in time replays.
 - Calibrated against WE with the harness (each choice is commented in code):
-  rendered size = `size` x 0.5; turbulence makes particles FOLLOW a slowly
-  evolving noise field (not accelerate, not curl).
+  rendered size = `size` x 0.5.
+- **World-space systems** (system `flags & 1`; calibration `ws*`, object
+  scaled "1.5 0.08 1" and rotated): spawn position and initial velocity go
+  through the object's transform, then the simulation runs in scene units
+  (gravity "0 -300 0" falls straight down the screen: WE cy -0.220, RP
+  -0.221) and quads are not scaled by the object (8.6x the light of the
+  same system without the flag). Control points are transformed the same way.
+- **turbulence / vortex / controlpointattract** (spec WE-RE-004): signed 3-D
+  simplex noise (Gustavson's reference, x32) of `scale * (position + tau)`,
+  `tau = r * phase range + clock * timescale`, axes sampled at cyclic
+  permutations of the input, ADDED to velocity (`* speed * dt`, speed from
+  the shared per-particle `r`). Vortex adds `speed * (n x axis)` (positive =
+  clockwise seen from +axis), speed linear from inner to outer distance and
+  held beyond. Attract adds a pull `(1 - d / threshold) * scale * dt` inside
+  `threshold` (flags 2, default: no overshoot; flags 1: kill particles that
+  pass within `deletethreshold`). The previous "follow the field" model had
+  been fitted on calibration captures taken at WE's 15 fps limit, where WE
+  weakens these operators; recaptured at 60 fps (`turb`): motion WE 0.844,
+  RP 0.875 (was 0.566 vs 0.877 with the stale capture).
 - **oscillatealpha / oscillatesize / oscillateposition** (spec WE-RE-001):
   one random `r` per particle sets frequency, phase and amplitude of every
   oscillator (`min + r * (max - min)`), so they move in lockstep. Wave
@@ -160,14 +177,12 @@ quad, the trail (`TRAILRENDERER`) or the sprite-sheet frame (`SPRITESHEET`,
   total light WE 0.376, before 0.556, now 0.380; motion WE 0.154, before
   0.237, now 0.172. Open: the default position `scalemax` (0.5 or 10) depends
   on a scene flag not identified yet; we use 10.
-- **turbulentvelocityrandom** (calibrated on single-system scenes from
-  `harness/calibration/make_particles.py`, measured with
-  `measure_particles.py`): the direction is `forward` (default up) rotated
-  in the scene plane by `offset` radians plus a random angle of up to
-  `+-2 * scale` rad. WE vs Rustpaper: offset 0 -> 82% / 83% of the light
-  above the emitter; offset 3 -> 25% / 31% (down, slightly left); scale 0.1
-  -> x spread 0.029 / 0.029. Earlier readings (offset as a noise phase or a
-  push along forward) were fitted on whole scenes and were wrong.
+- **turbulentvelocityrandom** (spec WE-RE-003 3.5): `forward` rotated
+  around `right` by `noise1(t) * pi * scale + offset`, with `t = (phase +
+  clock) * timescale` and `noise1` the 1-D gradient noise on Perlin's
+  permutation (x0.395); speed uniform in speedmin..speedmax. Particles
+  spawned close in time share a direction that sweeps slowly. (The earlier
+  "random angle of +-2 * scale" model was fitted on 15 fps captures.)
 - **Embedded sprite sheets (`TEXS0003`)**: the header is `count, frame_w,
   frame_h`; the per-frame records carry the exact (possibly fractional) size
   (rosepetals: 5 frames of 102.5 x 128). Reading the header as
