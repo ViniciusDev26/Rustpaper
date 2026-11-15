@@ -136,9 +136,20 @@ quad, the trail (`TRAILRENDERER`) or the sprite-sheet frame (`SPRITESHEET`,
   inside the .tex (Workshop) or the `.tex-json` (base assets).
 - Deterministic: seeded RNG + fixed 1/60 s steps; going back in time replays.
 - Calibrated against WE with the harness (each choice is commented in code):
-  rendered size = `size` x 0.5; oscillation frequencies are rad/s and oscillate
-  between scalemin..scalemax; turbulence makes particles FOLLOW a slowly
+  rendered size = `size` x 0.5; turbulence makes particles FOLLOW a slowly
   evolving noise field (not accelerate, not curl).
+- **oscillatealpha / oscillatesize / oscillateposition** (spec WE-RE-001):
+  one random `r` per particle sets frequency, phase and amplitude of every
+  oscillator (`min + r * (max - min)`), so they move in lockstep. Wave
+  `sin(f * (age + phase))`, f in rad/s, frequency default 1..10 (1..5 for
+  position). Alpha / size multiplier `scalemin + r * (scalemax - scalemin) *
+  (s + 1) / 2`, unclamped: only particles with r near 1 reach scalemax.
+  Position adds the change of the raw wave each step (x and z share it, y is
+  shifted by 2*pi*r in time). Optional `blendin*` / `blendout*` envelope over
+  normalized lifetime. Calibration `oscalpha` (freq 1..20, scalemin 0.2):
+  total light WE 0.376, before 0.556, now 0.380; motion WE 0.154, before
+  0.237, now 0.172. Open: the default position `scalemax` (0.5 or 10) depends
+  on a scene flag not identified yet; we use 10.
 - **turbulentvelocityrandom** (calibrated on single-system scenes from
   `harness/calibration/make_particles.py`, measured with
   `measure_particles.py`): the direction is `forward` (default up) rotated
