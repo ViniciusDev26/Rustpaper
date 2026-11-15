@@ -2324,6 +2324,23 @@ impl SceneRenderer {
             } else {
                 sys.sim.vertices(&mut verts);
             }
+            // World-space systems: move the particles by the object's
+            // transform here and draw with an identity model, so their quads
+            // keep their own size and orientation (see ParticleDef::world_space).
+            let world_space = sys.sim.def.world_space && !rope;
+            if world_space {
+                for v in verts.chunks_mut(particles::VERTEX_FLOATS) {
+                    let p = [v[0], v[1], v[2]];
+                    let d = [v[13], v[14], v[15]];
+                    for r in 0..3 {
+                        v[r] = model[r] * p[0]
+                            + model[4 + r] * p[1]
+                            + model[8 + r] * p[2]
+                            + model[12 + r];
+                        v[13 + r] = model[r] * d[0] + model[4 + r] * d[1] + model[8 + r] * d[2];
+                    }
+                }
+            }
 
             let mut bound = Vec::new();
             for (unit, src) in &slots {
@@ -2351,10 +2368,17 @@ impl SceneRenderer {
             // near particles bigger and faster (Kakashi 2811157144 motion
             // energy ratio 0.77 -> 0.88, Luffy 0.50 -> 0.56).
             let perspective = sys_perspective;
-            let mvp = if perspective { mvp_persp } else { mvp_flat };
+            let (mvp, m, m_inv) = if world_space {
+                let vp = if perspective { persp } else { proj };
+                (vp, math::IDENTITY, math::IDENTITY)
+            } else if perspective {
+                (mvp_persp, model, inverse)
+            } else {
+                (mvp_flat, model, inverse)
+            };
             prog.set(gl, "g_ModelViewProjectionMatrix", &mvp);
-            prog.set(gl, "g_ModelMatrix", &model);
-            prog.set(gl, "g_ModelMatrixInverse", &inverse);
+            prog.set(gl, "g_ModelMatrix", &m);
+            prog.set(gl, "g_ModelMatrixInverse", &m_inv);
             prog.set(
                 gl,
                 "g_ViewProjectionMatrix",

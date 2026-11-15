@@ -40,6 +40,10 @@ Experiments (name -> what varies):
   ov_sparse    rate 1, lifetime 3, velocity 200 right: separate dots whose
                motion the metric can see
   ov_sparse_rate  ov_sparse with instanceoverride rate 0.25 (slower dots?)
+  ws / ws0     sphere shell r 200, velocity +-200, object scaled "1.5 0.08 1"
+               and rotated 0.35 rad; ws sets system flags 1 (world space):
+               does WE squash the simulation with the object or only the
+               spawn positions?
   rare         rate 0.05 (one every 20 s), lifetime 30, size 200, no starttime:
                does WE emit the first particle at once? (capture WE_WARMUP=0)
 """
@@ -99,6 +103,10 @@ elif exp == "oscalpha":
 elif exp == "persp":
     emitter = {"name": "boxrandom", "id": 1, "distancemax": "600 300 600", "rate": 30}
     inits.append({"name": "velocityrandom", "id": 5, "min": "-100 -100 -300", "max": "100 100 300"})
+elif exp in ("ws", "ws0"):
+    emitter = {"name": "sphererandom", "id": 1, "distancemin": 200, "distancemax": 200, "rate": 30, "directions": "1 1 0"}
+    inits = list(base_init) + [{"name": "velocityrandom", "id": 5, "min": "-200 -200 0", "max": "200 200 0"}]
+    inits[0] = {"name": "lifetimerandom", "id": 2, "min": 1, "max": 1}
 elif exp.startswith("ov_"):
     life = {"ov_count": 4, "ov_sparse": 3, "ov_sparse_rate": 3}.get(exp, 1)
     rate = 1 if exp.startswith("ov_sparse") else 10
@@ -121,6 +129,8 @@ system = {"maxcount": 20 if exp.startswith("ov_") else 400, "starttime": 0 if ex
           "renderer": [renderer], "material": "materials/calibdot.json"}
 if exp == "persp":
     system["flags"] = 4
+if exp == "ws":
+    system["flags"] = 1
 
 os.makedirs(os.path.join(out, "particles"), exist_ok=True)
 os.makedirs(os.path.join(out, "materials"), exist_ok=True)
@@ -134,8 +144,9 @@ scene = {
                 "zoom": 1.0, "bloom": False, "hdr": False, "cameraparallax": False},
     "objects": [{"id": 1, "name": "calib", "particle": "particles/calib.json", "image": None,
                  "origin": f"{W/2} {H/2} 0", "scale": {"trail_sx": "1.5 0.08 1", "trail_sy": "0.2 1 1",
-                                                        "sprite_sx": "0.2 1 1", "sprite_s2": "2 2 2"}.get(exp, "1 1 1"),
-                 "angles": "0 0 0", "visible": True,
+                                                        "sprite_sx": "0.2 1 1", "sprite_s2": "2 2 2",
+                                                        "ws": "1.5 0.08 1", "ws0": "1.5 0.08 1"}.get(exp, "1 1 1"),
+                 "angles": "0 0 0.35" if exp in ("ws", "ws0") else "0 0 0", "visible": True,
                  **({"instanceoverride": {"id": 2, **overrides}} if overrides else {})}],
 }
 json.dump(scene, open(os.path.join(out, "scene.json"), "w"), indent=1)
