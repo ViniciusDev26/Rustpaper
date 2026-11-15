@@ -10,9 +10,11 @@ comments, with the measurement that justified it.
 
 ## Rules
 
-- **Never execute Workshop JavaScript** (SceneScript, `web` wallpapers,
-  property `condition`s): it is untrusted code. Use static values or native,
-  data-driven reimplementations only (text presets, condition parser).
+- **Never execute Workshop JavaScript outside a sandbox** (SceneScript, `web`
+  wallpapers, property `condition`s): it is untrusted code. SceneScript and
+  web support will come later, inside a sandbox, after the no-script renderer
+  reaches its fidelity target. Until then, use static values or native,
+  data-driven reimplementations (text presets, condition parser).
 - **Everything in the repo is in English**: code, comments, logs, docs,
   commit messages.
 - **Validate rendering changes with the harness**, not by eye:

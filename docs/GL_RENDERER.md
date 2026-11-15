@@ -108,7 +108,7 @@ If the runtime fills uniforms/textures/combos like WE, every effect works.
   scene, not inside the layer's own FBO (that blended the layer with nothing
   and produced a mini-scene).
 - **`createLayer` templates** (objects only referenced by SceneScript) are
-  hidden: SceneScript is never executed (security decision).
+  hidden: SceneScript is not executed yet (it will only run in a sandbox).
 - **TEXB0004:** the extra per-mipmap header only exists for mp4 textures.
 
 ## Particles (`particles.rs`)
@@ -399,9 +399,10 @@ customization panel (`docs/SELECTOR.md`).
 
 ## Known gaps
 
-- **Not supported by design:** SceneScript (JavaScript) and `web` wallpapers —
-  executing Workshop code is a security risk. Properties driven only by a
-  script keep their static value.
+- **Not supported yet:** SceneScript (JavaScript) and `web` wallpapers.
+  Executing Workshop code is a security risk, so they will only run inside a
+  sandbox (planned, after the no-script renderer reaches its target). Until
+  then, properties driven only by a script keep their static value.
 - Scene lights (`LIGHTING=1` materials use ambient only).
 - Particles: `remapvalue` only for `output: velocity` + `operation: remap`
   (unverified: no captured scene shows its rain); other outputs are reported
