@@ -217,12 +217,60 @@ enum Init {
     },
 }
 
+/// `oscillatealpha` / `oscillatesize` / `oscillateposition` (spec WE-RE-001).
+/// Every range is sampled with the particle's single oscillator random
+/// (`osc_random`), so frequency, phase and amplitude are correlated, and two
+/// oscillators on one particle move in lockstep.
 #[derive(Clone, Debug)]
 struct Osc {
     freq: (f32, f32),
     scale: (f32, f32),
     phase: (f32, f32),
+    envelope: Option<Envelope>,
 }
+
+/// Optional fade of an oscillator's effect over normalized lifetime
+/// (`blendinstart/end`, `blendoutstart/end`; defaults 0, 0, 1, 1 = inactive).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Envelope {
+    in_start: f32,
+    in_end: f32,
+    out_start: f32,
+    out_end: f32,
+}
+
+impl Envelope {
+    fn parse(o: &Value) -> Option<Self> {
+        let get = |k: &str, d: f32| o.get(k).and_then(|v| v.as_f64()).map_or(d, |v| v as f32);
+        let in_end = get("blendinend", 0.0);
+        let out_start = get("blendoutstart", 1.0);
+        let in_start = get("blendinstart", 0.0).min(in_end - 0.0001);
+        let mut out_end = get("blendoutend", 1.0);
+        if out_end <= out_start + 0.0001 {
+            out_end = out_start + 0.0001;
+        }
+        let (in_w, out_w) = (in_end - in_start, out_end - out_start);
+        let active = (in_end > 0.01 || out_start < 0.99)
+            && (out_start - in_end > 0.01 || in_w > 0.01 || out_w > 0.01);
+        active.then_some(Envelope {
+            in_start,
+            in_end,
+            out_start,
+            out_end,
+        })
+    }
+
+    /// Weight of the oscillator's effect at normalized lifetime `a`.
+    fn weight(&self, a: f32) -> f32 {
+        let fade_in = ((a - self.in_start) / (self.in_end - self.in_start)).clamp(0.0, 1.0);
+        let fade_out = ((self.out_end - a) / (self.out_end - self.out_start)).clamp(0.0, 1.0);
+        fade_in * fade_out
+    }
+}
+
+/// Slot of the per-particle random shared by every oscillator (WE draws one
+/// value per particle; it is not per operator).
+const OSC_RANDOM_SLOT: u32 = 0xFFFF_0001;
 
 #[derive(Clone, Debug)]
 enum Op {
@@ -466,13 +514,15 @@ impl ParticleDef {
             })
             .collect();
 
-        let osc = |o: &Value, smin: f32, smax: f32| Osc {
-            freq: (f(o, "frequencymin", 0.0), f(o, "frequencymax", 10.0)),
+        // Defaults per WE-RE-001: frequency 1..10 (1..5 for position).
+        let osc = |o: &Value, fmax: f32, smin: f32, smax: f32| Osc {
+            freq: (f(o, "frequencymin", 1.0), f(o, "frequencymax", fmax)),
             scale: (f(o, "scalemin", smin), f(o, "scalemax", smax)),
             phase: (
                 f(o, "phasemin", 0.0),
                 f(o, "phasemax", std::f32::consts::TAU),
             ),
+            envelope: Envelope::parse(o),
         };
         let ramp = |o: &Value| Ramp {
             start: f(o, "starttime", 0.0),
@@ -501,10 +551,12 @@ impl ParticleDef {
                         from: v3(o, "startvalue", [1.0; 3]),
                         to: v3(o, "endvalue", [1.0; 3]),
                     },
-                    "oscillatealpha" => Op::OscAlpha(osc(o, 0.0, 1.0)),
-                    "oscillatesize" => Op::OscSize(osc(o, 0.8, 1.2)),
+                    "oscillatealpha" => Op::OscAlpha(osc(o, 10.0, 0.0, 1.0)),
+                    "oscillatesize" => Op::OscSize(osc(o, 10.0, 0.8, 1.2)),
                     "oscillateposition" => {
-                        Op::OscPosition(osc(o, 0.0, 10.0), v3(o, "mask", [1.0, 1.0, 0.0]))
+                        // WE picks 0.5 or 10 for the default `scalemax` by a scene
+                        // flag not identified yet (WE-RE-001 open question 1).
+                        Op::OscPosition(osc(o, 5.0, 0.0, 10.0), v3(o, "mask", [1.0, 1.0, 0.0]))
                     }
                     "turbulence" => Op::Turbulence {
                         speed: (f(o, "speedmin", 500.0), f(o, "speedmax", 1000.0)),
@@ -1012,15 +1064,29 @@ impl ParticleSim {
                 return false;
             }
             let (mut alpha, mut size, mut color) = (p.alpha, p.size, p.color);
-            let mut osc_offset = [0.0f32; 3];
+            // Accumulated, like WE, which moves the particle by the change
+            // of the wave each step instead of setting an absolute offset.
+            let mut osc_offset = p.osc_offset;
+            let osc_r = hash01(p.seed, OSC_RANDOM_SLOT);
             for (k, op) in ops.iter().enumerate() {
                 let slot = (k as u32) * 4;
                 let pick = |i: u32, r: (f32, f32)| lerp(r.0, r.1, hash01(p.seed, slot + i));
-                let wave = |o: &Osc| {
-                    let fr = pick(0, o.freq);
-                    let ph = pick(1, o.phase);
-                    // frequencies are angular (rad/s), like the editor's ranges suggest
-                    (p.age * fr + ph).sin()
+                let osc_at = |o: &Osc, age: f32| {
+                    let f = lerp(o.freq.0, o.freq.1, osc_r);
+                    let phase = lerp(o.phase.0, o.phase.1, osc_r);
+                    // angular frequency, phase added to time (WE-RE-001 1.5)
+                    (f * (age + phase)).sin()
+                };
+                // Multiplier for alpha / size: the wave's height is scaled by
+                // the same random, so only particles with r near 1 reach
+                // scalemax. No clamping.
+                let osc_mul = |o: &Osc| {
+                    let s = osc_at(o, p.age);
+                    let m = o.scale.0 + osc_r * (o.scale.1 - o.scale.0) * (s + 1.0) * 0.5;
+                    match o.envelope {
+                        Some(e) => 1.0 - e.weight(life) * (1.0 - m),
+                        None => m,
+                    }
                 };
                 match *op {
                     Op::Movement { gravity, drag } => {
@@ -1048,23 +1114,17 @@ impl ParticleSim {
                     }
                     // oscillate between scalemin and scalemax (per-particle
                     // frequency and phase)
-                    Op::OscAlpha(ref o) => {
-                        alpha *= lerp(o.scale.0, o.scale.1, wave(o) * 0.5 + 0.5).max(0.0);
-                    }
-                    Op::OscSize(ref o) => {
-                        size *= lerp(o.scale.0, o.scale.1, wave(o) * 0.5 + 0.5).max(0.0);
-                    }
+                    Op::OscAlpha(ref o) => alpha *= osc_mul(o),
+                    Op::OscSize(ref o) => size *= osc_mul(o),
                     Op::OscPosition(ref o, mask) => {
-                        let s = pick(2, o.scale);
-                        // per-axis phase so x and y don't move in lockstep
-                        let fr = pick(0, o.freq);
-                        let ph = pick(1, o.phase);
-                        let w = [
-                            (p.age * fr + ph).sin(),
-                            (p.age * fr + ph + 1.7).sin(),
-                            (p.age * fr + ph + 3.1).sin(),
-                        ];
-                        osc_offset = add(osc_offset, scale(mul3(w, mask), s));
+                        // Raw sine (no 0..1 remap). x and z share the wave; y
+                        // is shifted by 2*pi*r in time (WE-RE-001 4.3).
+                        let amp = lerp(o.scale.0, o.scale.1, osc_r)
+                            * o.envelope.map_or(1.0, |e| e.weight(life));
+                        let step = |age: f32| osc_at(o, age) - osc_at(o, age - dt);
+                        let y_shift = std::f32::consts::TAU * osc_r;
+                        let (d_xz, d_y) = (step(p.age), step(p.age + y_shift));
+                        osc_offset = add(osc_offset, scale(mul3([d_xz, d_y, d_xz], mask), amp));
                     }
                     Op::Turbulence {
                         speed,
@@ -1278,6 +1338,24 @@ pub fn control_points(def: &ParticleDef, pointer_local: V3) -> [V3; 8] {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn oscillator_envelope_defaults_are_inactive() {
+        assert_eq!(Envelope::parse(&json!({})), None);
+        assert_eq!(
+            Envelope::parse(&json!({"blendinstart": 0, "blendinend": 0})),
+            None
+        );
+    }
+
+    #[test]
+    fn oscillator_envelope_fades_in_and_out() {
+        let e = Envelope::parse(&json!({"blendinend": 0.2, "blendoutstart": 0.8})).unwrap();
+        assert_eq!(e.weight(0.0), 0.0);
+        assert!((e.weight(0.1) - 0.5).abs() < 1e-3);
+        assert_eq!(e.weight(0.5), 1.0);
+        assert!(e.weight(0.9999) < 1e-3);
+    }
 
     fn sim(j: Value) -> ParticleSim {
         ParticleSim::new(ParticleDef::parse(&j), Overrides::NONE, 42)
