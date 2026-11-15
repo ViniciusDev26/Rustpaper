@@ -84,6 +84,77 @@ impl Rng {
     }
 }
 
+/// The emitters' draw range [0.00001, 1) (WE-RE-003 0.1).
+fn rng_b(rng: &mut Rng) -> f32 {
+    0.00001 + (1.0 - 0.00001) * rng.f()
+}
+
+/// Emitter launch velocity: radially out along the offset `o`, speed uniform
+/// in speedmin..speedmax; a random direction when `o` is ~0 (WE-RE-003 2.3).
+fn launch(rng: &mut Rng, o: V3, em: &Emitter) -> V3 {
+    let dir = if o[0] * o[0] + o[1] * o[1] + o[2] * o[2] < 0.0001 {
+        let mut d = [0.0; 3];
+        for (dk, dir_k) in d.iter_mut().zip(em.directions) {
+            *dk = (2.0 * rng_b(rng) - 1.0) * dir_k;
+        }
+        d
+    } else {
+        o
+    };
+    let speed = lerp(em.speed.0, em.speed.1, rng_b(rng));
+    let len = len(dir);
+    if len > 0.0 {
+        scale(dir, speed / len)
+    } else {
+        [0.0; 3]
+    }
+}
+
+/// Rotates `v` around the unit `axis` by `angle` radians (Rodrigues).
+fn rotate_axis(v: V3, axis: V3, angle: f32) -> V3 {
+    let (s, c) = angle.sin_cos();
+    let d = axis[0] * v[0] + axis[1] * v[1] + axis[2] * v[2];
+    let x = [
+        axis[1] * v[2] - axis[2] * v[1],
+        axis[2] * v[0] - axis[0] * v[2],
+        axis[0] * v[1] - axis[1] * v[0],
+    ];
+    [0, 1, 2].map(|k| v[k] * c + x[k] * s + axis[k] * d * (1.0 - c))
+}
+
+/// Ken Perlin's reference permutation.
+const PERM: [u8; 256] = [
+    151, 160, 137, 91, 90, 15, 131, 13, 201, 95, 96, 53, 194, 233, 7, 225, 140, 36, 103, 30, 69,
+    142, 8, 99, 37, 240, 21, 10, 23, 190, 6, 148, 247, 120, 234, 75, 0, 26, 197, 62, 94, 252, 219,
+    203, 117, 35, 11, 32, 57, 177, 33, 88, 237, 149, 56, 87, 174, 20, 125, 136, 171, 168, 68, 175,
+    74, 165, 71, 134, 139, 48, 27, 166, 77, 146, 158, 231, 83, 111, 229, 122, 60, 211, 133, 230,
+    220, 105, 92, 41, 55, 46, 245, 40, 244, 102, 143, 54, 65, 25, 63, 161, 1, 216, 80, 73, 209, 76,
+    132, 187, 208, 89, 18, 169, 200, 196, 135, 130, 116, 188, 159, 86, 164, 100, 109, 198, 173,
+    186, 3, 64, 52, 217, 226, 250, 124, 123, 5, 202, 38, 147, 118, 126, 255, 82, 85, 212, 207, 206,
+    59, 227, 47, 16, 58, 17, 182, 189, 28, 42, 223, 183, 170, 213, 119, 248, 152, 2, 44, 154, 163,
+    70, 221, 153, 101, 155, 167, 43, 172, 9, 129, 22, 39, 253, 19, 98, 108, 110, 79, 113, 224, 232,
+    178, 185, 112, 104, 218, 246, 97, 228, 251, 34, 242, 193, 238, 210, 144, 12, 191, 179, 162,
+    241, 81, 51, 145, 235, 249, 14, 239, 107, 49, 192, 214, 31, 181, 199, 106, 157, 184, 84, 204,
+    176, 115, 121, 50, 45, 127, 4, 150, 254, 138, 236, 205, 93, 222, 114, 67, 29, 24, 72, 243, 141,
+    128, 195, 78, 66, 215, 61, 156, 180,
+];
+
+/// Standard 1-D gradient (simplex) noise, roughly in [-1, 1].
+fn noise1(t: f32) -> f32 {
+    let i = t.floor();
+    let f = t - i;
+    let grad = |h: u8, x: f32| {
+        let g = 1.0 + (h & 7) as f32;
+        if h & 8 != 0 { -g * x } else { g * x }
+    };
+    let i = i as i64;
+    let h0 = PERM[i.rem_euclid(256) as usize];
+    let h1 = PERM[(i + 1).rem_euclid(256) as usize];
+    let a = 1.0 - f * f;
+    let b = 1.0 - (f - 1.0) * (f - 1.0);
+    0.395 * (grad(h0, f) * a.powi(4) + grad(h1, f - 1.0) * b.powi(4))
+}
+
 /// Deterministic per-particle random in [0,1) for (particle seed, slot).
 fn hash01(seed: u32, slot: u32) -> f32 {
     let mut h = seed.wrapping_mul(0x9E37_79B1) ^ slot.wrapping_mul(0x85EB_CA77);
@@ -152,11 +223,15 @@ fn v3(o: &Value, k: &str, d: V3) -> V3 {
     }
 }
 /// Rotations: a scalar means "around z".
-fn rot3(o: &Value, k: &str) -> V3 {
+fn kind_is_sphere(e: &Value) -> bool {
+    e.get("name").and_then(|n| n.as_str()) == Some("sphererandom")
+}
+
+fn rot3(o: &Value, k: &str, default: V3) -> V3 {
     match value::get_floats(o, k) {
         Some(v) if v.len() >= 3 => [v[0], v[1], v[2]],
         Some(v) if v.len() == 1 => [0.0, 0.0, v[0]],
-        _ => [0.0; 3],
+        _ => default,
     }
 }
 
@@ -174,9 +249,16 @@ struct Emitter {
     dist_max: V3,
     directions: V3,
     sign: V3,
+    /// sphererandom: restricts the sphere to a cap around +x (0 = full).
+    cone: f32,
     speed: (f32, f32),
     rate: f32,
     instantaneous: u32,
+    /// `delay` / `duration` (seconds; duration <= 0 = unlimited).
+    delay: f32,
+    duration: f32,
+    /// `flags` bit 1 (value 2): at most one rate particle per step.
+    one_per_step: bool,
     /// `audioprocessingmode` != 0: the rate follows the audio spectrum
     /// (mode, first band, last band, bounds, exponent).
     audio: Option<AudioResponse>,
@@ -195,14 +277,16 @@ enum Init {
     /// channel independently turns warm palettes into rainbows).
     Color(V3, V3, f32),
     Velocity(V3, V3, f32),
-    Rotation(V3, V3),
-    AngularVelocity(V3, V3),
+    Rotation(V3, V3, f32),
+    AngularVelocity(V3, V3, f32),
     Turbulent {
         speed: (f32, f32),
+        phase: (f32, f32),
         scale: f32,
         timescale: f32,
         offset: f32,
         forward: V3,
+        right: V3,
     },
     /// mapsequencearoundcontrolpoint: the n-th particle gets the velocity
     /// rotated by 2*pi * (n % count) / count around z (N even directions).
@@ -431,13 +515,28 @@ impl ParticleDef {
                 Some(Emitter {
                     kind,
                     origin: v3(e, "origin", [0.0; 3]),
+                    // Defaults per WE-RE-003 2.2 (pixel-unit scenes: the
+                    // sphere's distancemax is a scalar 256, the box's
+                    // "256 256 0").
                     dist_min: v3(e, "distancemin", [0.0; 3]),
-                    dist_max: v3(e, "distancemax", [256.0; 3]),
+                    dist_max: v3(
+                        e,
+                        "distancemax",
+                        if kind_is_sphere(e) {
+                            [256.0; 3]
+                        } else {
+                            [256.0, 256.0, 0.0]
+                        },
+                    ),
                     directions: v3(e, "directions", [1.0, 1.0, 0.0]),
                     sign: v3(e, "sign", [0.0; 3]),
+                    cone: f(e, "cone", 0.0),
                     speed: (f(e, "speedmin", 0.0), f(e, "speedmax", 0.0)),
-                    rate: f(e, "rate", 5.0),
+                    rate: f(e, "rate", 10.0),
                     instantaneous: f(e, "instantaneous", 0.0).max(0.0) as u32,
+                    delay: f(e, "delay", 0.0),
+                    duration: f(e, "duration", 0.0),
+                    one_per_step: (f(e, "flags", 0.0) as u32) & 2 != 0,
                     audio: {
                         let mode = f(e, "audioprocessingmode", 0.0) as u32;
                         let b = value::get_vec2(e, "audioprocessingbounds", [0.0, 1.0]);
@@ -464,20 +563,20 @@ impl ParticleDef {
                 let name = i.get("name")?.as_str()?;
                 Some(match name {
                     "lifetimerandom" => {
-                        let (a, b, e) = range(i, 1.0, 1.0);
+                        let (a, b, e) = range(i, 0.0, 1.0);
                         Init::Lifetime(a, b, e)
                     }
                     "sizerandom" => {
-                        let (a, b, e) = range(i, 20.0, 20.0);
+                        let (a, b, e) = range(i, 5.0, 50.0);
                         Init::Size(a, b, e)
                     }
                     "alpharandom" => {
-                        let (a, b, e) = range(i, 1.0, 1.0);
+                        let (a, b, e) = range(i, 0.05, 1.0);
                         Init::Alpha(a, b, e)
                     }
                     "colorrandom" => Init::Color(
-                        v3(i, "min", [255.0; 3]),
-                        v3(i, "max", v3(i, "min", [255.0; 3])),
+                        v3(i, "min", [0.0; 3]),
+                        v3(i, "max", [255.0; 3]),
                         f(i, "exponent", 1.0),
                     ),
                     "velocityrandom" => Init::Velocity(
@@ -485,10 +584,16 @@ impl ParticleDef {
                         v3(i, "max", [32.0, 32.0, 0.0]),
                         f(i, "exponent", 1.0),
                     ),
-                    "rotationrandom" => Init::Rotation(rot3(i, "min"), rot3(i, "max")),
-                    "angularvelocityrandom" => {
-                        Init::AngularVelocity(v3(i, "min", [0.0; 3]), v3(i, "max", [0.0; 3]))
-                    }
+                    "rotationrandom" => Init::Rotation(
+                        rot3(i, "min", [0.0; 3]),
+                        rot3(i, "max", [0.0, 0.0, std::f32::consts::TAU]),
+                        f(i, "exponent", 1.0),
+                    ),
+                    "angularvelocityrandom" => Init::AngularVelocity(
+                        v3(i, "min", [0.0, 0.0, -5.0]),
+                        v3(i, "max", [0.0, 0.0, 5.0]),
+                        f(i, "exponent", 1.0),
+                    ),
                     "mapsequencearoundcontrolpoint" => Init::SequenceAround {
                         count: f(i, "count", 1.0).max(1.0) as u32,
                         speed: (
@@ -501,10 +606,12 @@ impl ParticleDef {
                     },
                     "turbulentvelocityrandom" => Init::Turbulent {
                         speed: (f(i, "speedmin", 100.0), f(i, "speedmax", 250.0)),
+                        phase: (f(i, "phasemin", 0.0), f(i, "phasemax", 0.1)),
                         scale: f(i, "scale", 1.0),
                         timescale: f(i, "timescale", 1.0),
                         offset: f(i, "offset", 0.0),
                         forward: v3(i, "forward", [0.0, 1.0, 0.0]),
+                        right: v3(i, "right", [0.0, 0.0, 1.0]),
                     },
                     other => {
                         unsupported.push(format!("initializer {other}"));
@@ -549,7 +656,7 @@ impl ParticleDef {
                         start: f(o, "starttime", 0.0),
                         end: f(o, "endtime", 1.0),
                         from: v3(o, "startvalue", [1.0; 3]),
-                        to: v3(o, "endvalue", [1.0; 3]),
+                        to: v3(o, "endvalue", [0.0; 3]),
                     },
                     "oscillatealpha" => Op::OscAlpha(osc(o, 10.0, 0.0, 1.0)),
                     "oscillatesize" => Op::OscSize(osc(o, 10.0, 0.8, 1.2)),
@@ -762,14 +869,35 @@ pub struct ParticleSim {
     particles: Vec<Particle>,
     rng: Rng,
     seed: u64,
-    emit_acc: Vec<f32>,
+    emit: Vec<EmitState>,
     pub time: f32,
-    started: bool,
     next_seed: u32,
     /// Spawn/death events of the last step (consumed by child systems).
     pub events: Vec<Event>,
     /// Current audio spectrum (audio-reactive emitters).
     pub audio: crate::audio::AudioFrame,
+}
+
+/// Per-emitter emission state (WE-RE-003 1.2).
+#[derive(Clone, Copy, Debug)]
+struct EmitState {
+    acc: f32,
+    burst_left: u32,
+    delay_left: f32,
+    duration_left: f32,
+    enabled: bool,
+}
+
+impl EmitState {
+    fn new(e: &Emitter) -> EmitState {
+        EmitState {
+            acc: 0.0,
+            burst_left: e.instantaneous,
+            delay_left: e.delay,
+            duration_left: e.duration,
+            enabled: true,
+        }
+    }
 }
 
 /// See `spawn`: WE's rendered particle size relative to `sizerandom`.
@@ -784,16 +912,15 @@ pub const STEP: f32 = 1.0 / 60.0;
 
 impl ParticleSim {
     pub fn new(def: ParticleDef, ov: Overrides, seed: u64) -> ParticleSim {
-        let n = def.emitters.len();
+        let emit = def.emitters.iter().map(EmitState::new).collect();
         ParticleSim {
             def,
             ov,
             particles: Vec::new(),
             rng: Rng::new(seed),
             seed,
-            emit_acc: vec![0.0; n],
+            emit,
             time: 0.0,
-            started: false,
             next_seed: 1,
             events: Vec::new(),
             audio: crate::audio::AudioFrame::default(),
@@ -803,17 +930,17 @@ impl ParticleSim {
     pub fn reset(&mut self) {
         self.particles.clear();
         self.rng = Rng::new(self.seed);
-        self.emit_acc.iter_mut().for_each(|a| *a = 0.0);
+        self.emit = self.def.emitters.iter().map(EmitState::new).collect();
         self.time = 0.0;
-        self.started = false;
         self.next_seed = 1;
         self.events.clear();
     }
 
+    /// Capacity: `maxcount` as written. `instanceoverride.count` scales the
+    /// emission rate instead (calibration ov_count / ov_count2: count 0.5
+    /// halves an uncapped stream in WE but leaves a capped one at maxcount).
     pub fn max_count(&self) -> usize {
-        ((self.def.max_count as f32) * self.ov.count)
-            .round()
-            .max(0.0) as usize
+        self.def.max_count as usize
     }
 
     pub fn len(&self) -> usize {
@@ -840,33 +967,50 @@ impl ParticleSim {
         if let Some(ei) = e {
             let em = &self.def.emitters[ei];
             match em.kind {
+                // WE-RE-003 2.3: a point uniform in the VOLUME of the unit
+                // ball (cone axis = x), squashed by `directions` before its
+                // length is taken; with distancemin 0 the offset is
+                // distancemax * p, i.e. the ball projected onto the plane
+                // (denser in the middle than a disc).
                 EmitterKind::Sphere => {
-                    // random direction, flattened/stretched by `directions`,
-                    // optionally forced to one side per axis by `sign`
-                    let mut d = [
-                        rng.range(-1.0, 1.0),
-                        rng.range(-1.0, 1.0),
-                        rng.range(-1.0, 1.0),
-                    ];
+                    let phi = std::f32::consts::TAU * rng_b(rng);
+                    let k = -(std::f32::consts::PI * em.cone).cos();
+                    let c = k + (1.0 - k) * rng.f();
+                    let rho = rng_b(rng).cbrt();
+                    let sn = (1.0 - c * c).max(0.0).sqrt();
+                    let pt = mul3(
+                        [rho * c, rho * sn * phi.sin(), rho * sn * phi.cos()],
+                        em.directions,
+                    );
+                    let len = len(pt);
+                    let mut d = if len > 0.0 {
+                        scale(pt, 1.0 / len)
+                    } else {
+                        [0.0; 3]
+                    };
                     for (k, dk) in d.iter_mut().enumerate() {
-                        if em.sign[k] != 0.0 {
-                            *dk = dk.abs() * em.sign[k].signum();
+                        if em.sign[k] != 0.0 && dk.signum() != em.sign[k].signum() {
+                            *dk = -*dk;
                         }
                     }
-                    let d = norm(mul3(d, em.directions));
-                    let t = rng.f();
-                    let dist = lerp3(em.dist_min, em.dist_max, t);
-                    pos = add(em.origin, mul3(d, dist));
-                    let speed = rng.range(em.speed.0, em.speed.1);
-                    vel = scale(d, speed);
+                    let o = scale(d, em.dist_min[0] + (em.dist_max[0] - em.dist_min[0]) * len);
+                    pos = add(o, em.origin);
+                    vel = launch(rng, o, em);
                 }
+                // WE-RE-003 2.4: each axis independent, uniform on
+                // +-[min, min + dir * (max - min)].
                 EmitterKind::Box => {
-                    let r = [
-                        rng.range(-1.0, 1.0),
-                        rng.range(-1.0, 1.0),
-                        rng.range(-1.0, 1.0),
-                    ];
-                    pos = add(em.origin, mul3(r, em.dist_max));
+                    let mut v = [0.0f32; 3];
+                    for k in [2, 1, 0] {
+                        v[k] = (2.0 * rng_b(rng) - 1.0) * em.directions[k];
+                    }
+                    let o = [0, 1, 2].map(|k| {
+                        let a = v[k].abs();
+                        let m = em.dist_min[k] + a * (em.dist_max[k] - em.dist_min[k]);
+                        if v[k] == 0.0 { 0.0 } else { m.copysign(v[k]) }
+                    });
+                    pos = add(o, em.origin);
+                    vel = launch(rng, o, em);
                 }
             }
         }
@@ -880,7 +1024,9 @@ impl ParticleSim {
             vel,
             color: [1.0; 3],
             alpha: 1.0,
-            size: 20.0,
+            // WE-RE-003 3.1: base size 0.5 (here 1.0, halved by SIZE_SCALE
+            // below), lifetime 1 s; initializers multiply / add to these.
+            size: 1.0,
             rot: [0.0; 3],
             ang_vel: [0.0; 3],
             age: 0.0,
@@ -896,33 +1042,37 @@ impl ParticleSim {
             osc_offset: [0.0; 3],
         };
         self.next_seed = self.next_seed.wrapping_add(1);
-        let biased = |rng: &mut Rng, e: f32| rng.f().powf(if e > 0.0 { e } else { 1.0 });
+        let now = self.time;
+        // WE-RE-003 0.2: the draw is raised to `exponent` unless it is 1.
+        let biased = |rng: &mut Rng, e: f32| {
+            let u = rng.f();
+            if e == 1.0 { u } else { u.powf(e) }
+        };
         for init in &self.def.inits {
             match *init {
-                Init::Lifetime(a, b, e) => p.lifetime = lerp(a, b, biased(rng, e)),
-                Init::Size(a, b, e) => p.size = lerp(a, b, biased(rng, e)),
-                Init::Alpha(a, b, e) => p.alpha = lerp(a, b, biased(rng, e)),
-                Init::Color(a, b, e) => p.color = scale(lerp3(a, b, biased(rng, e)), 1.0 / 255.0),
+                Init::Lifetime(a, b, e) => p.lifetime = lerp(a, b, biased(rng, e)).max(0.001),
+                Init::Size(a, b, e) => p.size *= lerp(a, b, biased(rng, e)),
+                Init::Alpha(a, b, e) => p.alpha *= lerp(a, b, biased(rng, e)),
+                // one draw for all channels: a random grey level by default
+                Init::Color(a, b, e) => {
+                    p.color = mul3(p.color, scale(lerp3(a, b, biased(rng, e)), 1.0 / 255.0))
+                }
                 Init::Velocity(a, b, e) => {
                     let mut v = [0.0; 3];
-                    for (k, vk) in v.iter_mut().enumerate() {
-                        *vk = lerp(a[k], b[k], biased(rng, e));
+                    for k in [2, 1, 0] {
+                        v[k] = lerp(a[k], b[k], biased(rng, e));
                     }
                     p.vel = add(p.vel, v);
                 }
-                Init::Rotation(a, b) => {
-                    p.rot = [
-                        rng.range(a[0], b[0]),
-                        rng.range(a[1], b[1]),
-                        rng.range(a[2], b[2]),
-                    ]
+                Init::Rotation(a, b, e) => {
+                    for k in 0..3 {
+                        p.rot[k] += lerp(a[k], b[k], biased(rng, e));
+                    }
                 }
-                Init::AngularVelocity(a, b) => {
-                    p.ang_vel = [
-                        rng.range(a[0], b[0]),
-                        rng.range(a[1], b[1]),
-                        rng.range(a[2], b[2]),
-                    ]
+                Init::AngularVelocity(a, b, e) => {
+                    for k in 0..3 {
+                        p.ang_vel[k] += lerp(a[k], b[k], biased(rng, e));
+                    }
                 }
                 Init::SequenceAround { count, speed } => {
                     let k = (p.seed.wrapping_sub(1) % count) as f32;
@@ -941,33 +1091,23 @@ impl ParticleSim {
                     let (a, b) = (cps[0], cps[1]);
                     p.pos = add(p.pos, [0, 1, 2].map(|c| a[c] + (b[c] - a[c]) * t));
                 }
+                // WE-RE-003 3.5: `forward` rotated around `right` by an angle
+                // from 1-D noise of the clock, so particles spawned close in
+                // time share a direction.
                 Init::Turbulent {
                     speed,
+                    phase,
                     scale: s,
                     timescale,
                     offset,
                     forward,
+                    right,
                 } => {
-                    // `forward` (default up) rotated in the scene plane by
-                    // `offset` radians plus a random angle of up to
-                    // +-2 * `scale` rad. Calibrated on single-system scenes
-                    // (harness/calibration/make_particles.py): offset 0 goes
-                    // up (82% of the light above the emitter in WE, 83% here),
-                    // offset 3 goes down-left, -0.5 up-right, and scale 0.1
-                    // is a narrow cone (x spread 0.029 in both). `timescale`
-                    // has no visible effect at spawn.
-                    let _ = timescale;
-                    let jitter = (rng.f() * 2.0 - 1.0) * s * 2.0;
-                    let a = offset + jitter;
-                    let (sa, ca) = a.sin_cos();
-                    let f = norm(forward);
-                    // rotate forward around z by a (the scene plane)
-                    let mut d = [f[0] * ca - f[1] * sa, f[0] * sa + f[1] * ca, f[2]];
-                    if forward[2] == 0.0 {
-                        d[2] = 0.0;
-                    }
+                    let t = (lerp(phase.0, phase.1, rng.f()) + now) * timescale;
+                    let angle = noise1(t) * std::f32::consts::PI * s + offset;
+                    let d = rotate_axis(forward, norm(right), angle);
                     let sp = rng.range(speed.0, speed.1);
-                    p.vel = add(p.vel, scale(norm(d), sp));
+                    p.vel = add(p.vel, scale(d, sp));
                 }
             }
         }
@@ -1008,7 +1148,7 @@ impl ParticleSim {
     /// Particles per second of the first emitter (children emitting from
     /// followed parents use it as their per-parent rate).
     pub fn rate(&self) -> f32 {
-        self.def.emitters.first().map(|e| e.rate).unwrap_or(0.0) * self.ov.rate
+        self.def.emitters.first().map(|e| e.rate).unwrap_or(0.0) * self.ov.rate * self.ov.count
     }
 
     /// Burst size for spawn/death events: the emitter's `instantaneous` count,
@@ -1025,24 +1165,66 @@ impl ParticleSim {
     /// their parent's events (they don't emit on their own).
     pub fn step(&mut self, dt: f32, cps: &[V3; 8], emit: bool) {
         self.events.clear();
-        if emit {
-            if !self.started {
-                self.started = true;
-                for ei in 0..self.def.emitters.len() {
-                    for _ in 0..self.def.emitters[ei].instantaneous {
-                        self.spawn(Some(ei), None, cps);
-                    }
-                }
+        // WE-RE-002 1.2: `instanceoverride.rate` scales the system's dt
+        // (emission, ageing and operators alike), at least 0.01.
+        // `self.time` is the scene clock (the caller steps until it reaches
+        // the frame time), so it advances by the UNSCALED dt below.
+        let frame_dt = dt;
+        let dt = dt * self.ov.rate.max(0.01);
+        // WE-RE-002 1.3: age and remove expired particles BEFORE emitting, so
+        // new particles meet their first operator pass at age 0.
+        let mut deaths = Vec::new();
+        self.particles.retain_mut(|p| {
+            p.age += dt;
+            if p.age > p.lifetime {
+                deaths.push(p.pos);
+                return false;
             }
+            true
+        });
+        if emit {
+            // WE-RE-003 1.3 / 1.4 (periodic mode is not used by the corpus).
             for ei in 0..self.def.emitters.len() {
                 let em = &self.def.emitters[ei];
-                let gain = em
-                    .audio
-                    .map(|(mode, s, e, b, x)| self.audio.response(mode, s, e, b, x))
-                    .unwrap_or(1.0);
-                self.emit_acc[ei] += em.rate * self.ov.rate * gain * dt;
-                while self.emit_acc[ei] >= 1.0 {
-                    self.emit_acc[ei] -= 1.0;
+                let room = self.particles.len() < self.max_count();
+                let st = &mut self.emit[ei];
+                let mut n = 0u32;
+                // Gate: while full, delayed or disabled nothing accumulates,
+                // so a pending burst waits for room.
+                if room && st.enabled && st.delay_left <= 0.0 {
+                    let gain = em
+                        .audio
+                        .map(|(mode, s, e, b, x)| self.audio.response(mode, s, e, b, x))
+                        .unwrap_or(1.0);
+                    n = std::mem::take(&mut st.burst_left);
+                    let a = st.acc + em.rate * self.ov.count * gain * dt;
+                    // The burst is SUBTRACTED from the accumulator: after a
+                    // burst of N the continuous stream pauses ~N / rate s.
+                    if a < 1.0 || st.duration_left < 0.0 {
+                        st.acc = a - n as f32;
+                    } else {
+                        let mut k = a.floor();
+                        st.acc = a - (k + n as f32);
+                        if em.one_per_step {
+                            k = k.min(1.0); // surplus discarded
+                        }
+                        n += k as u32;
+                    }
+                }
+                if st.delay_left > 0.0 {
+                    st.delay_left -= dt;
+                } else if st.duration_left > 0.0 {
+                    st.duration_left -= dt;
+                    if st.duration_left <= 0.0 {
+                        st.duration_left = -1.0;
+                        st.enabled = false;
+                    }
+                } else if em.rate <= 0.0 {
+                    // a pure burst emitter fires once, then shuts off
+                    st.enabled = false;
+                }
+                // excess beyond maxcount is lost (spawn checks the room)
+                for _ in 0..n {
                     self.spawn(Some(ei), None, cps);
                 }
             }
@@ -1054,15 +1236,12 @@ impl ParticleSim {
             _ => None,
         };
         let ops = &self.def.ops;
+        // WE-RE-002 1.6: `instanceoverride.speed` scales gravity and the
+        // oscillateposition frequency.
+        let speed = self.ov.speed;
         let def_cps = &self.def.control_points;
-        let mut deaths = Vec::new();
-        self.particles.retain_mut(|p| {
-            p.age += dt;
+        for p in self.particles.iter_mut() {
             let life = p.age / p.lifetime;
-            if life >= 1.0 {
-                deaths.push(p.pos);
-                return false;
-            }
             let (mut alpha, mut size, mut color) = (p.alpha, p.size, p.color);
             // Accumulated, like WE, which moves the particle by the change
             // of the wave each step instead of setting an absolute offset.
@@ -1089,9 +1268,15 @@ impl ParticleSim {
                     }
                 };
                 match *op {
+                    // WE-RE-002 2: the only place velocity moves a particle
+                    // (without `movement`, initial velocity does nothing).
+                    // Position advances with the post-gravity, PRE-drag
+                    // velocity; drag is linear per step.
                     Op::Movement { gravity, drag } => {
-                        p.vel = add(p.vel, scale(gravity, dt));
-                        p.vel = scale(p.vel, (1.0 - drag * dt).max(0.0));
+                        let v = add(p.vel, scale(gravity, dt * speed));
+                        p.pos = add(p.pos, scale(v, dt));
+                        let k = (drag * dt).min(0.999_999_9);
+                        p.vel = scale(v, 1.0 - k);
                     }
                     Op::AlphaFade { fade_in, fade_out } => {
                         if fade_in > 0.0 && life < fade_in {
@@ -1121,7 +1306,10 @@ impl ParticleSim {
                         // is shifted by 2*pi*r in time (WE-RE-001 4.3).
                         let amp = lerp(o.scale.0, o.scale.1, osc_r)
                             * o.envelope.map_or(1.0, |e| e.weight(life));
-                        let step = |age: f32| osc_at(o, age) - osc_at(o, age - dt);
+                        let f = lerp(o.freq.0, o.freq.1, osc_r) * speed;
+                        let phase = lerp(o.phase.0, o.phase.1, osc_r);
+                        let wave = |age: f32| (f * (age + phase)).sin();
+                        let step = |age: f32| wave(age) - wave(age - dt);
                         let y_shift = std::f32::consts::TAU * osc_r;
                         let (d_xz, d_y) = (step(p.age), step(p.age + y_shift));
                         osc_offset = add(osc_offset, scale(mul3([d_xz, d_y, d_xz], mask), amp));
@@ -1193,7 +1381,6 @@ impl ParticleSim {
                 }
             }
             let _ = def_cps;
-            p.pos = add(p.pos, scale(p.vel, dt));
             p.osc_offset = osc_offset;
             if let Some(len) = trail_len {
                 p.trail_t += dt;
@@ -1207,15 +1394,14 @@ impl ParticleSim {
             p.draw_alpha = alpha.clamp(0.0, 1.0);
             p.draw_size = size.max(0.0);
             p.draw_color = color;
-            true
-        });
+        }
         for pos in deaths {
             self.events.push(Event {
                 pos,
                 kind: ChildEvent::Death,
             });
         }
-        self.time += dt;
+        self.time += frame_dt;
     }
 
     /// Builds the vertex stream (4 vertices x `VERTEX_FLOATS` per particle).
@@ -1377,6 +1563,56 @@ mod tests {
             s.step(STEP, &cps, true);
         }
         assert_eq!(s.len(), 50, "capped by maxcount");
+    }
+
+    #[test]
+    fn burst_pauses_the_stream_and_flag_2_caps_one_per_step() {
+        let cps = [[0.0; 3]; 8];
+        // WE-RE-003 1.3: a burst of 10 drives the accumulator to about -10,
+        // so a 10/s stream pauses ~1 s after it.
+        let mut s = sim(json!({
+            "maxcount": 100,
+            "emitter": [{ "name": "boxrandom", "rate": 10, "instantaneous": 10 }],
+            "initializer": [{ "name": "lifetimerandom", "min": 100, "max": 100 }]
+        }));
+        for _ in 0..30 {
+            s.step(STEP, &cps, true); // 0.5 s
+        }
+        assert_eq!(s.len(), 10, "only the burst during the pause");
+        for _ in 0..60 {
+            s.step(STEP, &cps, true); // 1.5 s total
+        }
+        assert!((14..=16).contains(&s.len()), "{}", s.len());
+        // flags 2: at most one rate particle per step (60/s here).
+        let mut s = sim(json!({
+            "maxcount": 1000,
+            "emitter": [{ "name": "boxrandom", "rate": 600, "flags": 2 }],
+            "initializer": [{ "name": "lifetimerandom", "min": 100, "max": 100 }]
+        }));
+        for _ in 0..60 {
+            s.step(STEP, &cps, true);
+        }
+        assert_eq!(s.len(), 60);
+    }
+
+    #[test]
+    fn instance_count_scales_the_rate_not_maxcount() {
+        let def = ParticleDef::parse(&json!({
+            "maxcount": 20,
+            "emitter": [{ "name": "boxrandom", "rate": 100 }],
+            "initializer": [{ "name": "lifetimerandom", "min": 100, "max": 100 }]
+        }));
+        let ov = Overrides::parse(Some(&json!({ "count": 0.5 })));
+        let mut s = ParticleSim::new(def, ov, 1);
+        let cps = [[0.0; 3]; 8];
+        for _ in 0..12 {
+            s.step(STEP, &cps, true); // 0.2 s at 50/s -> 10
+        }
+        assert_eq!(s.len(), 10);
+        for _ in 0..120 {
+            s.step(STEP, &cps, true);
+        }
+        assert_eq!(s.len(), 20, "capacity stays maxcount");
     }
 
     #[test]
