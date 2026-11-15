@@ -3,7 +3,10 @@
 #
 # --update keeps the other rows of results.tsv and re-runs only the given ids.
 # Runs the full comparison over many wallpapers and writes
-#   harness-out/results.tsv   one row per wallpaper (metrics + verdict)
+#   harness-out/runs/<UTC time>_<commit>[-dirty].tsv
+#                             this run's full table, never overwritten
+#                             (compare two with harness/compare_runs.py)
+#   harness-out/results.tsv   copy of the latest run (what score.py reads)
 #   harness-out/report.md     table sorted worst-first + warnings per scene
 # Without ids: every scene wallpaper found in the Steam Workshop folder and the
 # test corpus. WE captures are reused unless --recapture (they are the slow
@@ -110,6 +113,14 @@ wait
 for id in "${done_ids[@]}"; do
     [ -s "$OUT/$id/row.tsv" ] && cat "$OUT/$id/row.tsv" >> "$results"
 done
+# Keep every run: results.tsv is rewritten each time, so versions could not be
+# compared. The name says when and from which commit the renderer was built.
+mkdir -p "$OUT/runs"
+rev=$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || echo nogit)
+[ -n "$(git -C "$REPO_DIR" status --porcelain --untracked-files=no 2>/dev/null)" ] && rev="$rev-dirty"
+run="$OUT/runs/$(date -u +%Y%m%dT%H%M%SZ)_$rev.tsv"
+cp "$results" "$run"
+echo "run saved: $run"
 
 python3 - "$results" "$OUT" <<'EOF'
 import csv, os, sys
