@@ -58,36 +58,77 @@ we_crashed() {
 # WE marks `safemode: true` in its config.json while running and clears it on
 # a clean exit; after a kill the next start shows a "Safe Start" dialog that
 # blocks every -control command. Clear just that flag (what a clean exit
-# does); a one-time backup is kept next to it.
-clear_safe_start() {
+# does) and pin WE's frame-rate limit to WE_FPS (default 60): at 20 fps or
+# less WE sub-steps particle operators and weakens drag (spec WE-RE-002), so
+# captures at the user's own limit (15 here until 2026-11-15) do not show
+# what a 60 fps WE renders. A one-time backup is kept next to it.
+WE_FPS=${WE_FPS:-60}
+prepare_we_config() {
     local cfg="$WE_DIR/config.json"
     [ -f "$cfg" ] || return 0
     [ -f "$cfg.rustpaper-backup" ] || cp "$cfg" "$cfg.rustpaper-backup"
-    python3 - "$cfg" <<'PY'
+    python3 - "$cfg" "$WE_FPS" <<'PY'
 import json, sys
-p = sys.argv[1]
+p, fps = sys.argv[1], int(sys.argv[2])
 j = json.load(open(p, encoding="utf-8-sig"))
 changed = False
 for user in j.values():
     g = user.get("general", {}).get("user") if isinstance(user, dict) else None
-    if isinstance(g, dict) and g.get("safemode"):
+    if not isinstance(g, dict):
+        continue
+    if g.get("safemode"):
         g["safemode"] = False
+        changed = True
+    if g.get("fps") != fps:
+        g["fps"] = fps
         changed = True
 if changed:
     json.dump(j, open(p, "w"), indent="\t")
 PY
 }
 
-# Kills WE (crashed or wedged: windows that never open or close) and starts
-# it again.
+# WE's configured frame-rate limit (what the running WE read at start).
+we_config_fps() {
+    python3 - "$WE_DIR/config.json" <<'PY'
+import json, sys
+j = json.load(open(sys.argv[1], encoding="utf-8-sig"))
+print(next((u["general"]["user"].get("fps", "") for u in j.values()
+            if isinstance(u, dict) and isinstance(u.get("general", {}).get("user"), dict)), ""))
+PY
+}
+
 restart_we() {
     echo "restarting Wallpaper Engine" >&2
     pkill -x launcher.exe 2>/dev/null || true
     pkill -x wallpaperui.exe 2>/dev/null || true
     pkill -x wallpaper64.exe 2>/dev/null || true
     for _ in $(seq 1 30); do pgrep -x wallpaper64.exe >/dev/null || break; sleep 1; done
-    clear_safe_start
+    prepare_we_config
     start_we >/dev/null || die "could not restart Wallpaper Engine"
+    mark_we_fps
+}
+
+mark_we_fps() {
+    mkdir -p "$REPO_DIR/harness-out"
+    echo "$(pgrep -x wallpaper64.exe | head -1) $WE_FPS" > "$REPO_DIR/harness-out/.we_fps"
+}
+
+# Restarts WE unless the running instance was started by the harness with
+# WE_FPS pinned (config changes only apply at start). The marker holds
+# "<pid> <fps>" of the instance the harness started.
+ensure_we_fps() {
+    local marker="$REPO_DIR/harness-out/.we_fps" pid
+    pid=$(pgrep -x wallpaper64.exe | head -1) || true
+    if [ -n "$pid" ] && [ "$(cat "$marker" 2>/dev/null)" = "$pid $WE_FPS" ]; then
+        return 0
+    fi
+    if [ -n "$pid" ]; then
+        restart_we
+    else
+        prepare_we_config
+        start_we >/dev/null || die "could not start Wallpaper Engine"
+        mark_we_fps
+    fi
 }
 
 # we_control <args for wallpaper64.exe...>

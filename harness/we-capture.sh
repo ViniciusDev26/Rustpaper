@@ -34,6 +34,9 @@ open_window() {
 }
 # A crashed WE keeps its process alive behind a crash dialog: restart it.
 we_crashed && restart_we
+# WE at the pinned frame-rate limit (WE_FPS); recorded with the capture.
+ensure_we_fps
+echo "$WE_FPS" > "$out/we_fps.txt"
 if ! open_window; then
     echo "no window for $id: restarting Wallpaper Engine and retrying" >&2
     restart_we

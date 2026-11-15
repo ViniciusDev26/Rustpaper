@@ -163,6 +163,16 @@ captured before `we_pointer.txt`/`we_time.txt` existed, the second particle
 calibration round, then a full re-render and `score.py`. Run it with the
 session unlocked.
 
+## WE frame-rate limit (`WE_FPS`)
+
+Captures run WE with its frame-rate limit pinned to `WE_FPS` (default 60):
+`ensure_we_fps` (lib.sh) writes it into WE's `config.json` and restarts WE
+unless the running instance was started that way (marker
+`harness-out/.we_fps`); each capture records it in `we_fps.txt`. Before
+2026-11-15 captures used the user's own limit, 15 fps, at which WE runs the
+particle operators in two half steps and weakens drag (spec WE-RE-002), so
+particle motion in those captures did not match a 60 fps WE.
+
 ## Batch and report
 
 `batch.sh` runs every `scene` wallpaper of the Steam Workshop folder and the
