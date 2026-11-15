@@ -2268,6 +2268,7 @@ impl SceneRenderer {
         ];
         for s in &mut o.systems {
             s.sim.audio = frame.audio;
+            s.sim.world_xform = s.sim.def.world_space.then_some(o.world);
         }
         // WE-RE-002 1.5 / WE-RE-003 1.5: prewarm (`starttime`) runs at
         // creation in fixed steps of 0.05 s (0.2 s when maxcount >= 500),
@@ -2324,23 +2325,9 @@ impl SceneRenderer {
             } else {
                 sys.sim.vertices(&mut verts);
             }
-            // World-space systems: move the particles by the object's
-            // transform here and draw with an identity model, so their quads
-            // keep their own size and orientation (see ParticleDef::world_space).
-            let world_space = sys.sim.def.world_space && !rope;
-            if world_space {
-                for v in verts.chunks_mut(particles::VERTEX_FLOATS) {
-                    let p = [v[0], v[1], v[2]];
-                    let d = [v[13], v[14], v[15]];
-                    for r in 0..3 {
-                        v[r] = model[r] * p[0]
-                            + model[4 + r] * p[1]
-                            + model[8 + r] * p[2]
-                            + model[12 + r];
-                        v[13 + r] = model[r] * d[0] + model[4 + r] * d[1] + model[8 + r] * d[2];
-                    }
-                }
-            }
+            // World-space systems simulate in scene units: identity model,
+            // so their quads keep their own size and orientation.
+            let world_space = sys.sim.def.world_space;
 
             let mut bound = Vec::new();
             for (unit, src) in &slots {
@@ -2831,7 +2818,10 @@ fn step_systems(systems: &mut [SystemRt], dt: f32, pointer: [f32; 3]) {
     for k in 0..systems.len() {
         let (before, rest) = systems.split_at_mut(k);
         let sys = &mut rest[0];
-        let cps = particles::control_points(&sys.sim.def, pointer);
+        let mut cps = particles::control_points(&sys.sim.def, pointer);
+        if let Some(m) = sys.sim.world_xform {
+            cps = cps.map(|c| particles::xform_point(&m, c));
+        }
         match sys.parent {
             None => sys.sim.step(dt, &cps, true),
             Some((_, ChildEvent::Static, _)) => sys.sim.step(dt, &cps, true),

@@ -122,6 +122,10 @@ fn rotate_axis(v: V3, axis: V3, angle: f32) -> V3 {
     [0, 1, 2].map(|k| v[k] * c + x[k] * s + axis[k] * d * (1.0 - c))
 }
 
+fn dot(a: V3, b: V3) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
 /// Ken Perlin's reference permutation.
 const PERM: [u8; 256] = [
     151, 160, 137, 91, 90, 15, 131, 13, 201, 95, 96, 53, 194, 233, 7, 225, 140, 36, 103, 30, 69,
@@ -153,6 +157,84 @@ fn noise1(t: f32) -> f32 {
     let a = 1.0 - f * f;
     let b = 1.0 - (f - 1.0) * (f - 1.0);
     0.395 * (grad(h0, f) * a.powi(4) + grad(h1, f - 1.0) * b.powi(4))
+}
+
+/// 3-D simplex noise as in Gustavson's reference ("Simplex noise
+/// demystified"): Perlin's permutation, the 12 cube-edge gradients, kernel
+/// (0.6 - d^2)^4, output x32 (signed, mean 0). WE-RE-004 1.4.
+fn simplex3(x: f32, y: f32, z: f32) -> f32 {
+    const G: [[f32; 3]; 12] = [
+        [1.0, 1.0, 0.0],
+        [-1.0, 1.0, 0.0],
+        [1.0, -1.0, 0.0],
+        [-1.0, -1.0, 0.0],
+        [1.0, 0.0, 1.0],
+        [-1.0, 0.0, 1.0],
+        [1.0, 0.0, -1.0],
+        [-1.0, 0.0, -1.0],
+        [0.0, 1.0, 1.0],
+        [0.0, -1.0, 1.0],
+        [0.0, 1.0, -1.0],
+        [0.0, -1.0, -1.0],
+    ];
+    let perm = |i: i32| PERM[(i & 255) as usize] as i32;
+    const F3: f32 = 1.0 / 3.0;
+    const G3: f32 = 1.0 / 6.0;
+    let sk = (x + y + z) * F3;
+    let (i, j, k) = ((x + sk).floor(), (y + sk).floor(), (z + sk).floor());
+    let t = (i + j + k) * G3;
+    let (x0, y0, z0) = (x - (i - t), y - (j - t), z - (k - t));
+    let (i1, j1, k1, i2, j2, k2) = if x0 >= y0 {
+        if y0 >= z0 {
+            (1, 0, 0, 1, 1, 0)
+        } else if x0 >= z0 {
+            (1, 0, 0, 1, 0, 1)
+        } else {
+            (0, 0, 1, 1, 0, 1)
+        }
+    } else if y0 < z0 {
+        (0, 0, 1, 0, 1, 1)
+    } else if x0 < z0 {
+        (0, 1, 0, 0, 1, 1)
+    } else {
+        (0, 1, 0, 1, 1, 0)
+    };
+    let (ii, jj, kk) = (i as i32 & 255, j as i32 & 255, k as i32 & 255);
+    let corner = |di: i32, dj: i32, dk: i32, dx: f32, dy: f32, dz: f32| {
+        let t = 0.6 - dx * dx - dy * dy - dz * dz;
+        if t < 0.0 {
+            return 0.0;
+        }
+        let g = G[(perm(ii + di + perm(jj + dj + perm(kk + dk))) % 12) as usize];
+        let t2 = t * t;
+        t2 * t2 * (g[0] * dx + g[1] * dy + g[2] * dz)
+    };
+    let n0 = corner(0, 0, 0, x0, y0, z0);
+    let n1 = corner(
+        i1,
+        j1,
+        k1,
+        x0 - i1 as f32 + G3,
+        y0 - j1 as f32 + G3,
+        z0 - k1 as f32 + G3,
+    );
+    let n2 = corner(
+        i2,
+        j2,
+        k2,
+        x0 - i2 as f32 + 2.0 * G3,
+        y0 - j2 as f32 + 2.0 * G3,
+        z0 - k2 as f32 + 2.0 * G3,
+    );
+    let n3 = corner(
+        1,
+        1,
+        1,
+        x0 - 1.0 + 3.0 * G3,
+        y0 - 1.0 + 3.0 * G3,
+        z0 - 1.0 + 3.0 * G3,
+    );
+    32.0 * (n0 + n1 + n2 + n3)
 }
 
 /// Deterministic per-particle random in [0,1) for (particle seed, slot).
@@ -382,16 +464,23 @@ enum Op {
         scale: f32,
         timescale: f32,
         mask: V3,
+        /// phasemax - phasemin (phasemin alone is unused)
         phase: f32,
+        envelope: Option<Envelope>,
     },
     Attract {
         cp: usize,
-        origin: V3,
         scale: f32,
         threshold: f32,
+        delete_threshold: f32,
+        flags: u32,
+        envelope: Option<Envelope>,
     },
     Vortex {
         cp: usize,
+        offset: V3,
+        axis: V3,
+        cylinder: bool,
         inner: f32,
         outer: f32,
         speed_inner: f32,
@@ -474,10 +563,12 @@ pub struct ChildRef {
 pub struct ParticleDef {
     pub material: String,
     pub max_count: u32,
-    /// `flags & 1` ("world space"): measured in WE (make_particles.py ws /
-    /// ws0, object scaled "1.5 0.08 1" and rotated): the particle POSITIONS
-    /// still follow the object's transform, but the quads are not scaled or
-    /// rotated by it (round dots instead of squashed slivers, 8.6x the light).
+    /// `flags & 1` ("world space"): measured in WE (make_particles.py ws*,
+    /// object scaled "1.5 0.08 1" and rotated 0.35 rad): spawn positions and
+    /// initial velocities go through the object's transform, then the
+    /// simulation runs in scene units (gravity "0 -300 0" falls straight
+    /// down the screen instead of being squashed) and the quads are not
+    /// scaled or rotated by the object (round dots, 8.6x the light).
     pub world_space: bool,
     /// `flags & 4`: drawn with a perspective camera (depth makes particles
     /// bigger/faster), see `math::scene_perspective`.
@@ -670,22 +761,35 @@ impl ParticleDef {
                         // flag not identified yet (WE-RE-001 open question 1).
                         Op::OscPosition(osc(o, 5.0, 0.0, 10.0), v3(o, "mask", [1.0, 1.0, 0.0]))
                     }
+                    // WE-RE-004: defaults of pixel-unit scenes.
                     "turbulence" => Op::Turbulence {
                         speed: (f(o, "speedmin", 500.0), f(o, "speedmax", 1000.0)),
-                        // 0.005 is the value the editor serializes by default
-                        scale: f(o, "scale", 0.005),
-                        timescale: f(o, "timescale", 1.0),
+                        scale: f(o, "scale", 0.01),
+                        timescale: f(o, "timescale", 20.0),
                         mask: v3(o, "mask", [1.0, 1.0, 0.0]),
-                        phase: f(o, "phasemax", 0.0),
+                        phase: f(o, "phasemax", 0.0) - f(o, "phasemin", 0.0),
+                        envelope: Envelope::parse(o),
                     },
                     "controlpointattract" => Op::Attract {
-                        cp: f(o, "controlpoint", 0.0) as usize,
-                        origin: v3(o, "origin", [0.0; 3]),
-                        scale: f(o, "scale", 100.0),
+                        cp: (f(o, "controlpoint", 0.0) as usize).min(7),
+                        scale: f(o, "scale", 512.0),
                         threshold: f(o, "threshold", 512.0),
+                        delete_threshold: f(o, "deletethreshold", 15.0),
+                        flags: f(o, "flags", 2.0) as u32,
+                        envelope: Envelope::parse(o),
                     },
                     "vortex" => Op::Vortex {
-                        cp: f(o, "controlpoint", 0.0) as usize,
+                        cp: (f(o, "controlpoint", 0.0) as usize).min(7),
+                        offset: v3(o, "offset", [0.0; 3]),
+                        axis: {
+                            let a = v3(o, "axis", [0.0, 0.0, 1.0]);
+                            if a[0] * a[0] + a[1] * a[1] + a[2] * a[2] < 0.001 {
+                                [0.0, 0.0, 1.0]
+                            } else {
+                                norm(a)
+                            }
+                        },
+                        cylinder: (f(o, "flags", 0.0) as u32) & 1 != 0,
                         inner: f(o, "distanceinner", 500.0),
                         outer: f(o, "distanceouter", 650.0),
                         speed_inner: f(o, "speedinner", 2500.0),
@@ -852,6 +956,9 @@ struct Particle {
     frame_phase: f32,
     /// Accumulated child emissions (eventfollow).
     child_acc: f32,
+    /// Position before the last `movement` step (controlpointattract's
+    /// swept deletion test).
+    prev: V3,
     /// ropetrail: recent positions, newest first, and time since the last sample.
     trail: Vec<V3>,
     trail_t: f32,
@@ -882,6 +989,10 @@ pub struct ParticleSim {
     pub events: Vec<Event>,
     /// Current audio spectrum (audio-reactive emitters).
     pub audio: crate::audio::AudioFrame,
+    /// World-space systems (`flags & 1`): the object's transform, set by the
+    /// scene every frame. Spawns go through it; the simulation then runs in
+    /// scene units (see ParticleDef::world_space).
+    pub world_xform: Option<[f32; 16]>,
 }
 
 /// Per-emitter emission state (WE-RE-003 1.2).
@@ -909,10 +1020,6 @@ impl EmitState {
 /// See `spawn`: WE's rendered particle size relative to `sizerandom`.
 const SIZE_SCALE: f32 = 0.5;
 
-/// How fast the turbulence field evolves relative to `timescale` (tuned with
-/// the harness: a fast-changing field makes particles curl in place).
-const TURBULENCE_TIME: f32 = 0.05;
-
 /// Fixed simulation step (seconds).
 pub const STEP: f32 = 1.0 / 60.0;
 
@@ -930,6 +1037,7 @@ impl ParticleSim {
             next_seed: 1,
             events: Vec::new(),
             audio: crate::audio::AudioFrame::default(),
+            world_xform: None,
         }
     }
 
@@ -1040,6 +1148,7 @@ impl ParticleSim {
             seed: self.next_seed,
             frame_phase: 0.0,
             child_acc: 0.0,
+            prev: pos,
             trail: Vec::new(),
             trail_t: 0.0,
             draw_alpha: 1.0,
@@ -1133,6 +1242,11 @@ impl ParticleSim {
         }
         p.color = scale(p.color, self.ov.brightness);
         p.frame_phase = rng.f();
+        if let (Some(m), None) = (self.world_xform, at) {
+            p.pos = xform_point(&m, p.pos);
+            p.vel = xform_dir(&m, p.vel);
+        }
+        p.prev = p.pos;
         p.draw_alpha = p.alpha;
         p.draw_size = p.size;
         p.draw_color = p.color;
@@ -1245,6 +1359,9 @@ impl ParticleSim {
         // WE-RE-002 1.6: `instanceoverride.speed` scales gravity and the
         // oscillateposition frequency.
         let speed = self.ov.speed;
+        // WE-RE-004: turbulence / vortex / attract speeds scale with
+        // instanceoverride.speed, the turbulence timescale with rate.
+        let (ov_speed, ov_rate) = (self.ov.speed, self.ov.rate);
         let def_cps = &self.def.control_points;
         for p in self.particles.iter_mut() {
             let life = p.age / p.lifetime;
@@ -1255,7 +1372,6 @@ impl ParticleSim {
             let osc_r = hash01(p.seed, OSC_RANDOM_SLOT);
             for (k, op) in ops.iter().enumerate() {
                 let slot = (k as u32) * 4;
-                let pick = |i: u32, r: (f32, f32)| lerp(r.0, r.1, hash01(p.seed, slot + i));
                 let osc_at = |o: &Osc, age: f32| {
                     let f = lerp(o.freq.0, o.freq.1, osc_r);
                     let phase = lerp(o.phase.0, o.phase.1, osc_r);
@@ -1279,6 +1395,7 @@ impl ParticleSim {
                     // Position advances with the post-gravity, PRE-drag
                     // velocity; drag is linear per step.
                     Op::Movement { gravity, drag } => {
+                        p.prev = p.pos;
                         let v = add(p.vel, scale(gravity, dt * speed));
                         p.pos = add(p.pos, scale(v, dt));
                         let k = (drag * dt).min(0.999_999_9);
@@ -1320,53 +1437,112 @@ impl ParticleSim {
                         let (d_xz, d_y) = (step(p.age), step(p.age + y_shift));
                         osc_offset = add(osc_offset, scale(mul3([d_xz, d_y, d_xz], mask), amp));
                     }
+                    // WE-RE-004 1: signed simplex noise of the position
+                    // (+ clock along the diagonal) ACCELERATES the particle;
+                    // speed and phase come from the shared per-particle r.
                     Op::Turbulence {
-                        speed,
+                        speed: sp,
                         scale: s,
                         timescale,
                         mask,
                         phase,
+                        envelope,
                     } => {
-                        // Flow field: particles FOLLOW a slowly evolving noise
-                        // vector field at a per-particle constant speed. Matched
-                        // against WE with the harness (Ayanami, 3571376089):
-                        // - accelerating by the noise left young particles still;
-                        // - a curl field draws closed loops/spirals; WE's paths
-                        //   are open and gently wavy, like a plain noise field.
-                        let sp = pick(0, speed);
-                        let t =
-                            time * timescale * TURBULENCE_TIME + phase * hash01(p.seed, slot + 1);
-                        let n = noise_vec(add(scale(p.pos, s), [t, t * 0.7, t * 1.3]));
-                        let flow = norm(n);
-                        p.pos = add(p.pos, scale(mul3(flow, mask), sp * dt));
+                        let w = envelope.map_or(1.0, |e| e.weight(life));
+                        let sp = lerp(sp.0, sp.1, osc_r) * ov_speed * w;
+                        let tau = osc_r * phase + time * timescale * ov_rate;
+                        let q = [0, 1, 2].map(|k| s * (p.pos[k] + tau));
+                        let n = [
+                            if mask[0] != 0.0 {
+                                simplex3(q[0], q[1], q[2])
+                            } else {
+                                0.0
+                            },
+                            if mask[1] != 0.0 {
+                                simplex3(q[2], q[0], q[1])
+                            } else {
+                                0.0
+                            },
+                            if mask[2] != 0.0 {
+                                simplex3(q[1], q[2], q[0])
+                            } else {
+                                0.0
+                            },
+                        ];
+                        p.vel = add(p.vel, scale(mul3(n, mask), sp * dt));
                     }
+                    // WE-RE-004 3: linear pull inside `threshold` (negative
+                    // scale repels), flags 2 = no overshoot, flags 1 = kill
+                    // particles that pass within deletethreshold.
                     Op::Attract {
                         cp,
-                        origin,
                         scale: s,
                         threshold,
+                        delete_threshold,
+                        flags,
+                        envelope,
                     } => {
-                        let target = add(cps[cp.min(7)], origin);
-                        let d = sub(target, p.pos);
-                        let dist = len(d);
-                        if dist < threshold && dist > 1e-3 {
-                            p.vel = add(p.vel, scale(norm(d), s * dt));
+                        let target = cps[cp];
+                        let delta = sub(p.pos, target);
+                        let d = len(delta);
+                        if d > f32::MIN_POSITIVE && d < threshold {
+                            let mut f = (1.0 - d / threshold) * s * ov_speed * dt;
+                            if flags & 2 != 0 && d < f {
+                                f = d;
+                            }
+                            f *= envelope.map_or(1.0, |e| e.weight(life));
+                            p.vel = sub(p.vel, scale(delta, f / d));
+                        }
+                        if flags & 1 != 0 {
+                            let seg = sub(p.pos, p.prev);
+                            let sl = len(seg);
+                            let closest = if sl > 0.0 {
+                                let u = scale(seg, 1.0 / sl);
+                                let t = dot(sub(target, p.prev), u).clamp(0.0, sl);
+                                add(p.prev, scale(u, t))
+                            } else {
+                                p.prev
+                            };
+                            let c = sub(target, closest);
+                            if dot(c, c) <= delete_threshold * delete_threshold {
+                                p.age = p.lifetime;
+                            }
                         }
                     }
+                    // WE-RE-004 2: tangential push s * (n x axis); positive
+                    // speed turns clockwise seen from +axis.
                     Op::Vortex {
                         cp,
+                        offset,
+                        axis,
+                        cylinder,
                         inner,
                         outer,
                         speed_inner,
                         speed_outer,
                     } => {
-                        let c = cps[cp.min(7)];
-                        let d = sub(p.pos, c);
-                        let dist = len([d[0], d[1], 0.0]);
-                        let t = ((dist - inner) / (outer - inner).max(1e-3)).clamp(0.0, 1.0);
-                        let sp = lerp(speed_inner, speed_outer, t);
-                        let tangent = norm([-d[1], d[0], 0.0]);
-                        p.vel = add(p.vel, scale(tangent, sp * dt));
+                        let c = add(cps[cp], offset);
+                        let mut v = sub(p.pos, c);
+                        if cylinder {
+                            v = sub(v, scale(axis, dot(v, axis)));
+                        }
+                        let rho = len(v);
+                        if rho > 0.0 {
+                            let n = scale(v, 1.0 / rho);
+                            let width = outer - inner;
+                            let t = if width != 0.0 {
+                                ((rho - inner) / width).clamp(0.0, 1.0)
+                            } else {
+                                (rho - inner).clamp(0.0, 1.0)
+                            };
+                            let sp = lerp(speed_inner, speed_outer, t) * ov_speed * dt;
+                            let tangent = [
+                                n[1] * axis[2] - n[2] * axis[1],
+                                n[2] * axis[0] - n[0] * axis[2],
+                                n[0] * axis[1] - n[1] * axis[0],
+                            ];
+                            p.vel = add(p.vel, scale(tangent, sp));
+                        }
                     }
                     Op::AngularMovement { force } => {
                         p.ang_vel = add(p.ang_vel, scale(force, dt));
@@ -1518,6 +1694,15 @@ pub const VERTEX_FLOATS: usize = 17;
 
 /// Control point positions in object space: their offsets, or the cursor for
 /// points flagged to follow it (`pointer_local`).
+/// Column-major 4x4 transform of a point / a direction.
+pub fn xform_point(m: &[f32; 16], p: V3) -> V3 {
+    [0, 1, 2].map(|r| m[r] * p[0] + m[4 + r] * p[1] + m[8 + r] * p[2] + m[12 + r])
+}
+
+pub fn xform_dir(m: &[f32; 16], d: V3) -> V3 {
+    [0, 1, 2].map(|r| m[r] * d[0] + m[4 + r] * d[1] + m[8 + r] * d[2])
+}
+
 pub fn control_points(def: &ParticleDef, pointer_local: V3) -> [V3; 8] {
     let mut out = [[0.0f32; 3]; 8];
     for (i, (off, follow)) in def.control_points.iter().enumerate() {
@@ -1569,6 +1754,25 @@ mod tests {
             s.step(STEP, &cps, true);
         }
         assert_eq!(s.len(), 50, "capped by maxcount");
+    }
+
+    #[test]
+    fn turbulence_noise_is_signed_with_zero_mean() {
+        // WE-RE-004 1.4: a drift in the cloud means a biased noise.
+        let (mut sum, mut max, mut n) = (0.0f64, 0.0f32, 0);
+        for i in 0..40 {
+            for j in 0..40 {
+                for k in 0..10 {
+                    let v = simplex3(i as f32 * 0.37, j as f32 * 0.41 - 7.0, k as f32 * 0.53);
+                    sum += v as f64;
+                    max = max.max(v.abs());
+                    n += 1;
+                }
+            }
+        }
+        assert_eq!(simplex3(0.0, 0.0, 0.0), 0.0);
+        assert!((sum / n as f64).abs() < 0.02, "mean {}", sum / n as f64);
+        assert!(max <= 1.0 && max > 0.5, "max {max}");
     }
 
     #[test]
