@@ -27,6 +27,19 @@ Experiments (name -> what varies):
   sprite_s2    the same on an object scaled "2 2 2" (uniform)
   (object-scale experiments: does WE squash / scale the quads with the
   object's scale, or only move the particles?)
+  ov_base      reference for the ov_* runs: velocity 200 right, lifetime 1,
+               rate 10, maxcount 20 (uncapped: about 10 alive)
+  ov_rate      ov_base with instanceoverride rate 0.25: does it slow the whole
+               simulation (WE-RE-002 1.2) or only the emission?
+  ov_speed     ov_base with instanceoverride speed 0.5 (initial velocity?)
+  ov_count     ov_base, lifetime 4 (capped at 20), instanceoverride count
+               0.5: does count scale maxcount or the rate?
+  ov_life      ov_base with instanceoverride lifetime 0.5
+  ov_count2    ov_base (uncapped) with count 0.5: fewer particles if count
+               scales the rate
+  ov_sparse    rate 1, lifetime 3, velocity 200 right: separate dots whose
+               motion the metric can see
+  ov_sparse_rate  ov_sparse with instanceoverride rate 0.25 (slower dots?)
   rare         rate 0.05 (one every 20 s), lifetime 30, size 200, no starttime:
                does WE emit the first particle at once? (capture WE_WARMUP=0)
 """
@@ -86,15 +99,25 @@ elif exp == "oscalpha":
 elif exp == "persp":
     emitter = {"name": "boxrandom", "id": 1, "distancemax": "600 300 600", "rate": 30}
     inits.append({"name": "velocityrandom", "id": 5, "min": "-100 -100 -300", "max": "100 100 300"})
+elif exp.startswith("ov_"):
+    life = {"ov_count": 4, "ov_sparse": 3, "ov_sparse_rate": 3}.get(exp, 1)
+    rate = 1 if exp.startswith("ov_sparse") else 10
+    emitter = {"name": "sphererandom", "id": 1, "distancemax": 0, "distancemin": 0, "rate": rate, "directions": "1 1 0"}
+    inits = [{"name": "lifetimerandom", "id": 2, "min": life, "max": life},
+             {"name": "sizerandom", "id": 3, "min": 40, "max": 40},
+             {"name": "colorrandom", "id": 4, "min": "255 255 255", "max": "255 255 255"},
+             {"name": "velocityrandom", "id": 5, "min": "200 0 0", "max": "200 0 0"}]
 else:
     sys.exit(f"unknown experiment {exp}")
+overrides = {"ov_rate": {"rate": 0.25}, "ov_speed": {"speed": 0.5}, "ov_count": {"count": 0.5}, "ov_count2": {"count": 0.5}, "ov_sparse_rate": {"rate": 0.25},
+             "ov_life": {"lifetime": 0.5}}.get(exp)
 
 renderer = {"name": "sprite", "id": 20}
 if exp in ("trail", "trail_sx", "trail_sy"):
     renderer = {"name": "spritetrail", "id": 20, "length": 0.007}
 elif exp == "trail_long":
     renderer = {"name": "spritetrail", "id": 20, "length": 0.05, "maxlength": 100}
-system = {"maxcount": 400, "starttime": 0 if exp == "rare" else 4, "emitter": [emitter], "initializer": inits, "operator": ops,
+system = {"maxcount": 20 if exp.startswith("ov_") else 400, "starttime": 0 if exp == "rare" else 4, "emitter": [emitter], "initializer": inits, "operator": ops,
           "renderer": [renderer], "material": "materials/calibdot.json"}
 if exp == "persp":
     system["flags"] = 4
@@ -112,7 +135,8 @@ scene = {
     "objects": [{"id": 1, "name": "calib", "particle": "particles/calib.json", "image": None,
                  "origin": f"{W/2} {H/2} 0", "scale": {"trail_sx": "1.5 0.08 1", "trail_sy": "0.2 1 1",
                                                         "sprite_sx": "0.2 1 1", "sprite_s2": "2 2 2"}.get(exp, "1 1 1"),
-                 "angles": "0 0 0", "visible": True}],
+                 "angles": "0 0 0", "visible": True,
+                 **({"instanceoverride": {"id": 2, **overrides}} if overrides else {})}],
 }
 json.dump(scene, open(os.path.join(out, "scene.json"), "w"), indent=1)
 json.dump({"type": "scene", "file": "scene.json", "title": f"particle calib {exp}"},

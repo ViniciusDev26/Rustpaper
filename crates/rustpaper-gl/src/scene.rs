@@ -2269,68 +2269,28 @@ impl SceneRenderer {
         for s in &mut o.systems {
             s.sim.audio = frame.audio;
         }
+        // WE-RE-002 1.5 / WE-RE-003 1.5: prewarm (`starttime`) runs at
+        // creation in fixed steps of 0.05 s (0.2 s when maxcount >= 500),
+        // ceil(starttime / dt) of them; the scene clock then starts at 0.
+        if o.prewarm > 0.0 && o.systems[0].sim.time == 0.0 {
+            let pdt = if o.systems[0].sim.def.max_count >= 500 {
+                0.2
+            } else {
+                0.05
+            };
+            let n = (o.prewarm / pdt).ceil() as usize;
+            for _ in 0..n {
+                step_systems(&mut o.systems, pdt, pointer);
+            }
+            for s in &mut o.systems {
+                s.sim.time = o.prewarm;
+            }
+        }
         let max_steps = ((o.prewarm + 1.0) / particles::STEP) as usize + 120;
         let mut steps = 0;
         while o.systems[0].sim.time + particles::STEP <= target + 1e-4 && steps < max_steps {
             steps += 1;
-            for k in 0..o.systems.len() {
-                let (before, rest) = o.systems.split_at_mut(k);
-                let sys = &mut rest[0];
-                let cps = particles::control_points(&sys.sim.def, pointer);
-                match sys.parent {
-                    None => sys.sim.step(particles::STEP, &cps, true),
-                    Some((_, ChildEvent::Static, _)) => sys.sim.step(particles::STEP, &cps, true),
-                    Some((pi, event, origin)) => {
-                        let parent = &mut before[pi].sim;
-                        match event {
-                            ChildEvent::Static => {}
-                            ChildEvent::Follow => {
-                                let rate = sys.sim.rate();
-                                let mut spawns = Vec::new();
-                                for (pos, acc) in parent.positions_with_acc() {
-                                    *acc += rate * particles::STEP;
-                                    while *acc >= 1.0 {
-                                        *acc -= 1.0;
-                                        spawns.push(pos);
-                                    }
-                                }
-                                for pos in spawns {
-                                    sys.sim.burst_at(
-                                        [
-                                            pos[0] + origin[0],
-                                            pos[1] + origin[1],
-                                            pos[2] + origin[2],
-                                        ],
-                                        1,
-                                        &cps,
-                                    );
-                                }
-                            }
-                            ChildEvent::Spawn | ChildEvent::Death => {
-                                let n = sys.sim.burst_size();
-                                let events: Vec<_> = parent
-                                    .events
-                                    .iter()
-                                    .filter(|e| e.kind == event)
-                                    .map(|e| e.pos)
-                                    .collect();
-                                for pos in events {
-                                    sys.sim.burst_at(
-                                        [
-                                            pos[0] + origin[0],
-                                            pos[1] + origin[1],
-                                            pos[2] + origin[2],
-                                        ],
-                                        n,
-                                        &cps,
-                                    );
-                                }
-                            }
-                        }
-                        sys.sim.step(particles::STEP, &cps, false);
-                    }
-                }
-            }
+            step_systems(&mut o.systems, particles::STEP, pointer);
         }
     }
 
@@ -2839,6 +2799,61 @@ fn hidden_by_ancestor(objects: &[Value]) -> HashSet<i64> {
         }
     }
     out
+}
+
+/// One simulation step of `dt` for an object's systems; children run after
+/// their parent and spawn from its live particles / events.
+fn step_systems(systems: &mut [SystemRt], dt: f32, pointer: [f32; 3]) {
+    for k in 0..systems.len() {
+        let (before, rest) = systems.split_at_mut(k);
+        let sys = &mut rest[0];
+        let cps = particles::control_points(&sys.sim.def, pointer);
+        match sys.parent {
+            None => sys.sim.step(dt, &cps, true),
+            Some((_, ChildEvent::Static, _)) => sys.sim.step(dt, &cps, true),
+            Some((pi, event, origin)) => {
+                let parent = &mut before[pi].sim;
+                match event {
+                    ChildEvent::Static => {}
+                    ChildEvent::Follow => {
+                        let rate = sys.sim.rate();
+                        let mut spawns = Vec::new();
+                        for (pos, acc) in parent.positions_with_acc() {
+                            *acc += rate * dt;
+                            while *acc >= 1.0 {
+                                *acc -= 1.0;
+                                spawns.push(pos);
+                            }
+                        }
+                        for pos in spawns {
+                            sys.sim.burst_at(
+                                [pos[0] + origin[0], pos[1] + origin[1], pos[2] + origin[2]],
+                                1,
+                                &cps,
+                            );
+                        }
+                    }
+                    ChildEvent::Spawn | ChildEvent::Death => {
+                        let n = sys.sim.burst_size();
+                        let events: Vec<_> = parent
+                            .events
+                            .iter()
+                            .filter(|e| e.kind == event)
+                            .map(|e| e.pos)
+                            .collect();
+                        for pos in events {
+                            sys.sim.burst_at(
+                                [pos[0] + origin[0], pos[1] + origin[1], pos[2] + origin[2]],
+                                n,
+                                &cps,
+                            );
+                        }
+                    }
+                }
+                sys.sim.step(dt, &cps, false);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

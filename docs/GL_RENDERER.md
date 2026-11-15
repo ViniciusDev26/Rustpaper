@@ -132,7 +132,17 @@ quad, the trail (`TRAILRENDERER`) or the sprite-sheet frame (`SPRITESHEET`,
   1444077782's gray smoke is white). Children without the override broke
   Elden Ring 3276312017 (a full-size ember glow band: 0.979 -> 0.992,
   energy ratio 1.66 -> 1.03) and Early Morning Forest 1959836574 (leaves
-  at count 0.5 with full-count children: energy 1.48 -> 1.34). Sprite sheets come from the `TEXS` block
+  at count 0.5 with full-count children: energy 1.48 -> 1.34).
+  Measured one at a time in WE (`make_particles.py ov_*`): `rate` scales
+  the whole system's dt (emission, ageing, motion: rate 0.25 cut the motion
+  of sparse dots 0.047 -> 0.019 in WE; the scene clock still advances by
+  the unscaled dt), `count` scales the emission rate but NOT `maxcount`
+  (count 0.5 halves an uncapped stream, a capped one stays at maxcount),
+  `speed` scales the initial velocity, `lifetime` the lifetime.
+  Prewarm runs in fixed 0.05 s steps (0.2 s from maxcount 500), and
+  emission follows WE's accumulator: a burst is subtracted from it (the
+  stream pauses ~N / rate s after a burst of N), emitter `flags` 2 = at
+  most one particle per step, `delay` / `duration`. Sprite sheets come from the `TEXS` block
   inside the .tex (Workshop) or the `.tex-json` (base assets).
 - Deterministic: seeded RNG + fixed 1/60 s steps; going back in time replays.
 - Calibrated against WE with the harness (each choice is commented in code):
