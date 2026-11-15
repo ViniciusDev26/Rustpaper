@@ -110,6 +110,14 @@ for id in "${ids[@]}"; do
     done_ids+=("$id")
 done
 wait
+# The driver flake strikes in bursts while many renders share the GPU, so the
+# immediate retry above often dies too: re-render failed scenes one at a time.
+for id in "${done_ids[@]}"; do
+    if grep -q $'\tERROR\t' "$OUT/$id/row.tsv" 2>/dev/null; then
+        echo "== $id: retrying alone"
+        render_and_compare "$id" "$(wallpaper_dir "$id")" "$OUT/$id" "$(cut -f8 "$OUT/$id/row.tsv")"
+    fi
+done
 for id in "${done_ids[@]}"; do
     [ -s "$OUT/$id/row.tsv" ] && cat "$OUT/$id/row.tsv" >> "$results"
 done
