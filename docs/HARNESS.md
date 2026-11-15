@@ -7,6 +7,7 @@ Fidelity is measured against the real WE (running under Proton), not by eye.
 ./harness/we-capture.sh <id> <out dir> [secs]  # real WE -> we.png + we.mp4
 ./harness/compare.sh rp.mp4 we.mp4 <out dir>   # metrics + sheet + side-by-side
 ./harness/batch.sh [--recapture] [--update] [id...]  # every scene -> results.tsv + report.md
+./harness/compare_runs.py                            # what changed since the previous run
 ./harness/download-testset.sh                  # the 100-wallpaper test corpus
 ```
 
@@ -169,6 +170,14 @@ test corpus (or the ids given). WE captures are cached in
 `harness-out/<id>/we.mp4` (`--recapture` redoes them). Output:
 `harness-out/results.tsv` and `harness-out/report.md` (worst first, with each
 scene's unsupported features / warnings).
+
+Every run is also saved as `harness-out/runs/<UTC time>_<commit>[-dirty].tsv`
+(the full table after the run, `--update` runs included), never overwritten;
+`results.tsv` is a copy of the latest. `-dirty` means the working tree had
+uncommitted changes, so the renderer may differ from that commit. Compare versions with
+`harness/compare_runs.py [old.tsv [new.tsv]]` (default: the two most recent
+runs): score per SceneScript group, verdict flips, mean SSIM moves
+(`--min 0.005`), scenes only in one run. `score.py run.tsv` scores an old run.
 
 ## Test corpus (`harness/testset.tsv`)
 
