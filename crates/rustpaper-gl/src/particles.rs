@@ -474,6 +474,11 @@ pub struct ChildRef {
 pub struct ParticleDef {
     pub material: String,
     pub max_count: u32,
+    /// `flags & 1` ("world space"): measured in WE (make_particles.py ws /
+    /// ws0, object scaled "1.5 0.08 1" and rotated): the particle POSITIONS
+    /// still follow the object's transform, but the quads are not scaled or
+    /// rotated by it (round dots instead of squashed slivers, 8.6x the light).
+    pub world_space: bool,
     /// `flags & 4`: drawn with a perspective camera (depth makes particles
     /// bigger/faster), see `math::scene_perspective`.
     pub perspective: bool,
@@ -765,6 +770,7 @@ impl ParticleDef {
                 .to_string(),
             max_count: f(j, "maxcount", 100.0).max(0.0) as u32,
             perspective: (f(j, "flags", 0.0) as u32) & 4 != 0,
+            world_space: (f(j, "flags", 0.0) as u32) & 1 != 0,
             start_time: f(j, "starttime", 0.0).max(0.0),
             emitters,
             inits,
