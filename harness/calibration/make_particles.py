@@ -44,6 +44,13 @@ Experiments (name -> what varies):
                and rotated 0.35 rad; ws sets system flags 1 (world space):
                does WE squash the simulation with the object or only the
                spawn positions?
+  ws_grav / ws0_grav   point emitter, gravity "0 -300 0", same object
+  ws_turb / ws0_turb   point emitter, turbulence speed 300, same object
+               (do operators act in scene units in world space?)
+  drag         sparse dots, velocity 400 right, drag 1, lifetime 3: does WE
+               weaken drag (and turbulence) by its step factor h < dt?
+  turb_ts0 / turb_ts200   turb with timescale 0 (static field) / 200:
+               isolates the clock that scrolls the noise (WE-RE-004 1.3)
   rare         rate 0.05 (one every 20 s), lifetime 30, size 200, no starttime:
                does WE emit the first particle at once? (capture WE_WARMUP=0)
 """
@@ -71,11 +78,13 @@ elif exp == "tvr_offm05":
     inits.append(tvr(offset=-0.5))
 elif exp == "tvr_scale01":
     inits.append(tvr(scale=0.1))
-elif exp in ("turb", "turb_mask_x"):
+elif exp in ("turb", "turb_mask_x") or exp.startswith("turb_ts"):
     emitter = emit_cloud
     t = {"name": "turbulence", "id": 11, "speedmin": 100, "speedmax": 100, "scale": 0.01}
     if exp == "turb_mask_x":
         t["mask"] = "1 0 0"
+    if exp.startswith("turb_ts"):
+        t["timescale"] = int(exp[7:])
     ops.append(t)
 elif exp == "vel":
     inits.append({"name": "velocityrandom", "id": 5, "min": "-100 -100 0", "max": "100 100 0"})
@@ -107,6 +116,21 @@ elif exp in ("ws", "ws0"):
     emitter = {"name": "sphererandom", "id": 1, "distancemin": 200, "distancemax": 200, "rate": 30, "directions": "1 1 0"}
     inits = list(base_init) + [{"name": "velocityrandom", "id": 5, "min": "-200 -200 0", "max": "200 200 0"}]
     inits[0] = {"name": "lifetimerandom", "id": 2, "min": 1, "max": 1}
+elif exp in ("ws_grav", "ws0_grav", "ws_turb", "ws0_turb"):
+    inits = list(base_init)
+    inits[0] = {"name": "lifetimerandom", "id": 2, "min": 1.5, "max": 1.5}
+    if exp.endswith("grav"):
+        ops = [{"name": "movement", "id": 10, "gravity": "0 -300 0"}]
+    else:
+        ops = [{"name": "movement", "id": 10, "gravity": "0 0 0"},
+               {"name": "turbulence", "id": 11, "speedmin": 300, "speedmax": 300, "scale": 0.01}]
+elif exp == "drag":
+    emitter = {"name": "sphererandom", "id": 1, "distancemax": 0, "distancemin": 0, "rate": 1, "directions": "1 1 0"}
+    inits = [{"name": "lifetimerandom", "id": 2, "min": 3, "max": 3},
+             {"name": "sizerandom", "id": 3, "min": 40, "max": 40},
+             {"name": "colorrandom", "id": 4, "min": "255 255 255", "max": "255 255 255"},
+             {"name": "velocityrandom", "id": 5, "min": "400 0 0", "max": "400 0 0"}]
+    ops = [{"name": "movement", "id": 10, "gravity": "0 0 0", "drag": 1}]
 elif exp.startswith("ov_"):
     life = {"ov_count": 4, "ov_sparse": 3, "ov_sparse_rate": 3}.get(exp, 1)
     rate = 1 if exp.startswith("ov_sparse") else 10
@@ -129,7 +153,7 @@ system = {"maxcount": 20 if exp.startswith("ov_") else 400, "starttime": 0 if ex
           "renderer": [renderer], "material": "materials/calibdot.json"}
 if exp == "persp":
     system["flags"] = 4
-if exp == "ws":
+if exp in ("ws", "ws_grav", "ws_turb"):
     system["flags"] = 1
 
 os.makedirs(os.path.join(out, "particles"), exist_ok=True)
@@ -145,8 +169,8 @@ scene = {
     "objects": [{"id": 1, "name": "calib", "particle": "particles/calib.json", "image": None,
                  "origin": f"{W/2} {H/2} 0", "scale": {"trail_sx": "1.5 0.08 1", "trail_sy": "0.2 1 1",
                                                         "sprite_sx": "0.2 1 1", "sprite_s2": "2 2 2",
-                                                        "ws": "1.5 0.08 1", "ws0": "1.5 0.08 1"}.get(exp, "1 1 1"),
-                 "angles": "0 0 0.35" if exp in ("ws", "ws0") else "0 0 0", "visible": True,
+                                                        **{k: "1.5 0.08 1" for k in ("ws", "ws0", "ws_grav", "ws0_grav", "ws_turb", "ws0_turb")}}.get(exp, "1 1 1"),
+                 "angles": "0 0 0.35" if exp.startswith("ws") else "0 0 0", "visible": True,
                  **({"instanceoverride": {"id": 2, **overrides}} if overrides else {})}],
 }
 json.dump(scene, open(os.path.join(out, "scene.json"), "w"), indent=1)
