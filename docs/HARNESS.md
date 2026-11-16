@@ -212,6 +212,20 @@ motion. Calibrating one feature at a time is what found the real
 turbulentvelocityrandom model (GL_RENDERER.md). Dark captures are allowed
 there (`WE_ALLOW_DARK=1`).
 
+### Isolating objects of a real scene (`harness/calibration/isolate.sh`)
+
+`isolate.sh <workshop id> <object id>...` copies a scene (unpacking its
+`scene.pkg`), keeps only the given objects on a black background, captures
+it in WE, renders it and prints `measure_particles.py` statistics. Copy the
+resulting folder (`harness-out/calib/iso_*`, without `out/`), edit its
+particle JSON (drop an operator, the children, the overrides...) and capture
+again to find which ingredient differs from WE: that is how the size
+override's link to `sizechange` was found.
+
+Calibration captures record WE's frame-rate limit (`we_fps.txt`);
+`run_particles.sh` and `isolate.sh` recapture when it does not match
+`WE_FPS` (captures at 15 fps had fitted a wrong turbulence model).
+
 ## Audio calibration (`harness/calibration/run_audio.sh`)
 
 `make_audio.py` builds a scene whose shader draws `g_AudioSpectrum64Left`,

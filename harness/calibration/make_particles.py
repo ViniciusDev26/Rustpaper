@@ -51,6 +51,13 @@ Experiments (name -> what varies):
                weaken drag (and turbulence) by its step factor h < dt?
   turb_ts0 / turb_ts200   turb with timescale 0 (static field) / 200:
                isolates the clock that scrolls the noise (WE-RE-004 1.3)
+  ov_size / ov_size_trail   instanceoverride size 0.5 on ov_base / on the
+               trail experiment (does WE scale sizes linearly?)
+  trail_4k / sprite_4k   trail / ov_base in a 3840x2160 scene with every
+               length doubled: identical on screen if WE works in scene units
+  sc_none / sc_start07 / sc_end07 / sc_full   still box cloud, lifetime
+               4, size 60: no sizechange / starttime 0.7 / endtime 0.7 /
+               defaults. Which part of the life does sizechange shrink?
   rare         rate 0.05 (one every 20 s), lifetime 30, size 200, no starttime:
                does WE emit the first particle at once? (capture WE_WARMUP=0)
 """
@@ -88,7 +95,7 @@ elif exp in ("turb", "turb_mask_x") or exp.startswith("turb_ts"):
     ops.append(t)
 elif exp == "vel":
     inits.append({"name": "velocityrandom", "id": 5, "min": "-100 -100 0", "max": "100 100 0"})
-elif exp in ("trail", "trail_long", "trail_sx", "trail_sy"):
+elif exp in ("trail", "trail_long", "trail_sx", "trail_sy", "ov_size_trail", "trail_4k"):
     inits.append({"name": "velocityrandom", "id": 5, "min": "-50 200 0", "max": "50 200 0"})
 elif exp == "size":
     emitter = {"name": "sphererandom", "id": 1, "distancemax": 0, "distancemin": 0, "rate": 1, "instantaneous": 1}
@@ -131,7 +138,22 @@ elif exp == "drag":
              {"name": "colorrandom", "id": 4, "min": "255 255 255", "max": "255 255 255"},
              {"name": "velocityrandom", "id": 5, "min": "400 0 0", "max": "400 0 0"}]
     ops = [{"name": "movement", "id": 10, "gravity": "0 0 0", "drag": 1}]
-elif exp.startswith("ov_"):
+elif exp.startswith("sc_"):
+    emitter = emit_cloud
+    inits = [{"name": "lifetimerandom", "id": 2, "min": 4, "max": 4},
+             {"name": "sizerandom", "id": 3, "min": 60, "max": 60},
+             {"name": "colorrandom", "id": 4, "min": "255 255 255", "max": "255 255 255"}]
+    sc = {"sc_start07": {"starttime": 0.7}, "sc_end07": {"endtime": 0.7}, "sc_full": {},
+          "sc_start07_ov": {"starttime": 0.7}, "sc_none_ov": None}.get(exp)
+    if sc is not None:
+        ops.append({"name": "sizechange", "id": 12, **sc})
+    # same question for the other overrides and change / oscillate operators
+    extra = {"ac_ov": {"name": "alphachange", "id": 12, "starttime": 0.7},
+             "oa_ov": {"name": "oscillatealpha", "id": 12, "scalemin": 0.5},
+             "os_ov": {"name": "oscillatesize", "id": 12, "scalemin": 0.5}}.get(exp[3:])
+    if extra:
+        ops.append(extra)
+elif exp.startswith("ov_") or exp == "sprite_4k":
     life = {"ov_count": 4, "ov_sparse": 3, "ov_sparse_rate": 3}.get(exp, 1)
     rate = 1 if exp.startswith("ov_sparse") else 10
     emitter = {"name": "sphererandom", "id": 1, "distancemax": 0, "distancemin": 0, "rate": rate, "directions": "1 1 0"}
@@ -142,10 +164,13 @@ elif exp.startswith("ov_"):
 else:
     sys.exit(f"unknown experiment {exp}")
 overrides = {"ov_rate": {"rate": 0.25}, "ov_speed": {"speed": 0.5}, "ov_count": {"count": 0.5}, "ov_count2": {"count": 0.5}, "ov_sparse_rate": {"rate": 0.25},
-             "ov_life": {"lifetime": 0.5}}.get(exp)
+             "ov_life": {"lifetime": 0.5},
+             "ov_size": {"size": 0.5}, "ov_size_trail": {"size": 0.5},
+             "sc_start07_ov": {"size": 0.5}, "sc_none_ov": {"size": 0.5},
+             "sc_ac_ov": {"alpha": 0.5}, "sc_a_ov": {"alpha": 0.5}, "sc_oa_ov": {"alpha": 0.5}, "sc_os_ov": {"size": 0.5}}.get(exp)
 
 renderer = {"name": "sprite", "id": 20}
-if exp in ("trail", "trail_sx", "trail_sy"):
+if exp in ("trail", "trail_sx", "trail_sy", "ov_size_trail", "trail_4k"):
     renderer = {"name": "spritetrail", "id": 20, "length": 0.007}
 elif exp == "trail_long":
     renderer = {"name": "spritetrail", "id": 20, "length": 0.05, "maxlength": 100}
@@ -155,6 +180,18 @@ if exp == "persp":
     system["flags"] = 4
 if exp in ("ws", "ws_grav", "ws_turb"):
     system["flags"] = 1
+
+if exp.endswith("_4k"):
+    W, H = 3840, 1080 * 2
+    def dbl(v):
+        return " ".join(str(2 * float(x)) for x in v.split()) if isinstance(v, str) else 2 * v
+    for i in system["initializer"]:
+        if i["name"] in ("sizerandom", "velocityrandom"):
+            i["min"], i["max"] = dbl(i["min"]), dbl(i["max"])
+    for e in system["emitter"]:
+        for k in ("distancemax", "distancemin"):
+            if k in e:
+                e[k] = dbl(e[k])
 
 os.makedirs(os.path.join(out, "particles"), exist_ok=True)
 os.makedirs(os.path.join(out, "materials"), exist_ok=True)
