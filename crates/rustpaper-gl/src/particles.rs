@@ -1362,6 +1362,7 @@ impl ParticleSim {
         // WE-RE-004: turbulence / vortex / attract speeds scale with
         // instanceoverride.speed, the turbulence timescale with rate.
         let (ov_speed, ov_rate) = (self.ov.speed, self.ov.rate);
+        let ov_size = self.ov.size;
         let def_cps = &self.def.control_points;
         for p in self.particles.iter_mut() {
             let life = p.age / p.lifetime;
@@ -1409,7 +1410,10 @@ impl ParticleSim {
                             alpha *= 1.0 - (life - fade_out) / (1.0 - fade_out);
                         }
                     }
-                    Op::SizeChange(r) => size *= r.at(life),
+                    // instanceoverride.size also scales sizechange's values
+                    // (calibration sc_start07_ov: size 0.5 -> 1/16 of the
+                    // light, not 1/4; WE 0.101, linear-only 0.414).
+                    Op::SizeChange(r) => size *= r.at(life) * ov_size,
                     Op::AlphaChange(r) => alpha *= r.at(life),
                     Op::ColorChange {
                         start,

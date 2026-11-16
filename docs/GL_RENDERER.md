@@ -138,7 +138,12 @@ quad, the trail (`TRAILRENDERER`) or the sprite-sheet frame (`SPRITESHEET`,
   of sparse dots 0.047 -> 0.019 in WE; the scene clock still advances by
   the unscaled dt), `count` scales the emission rate but NOT `maxcount`
   (count 0.5 halves an uncapped stream, a capped one stays at maxcount),
-  `speed` scales the initial velocity, `lifetime` the lifetime.
+  `speed` scales the initial velocity, `lifetime` the lifetime, `size`
+  the size AND sizechange's values (so it enters squared while sizechange
+  runs: calibration `sc_start07_ov`, size 0.5 -> WE 0.101 of light vs 0.414
+  if linear; found isolating the Ember preset of Sunset 1375031246, whose
+  embers were 4x too bright). `alpha` does not touch alphachange /
+  oscillatealpha and `size` does not touch oscillatesize (`sc_*_ov`).
   Prewarm runs in fixed 0.05 s steps (0.2 s from maxcount 500), and
   emission follows WE's accumulator: a burst is subtracted from it (the
   stream pauses ~N / rate s after a burst of N), emitter `flags` 2 = at
