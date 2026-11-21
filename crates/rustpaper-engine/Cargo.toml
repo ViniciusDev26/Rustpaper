@@ -1,19 +1,20 @@
 [package]
 name = "rustpaper-engine"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
-# Binário nomeado rustpaper (mantém o caminho de execução conhecido:
-# target/debug/rustpaper).
+# Binary named rustpaper (keeps the known path: target/debug/rustpaper).
 [[bin]]
 name = "rustpaper"
 path = "src/main.rs"
 
 [dependencies]
 rustpaper-core = { path = "../rustpaper-core" }
-# feature `spirv`: aceitar ShaderSource::SpirV (shaders do WE compilados via glslang).
+# feature `spirv`: accept ShaderSource::SpirV (WE shaders compiled with glslang).
 wgpu = { version = "29.0.3", features = ["spirv"] }
-# reflexão do SPIR-V (layout do bloco de uniforms + bindings) — mesma versão do wgpu.
+# SPIR-V reflection (uniform block layout + bindings), same version as wgpu.
 naga = { version = "29.0.3", features = ["spv-in"] }
 serde_json = "1.0.150"
 pollster = "0.4.0"
@@ -29,6 +30,6 @@ rustpaper-gl = { path = "../rustpaper-gl" }
 wayland-egl = "0.32"
 wayland-protocols = { version = "0.32", features = ["client"] }
 
-# Só pros examples (ex.: render_material grava PNG pra inspeção offscreen).
+# Examples only (render_material writes a PNG for offscreen inspection).
 [dev-dependencies]
 image = { version = "0.25.10", default-features = false, features = ["png"] }
