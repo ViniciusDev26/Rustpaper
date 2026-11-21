@@ -106,6 +106,12 @@ pub fn translate(
 
 /// OpenGL flavour of the WE dialect prelude (used by `rustpaper-gl`).
 ///
+/// `clamp` follows HLSL: min(max(x, lo), hi), defined even when lo > hi. GLSL
+/// leaves that case undefined and NVIDIA returns lo: the workshop bokeh
+/// 2798319181 writes `clamp(0, 0.15, depth)`, which gave depth 0.15 for an
+/// in-focus pixel and blurred the whole layer (こきん 3146507587: film grain
+/// detail 1.69 -> 0.17 in its last pass; WE keeps it sharp).
+///
 /// Much closer to what the WE files expect than the Vulkan path: samplers stay
 /// COMBINED (`sampler2D`), uniforms stay loose (no block, no bindings) and are
 /// set by name at runtime. Only the HLSL-isms and legacy GLSL keywords need macros.
@@ -124,6 +130,7 @@ const GL_PRELUDE: &str = "#version 330 core\n\
     #define int3 ivec3\n\
     #define int4 ivec4\n\
     #define saturate(x) (clamp(x, 0.0, 1.0))\n\
+    #define clamp(x, lo, hi) (min(max(x, lo), hi))\n\
     #define texSample2D texture\n\
     #define texSample2DLod textureLod\n\
     #define texture2D texture\n\

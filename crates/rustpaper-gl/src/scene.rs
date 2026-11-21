@@ -223,6 +223,17 @@ pub struct SceneRenderer {
     shake: Option<(f32, f32, f32)>,
     /// Scene time of the frame being rendered (camera shake).
     time: f32,
+    /// Seconds since the previous rendered frame (frame-rate dependent
+    /// effects, see `WE_REFERENCE_FPS`).
+    frame_dt: f32,
+    /// `general.hdr`: the scene targets are RGBA16F.
+    scene_hdr: bool,
+    /// Screen mode (`set_output_size`): clip-space transform that
+    /// maps the cover-cropped part of the scene onto a screen-size target.
+    crop: Option<Mat4>,
+    /// Set by `composite_layer` when its result is already in screen space
+    /// (last effect pass drawn straight at screen size).
+    screen_space_result: bool,
     layers: Vec<Layer>,
     particle_objs: Vec<ParticleObject>,
     texts: Vec<TextRt>,
@@ -393,6 +404,10 @@ impl SceneRenderer {
             composites: HashMap::new(),
             pool: HashMap::new(),
             unique_fbos: HashMap::new(),
+            frame_dt: 1.0 / WE_REFERENCE_FPS,
+            scene_hdr: hdr,
+            crop: None,
+            screen_space_result: false,
             last_render: None,
             warnings: Vec::new(),
             pixelated: false,
@@ -875,6 +890,10 @@ impl SceneRenderer {
                 .iter()
                 .find(|(i, _)| *i == unit)
                 .map(|(_, n)| n.clone());
+            // Effect binds name the effect's own render targets (`fbos`:
+            // `_coc`, `_downscaled1`...) or `previous`, never a .tex file:
+            // resolved per frame in `named_texture`, nothing to preload.
+            let from_bind = bound.is_some();
             let source = match (bound, explicit) {
                 (Some(b), _) if b == "previous" => Some(TexSource::Previous),
                 (Some(b), _) => Some(TexSource::Named(b)),
@@ -893,6 +912,7 @@ impl SceneRenderer {
                 .or_else(|| (is_effect && unit == 0).then_some(TexSource::Previous));
             if let Some(src) = source {
                 if let TexSource::Named(n) = &src
+                    && !from_bind
                     && !n.starts_with("_rt_")
                     && !n.starts_with("_alias_")
                     && !n.starts_with("_text_")
@@ -1063,6 +1083,7 @@ impl SceneRenderer {
             gl.disable(glow::CULL_FACE);
         }
         self.update_texts(gl);
+        self.frame_dt = (frame.time - self.time).clamp(0.0, 0.5);
         self.time = frame.time;
         if let Some(p) = &mut self.parallax {
             p.follow(frame.pointer, frame.time);
@@ -1165,20 +1186,32 @@ impl SceneRenderer {
     fn view_proj(&self) -> Mat4 {
         let (w, h) = (self.width as f32, self.height as f32);
         let mut ortho = math::scene_ortho(w, h);
-        if let Some((amp, speed, rough)) = self.shake {
-            // Smooth wandering offset. Measured on Ice Princess 2800248288
-            // (amplitude 0.35, speed 1) by tracking WE's whole-image shift
-            // over 8 s: near-sinusoids of +-4.1 px (x, period ~6 s) and
-            // +-4.4 px (y, ~4.8 s) on a 1920 screen = 0.0064 * amplitude of
-            // the width. Roughness adds a faster component (not measured).
-            let t = self.time * speed;
-            let n = |f: f32, a: f32| {
-                ((t * f + a).sin() + (t * f * 2.7 + a * 1.9).sin() * 0.4 * rough)
-                    / (1.0 + 0.4 * rough)
-            };
-            let k = amp * 0.0064;
+        if let Some(c) = &self.crop {
+            ortho = math::mul(c, &ortho);
+        }
+        if let Some((amp, speed, _roughness)) = self.shake {
+            // One sinusoid per axis, deterministic in scene time. Calibrated
+            // in isolation with harness/calibration/run_shake.sh: a scene
+            // whose pixels encode their coordinates, the camera offset
+            // tracked per frame in WE, 8 runs of amplitude 0.25-1, speed
+            // 0.3-2, roughness 0-1. This model correlates with WE's path at
+            // 0.95-1.00 on every run and axis.
+            // - Frequency grows with speed SQUARED: fitting the frequency with
+            //   free phase gave 1.0 x speed^2 rad/s in x and 1.33 x speed^2 in
+            //   y at speeds 1 / 1.5 / 2. Slower runs are shorter than one
+            //   period and were only checked through the joint fit.
+            // - Phases come from the joint fit, which also found a 0.18 s
+            //   clock delay. That delay is the harness's own clock offset,
+            //   now applied by capture_time (WE_CLOCK_DELAY 0.25 s, measured
+            //   on shimmer too); the phases are re-based onto that clock
+            //   (shift by speed^2 x 0.07 s: below the fit's precision).
+            // - Amplitude: linear. 0.0056 x amplitude of the width; WE/RP std
+            //   ratio is 1.04-1.17 over 4 runs at 0.00525, median 1.07.
+            // - Roughness changes nothing in WE (0 vs 1: std 3.53 vs 3.54 px).
+            let t = (self.time + 0.07) * speed * speed;
+            let k = amp * 0.0056 * w;
             let shake = math::model(
-                [n(1.05, 0.3) * k * w, n(1.31, 2.1) * k * w, 0.0],
+                [-(t + 1.34).sin() * k, (1.33 * t + 2.88).sin() * k, 0.0],
                 0.0,
                 [1.0; 3],
             );
@@ -1213,6 +1246,78 @@ impl SceneRenderer {
     }
 
     /// The finished frame (scene resolution).
+    /// Draws a scene larger than the screen straight at screen size, like WE:
+    /// the cover crop is built into the projection, each layer's last effect
+    /// pass is drawn directly in screen space (never resampled again) and
+    /// intermediates stay at texture / layer resolution. Calibrated with
+    /// harness/calibration/run_grain.sh, run_minify.sh, make_compose.py (see
+    /// GL_RENDERER.md "screen mode"). Gate 2026-11-21: +4 PASS (Forest
+    /// 1959836574, Rei 3835770368, 3835806837, 3835761947), no regression.
+    pub fn set_output_size(&mut self, gl: &glow::Context, width: u32, height: u32) {
+        let (sw, sh) = (self.width, self.height);
+        // Compose / fullscreen passthrough layers render the scene behind
+        // them into a SCENE-sized target: not supported in screen mode yet
+        // (rain 1444077782, City 3030184887, Lofi Cafe 2370927443 broke).
+        if width >= sw && height >= sh {
+            return;
+        }
+        let (x0, y0, x1, y1) = crate::gpu::cover_rect(sw, sh, width, height);
+        // Compose / fullscreen passthrough layers keep their LAYER-space
+        // target: their effects work in layer UV (3146507587's compose 205
+        // draws bars limited to v 0..0.47 of its scaled layer; in screen
+        // space they shifted, mean SSIM 0.974 -> 0.868). That is only right
+        // while the cover crop is the identity (a scene of the screen's
+        // aspect); other scenes with them stay on the scene-size path (rain
+        // 1444077782 16:10, City 3030184887, Lofi Cafe 2370927443 broke).
+        // Refraction particles lose about half their motion at screen
+        // resolution (3576135309's rain drops: harness energy 0.68 in screen
+        // mode vs 1.31 on the scene-size path, WE in between; the cause is
+        // not isolated yet, see GL_RENDERER.md): such scenes stay on the
+        // scene-size path.
+        let refract = self.particle_objs.iter().any(|o| {
+            o.systems
+                .iter()
+                .any(|s| s.pass.program_key.contains("REFRACT=1"))
+        });
+        if refract {
+            return;
+        }
+        let identity = x0 == 0 && y0 == 0 && x1 == sw as i32 && y1 == sh as i32;
+        // ...and PARTIAL compose layers (smaller than the scene) lose motion
+        // too: Blue Sky 2944773634's "Water" 3840x360 / "Bars" 3840x256 (mean
+        // SSIM 0.951 -> 0.915), 3287715210's "Green" 1920x1080 (energy 0.764
+        // -> 0.690), while its covering compose and every isolated cloud
+        // layer match. Only scene-covering compose layers are supported.
+        let partial = |l: &Layer| {
+            matches!(l.kind, LayerKind::Passthrough { fullscreen: false })
+                && ((l.size[0] - sw as f32).abs() > 1.0 || (l.size[1] - sh as f32).abs() > 1.0)
+        };
+        if self
+            .layers
+            .iter()
+            .any(|l| matches!(l.kind, LayerKind::Passthrough { .. }) && (!identity || partial(l)))
+        {
+            return;
+        }
+        let (cw, ch) = ((x1 - x0) as f32, (y1 - y0) as f32);
+        let (ax, ay) = (sw as f32 / cw, sh as f32 / ch);
+        let bx = ax - 2.0 * x0 as f32 / cw - 1.0;
+        let by = -ay + 2.0 * y0 as f32 / ch + 1.0;
+        self.crop = Some([
+            ax, 0.0, 0.0, 0.0, //
+            0.0, ay, 0.0, 0.0, //
+            0.0, 0.0, 1.0, 0.0, //
+            bx, by, 0.0, 1.0,
+        ]);
+        self.scene = Target::with_format(gl, width, height, self.scene_hdr);
+        self.fullframe = Target::with_format(gl, width, height, self.scene_hdr);
+        if let Some(b) = &mut self.bloom {
+            b.chain.clear();
+            b.output = None;
+        }
+        self.unique_fbos.clear();
+    }
+
     pub fn output(&self) -> &Target {
         self.bloom
             .as_ref()
@@ -1329,7 +1434,7 @@ impl SceneRenderer {
         let Some(mut b) = self.bloom.take() else {
             return;
         };
-        let (w, h) = (self.width, self.height);
+        let (w, h) = (self.scene.tex.width, self.scene.tex.height);
         let texel = [1.0 / w as f32, 1.0 / h as f32, 0.0, 0.0];
         let scene = self.scene.tex;
         let out = *b.output.get_or_insert_with(|| Target::new(gl, w, h));
@@ -1483,17 +1588,18 @@ impl SceneRenderer {
         i: usize,
         frame: FrameInput,
     ) -> Option<Target> {
-        let (fw, fh) = target_size(self.layers[i].size);
+        let [uw, uh] = self.layers[i].size;
+        let (fw, fh) = self.layer_target_size(i);
         let mut current = self.take(gl, fw, fh);
         current.clear(gl, [0.0, 0.0, 0.0, 0.0]);
 
         // 1) the layer itself
         let (mvp, model, proj, verts) = match self.layers[i].kind {
             LayerKind::Image => (
-                math::centered_ortho(fw as f32, fh as f32),
+                math::centered_ortho(uw, uh),
                 math::IDENTITY,
-                math::centered_ortho(fw as f32, fh as f32),
-                math::quad(fw as f32, fh as f32, 1.0, 1.0),
+                math::centered_ortho(uw, uh),
+                math::quad(uw, uh, 1.0, 1.0),
             ),
             // compose layers get the SCENE transform: their shader turns it into
             // "which part of the screen is behind me".
@@ -1530,6 +1636,57 @@ impl SceneRenderer {
 
         // 2) its effects, ping-ponging between `current` and `other`
         let mut other = self.take(gl, fw, fh);
+        // WE runs a layer's effects at its texture resolution but draws the
+        // LAST pass straight onto the scene, at the layer's on-scene size:
+        // film grain as the last effect keeps full-resolution contrast (std
+        // 21.98 on a 32x18-texture layer) while any effect after it turns
+        // it into texture-resolution blobs (run_grain.sh `_tail`).
+        let fx = &self.layers[i].effects;
+        let last_pass = (0..fx.len()).rev().find_map(|e| {
+            fx[e]
+                .passes
+                .iter()
+                .rposition(|p| p.target.is_none())
+                .map(|p| (e, p))
+        });
+        // the last pass at screen density; a passthrough layer keeps its
+        // layer space for it (compose effects need layer UVs), only denser
+        // or sparser: make_compose.py cmp_grain_last (grain as a 4K compose
+        // layer's last pass) keeps WE's screen-pixel grain (|diff| 24.5),
+        // cmp_grain (grain before another pass) matches at layer size.
+        let (lw, lh) = match (&self.crop, self.layers[i].kind) {
+            (Some(_), LayerKind::Passthrough { .. }) => {
+                let s = self.scene.tex.width as f32 / self.width as f32;
+                target_size([uw * s, uh * s])
+            }
+            _ => target_size([uw, uh]),
+        };
+        // Screen mode: the last pass goes straight to a
+        // screen-size target, the layer quad pre-transformed to clip space
+        // (identity MVP, so shaders that ignore the matrix work too).
+        let screen_quad = (self.crop.is_some()
+            && self.layers[i].kind == LayerKind::Image
+            && self.layers[i].puppet.is_none()
+            && self.layers[i].flipbook.is_none()
+            && self.layers[i].composite.is_none()
+            && !self.referenced.contains(&self.layers[i].id))
+        .then(|| {
+            let l = &self.layers[i];
+            let mvp = math::mul(&self.view_proj_at(l.parallax), &l.world);
+            let mut q = math::quad(uw, uh, 1.0, 1.0);
+            for c in q.chunks_mut(5) {
+                let p = [c[0], c[1], c[2], 1.0];
+                let mut o = [0.0f32; 4];
+                for (row, out) in o.iter_mut().enumerate() {
+                    *out = (0..4).map(|k| mvp[k * 4 + row] * p[k]).sum();
+                }
+                c[0] = o[0] / o[3];
+                c[1] = o[1] / o[3];
+                c[2] = 0.0;
+            }
+            q
+        });
+        self.screen_space_result = false;
         for e in 0..self.layers[i].effects.len() {
             let mut named: HashMap<String, Target> = HashMap::new();
             for (name, scale, unique) in self.layers[i].effects[e].fbos.clone() {
@@ -1582,6 +1739,19 @@ impl SceneRenderer {
                             continue;
                         }
                     },
+                    None if last_pass == Some((e, p)) && screen_quad.is_some() => {
+                        let (sw, sh) = (self.scene.tex.width, self.scene.tex.height);
+                        let full = self.take(gl, sw, sh);
+                        let small = std::mem::replace(&mut other, full);
+                        self.give(small);
+                        other
+                    }
+                    None if last_pass == Some((e, p)) && (lw, lh) != (fw, fh) => {
+                        let full = self.take(gl, lw, lh);
+                        let small = std::mem::replace(&mut other, full);
+                        self.give(small);
+                        other
+                    }
                     None => other,
                 };
                 target.clear(gl, [0.0, 0.0, 0.0, 0.0]);
@@ -1600,11 +1770,17 @@ impl SceneRenderer {
                         mvp: math::IDENTITY,
                         model: math::IDENTITY,
                         proj: math::IDENTITY,
-                        verts: CLIP_QUAD,
+                        verts: match screen_quad {
+                            Some(q) if last_pass == Some((e, p)) && target_name.is_none() => q,
+                            _ => CLIP_QUAD,
+                        },
                         blend,
                         frame,
                     },
                 );
+                if screen_quad.is_some() && last_pass == Some((e, p)) && target_name.is_none() {
+                    self.screen_space_result = true;
+                }
                 let fx = &self.layers[i].effects[e];
                 let label = format!(
                     "{}-{}-p{p}-{}",
@@ -1635,9 +1811,67 @@ impl SceneRenderer {
         Some(current)
     }
 
+    /// Pixel size of an image layer's own target (its effects run in it): the
+    /// resolution of its texture, not its size in scene units. Measured with
+    /// harness/calibration/run_grain.sh (`_tail`): film grain followed by
+    /// another effect on a 1920x1080 layer whose texture is 32x18 comes out
+    /// of WE as smooth blobs (neighbour correlation 1.00 up to 3 px, std
+    /// 14.0 vs 22.0), i.e. computed at 32x18 and magnified. Puppets and
+    /// flipbooks keep the layer size.
+    fn layer_target_size(&self, i: usize) -> (u32, u32) {
+        let l = &self.layers[i];
+        if l.kind == LayerKind::Image
+            && l.puppet.is_none()
+            && l.flipbook.is_none()
+            && let Some((_, TexSource::Named(n))) = l.material.slots.iter().find(|(u, _)| *u == 0)
+            && let Some(t) = self.textures.get(n)
+        {
+            return target_size([t.width as f32, t.height as f32]);
+        }
+        target_size(l.size)
+    }
+
     /// Draws a finished layer target onto the scene with the object transform.
     fn draw_composite(&mut self, gl: &glow::Context, i: usize, t: &Target) {
         let l = &self.layers[i];
+        if self.screen_space_result
+            && let Some(blend) = l.composite.as_ref().map(|c| c.blend)
+        {
+            self.screen_space_result = false;
+            let scene = self.scene;
+            self.draw_pass(
+                gl,
+                DrawCall {
+                    layer: i,
+                    which: PassRef::Composite,
+                    target: scene,
+                    previous: Some(t.tex),
+                    effect_targets: &HashMap::new(),
+                    mvp: math::IDENTITY,
+                    model: math::IDENTITY,
+                    proj: math::IDENTITY,
+                    verts: CLIP_QUAD,
+                    blend,
+                    frame: FrameInput::default(),
+                },
+            );
+            return;
+        }
+        if self.screen_space_result {
+            self.screen_space_result = false;
+            self.scene.bind(gl);
+            l.material.blend.apply(gl);
+            unsafe {
+                gl.use_program(Some(self.blit.id));
+                gl.active_texture(glow::TEXTURE0);
+                gl.bind_texture(glow::TEXTURE_2D, Some(t.tex.id));
+            }
+            self.blit
+                .set(gl, "g_ModelViewProjectionMatrix", &math::IDENTITY);
+            self.blit.set(gl, "g_Texture0", &[0.0]);
+            self.quad.draw(gl, &CLIP_QUAD);
+            return;
+        }
         let (model, verts) = match l.kind {
             LayerKind::Passthrough { fullscreen: true } => (
                 math::model(
@@ -1740,6 +1974,22 @@ impl SceneRenderer {
                 uv_scale = t0.content_uv();
             }
         }
+        // Effect passes sample their own textures in WE's padded layout too
+        // (g_TextureNResolution reports size and content, so shaders that
+        // rescale UVs stay right). It matters where a shader tiles a texture
+        // WITHOUT rescaling: rain 1444077782 packs an old waterripple whose
+        // normal-map slot gets a 1280x800-in-2048x1024 texture sampled at
+        // ripple scale 5.4; cropped, each tile was the content alone (layer
+        // mean SSIM 0.875, 0.975 without that texture).
+        if matches!(call.which, PassRef::Effect(..)) {
+            for ((_, src), b) in slots.iter().zip(bound.iter_mut()) {
+                if let TexSource::Named(n) = src
+                    && let Some(t) = self.padded_texture(gl, n, call.effect_targets)
+                {
+                    b.1 = t;
+                }
+            }
+        }
 
         if self.program(gl, &key).is_none() {
             return;
@@ -1839,6 +2089,19 @@ impl SceneRenderer {
 
         // 2) annotated material parameters: default, overridden by constants
         set_params(gl, prog, &constants, self.time);
+        // Motion blur's accumulation `mix(past, current, rate)` runs once per
+        // frame in WE, so its trail depends on WE's frame rate. Measured with
+        // harness/calibration/run_motionblur.sh (a scrolled bar, rate 0.3 and
+        // 0.13): WE's trail decays like 58-61 applications per second at a
+        // 60 fps limit, Rustpaper's like 30 when rendering at 30 fps. Apply
+        // the rate a 60 fps WE would accumulate over this frame's real dt.
+        if shader_name(&key).ends_with("motionblur_accumulation")
+            && let Some(p) = prog.params.iter().find(|p| p.uniform == "g_Amount")
+            && let Some(&rate) = param_value(p, &constants, self.time).first()
+        {
+            let keep = (1.0 - rate.clamp(0.0, 1.0)).powf(self.frame_dt * WE_REFERENCE_FPS);
+            prog.set(gl, "g_Amount", &[1.0 - keep]);
+        }
 
         // 3) the object's own properties (image pass only)
         if is_material {
@@ -2280,10 +2543,19 @@ impl SceneRenderer {
                 0.05
             };
             let n = (o.prewarm / pdt).ceil() as usize;
+            // The prewarm runs in REAL time: instanceoverride.rate does not
+            // slow it (make_particles.py pre_rate001: rate 0.01 + starttime
+            // 10 still shows 0.82x the dots of rate 1 in WE, 0.338 vs 0.413,
+            // the count 10 s of emission gives; scaling it spawned nothing
+            // and hid rain 1444077782's `Light shafts 0`).
+            for s in &mut o.systems {
+                s.sim.prewarming = true;
+            }
             for _ in 0..n {
                 step_systems(&mut o.systems, pdt, pointer);
             }
             for s in &mut o.systems {
+                s.sim.prewarming = false;
                 s.sim.time = o.prewarm;
             }
         }
@@ -2302,6 +2574,10 @@ impl SceneRenderer {
         let proj = self.view_proj_at(o.parallax);
         let mvp_flat = math::mul(&proj, &model);
         let (persp, eye) = math::scene_perspective(w, h, self.fov);
+        let persp = match &self.crop {
+            Some(c) => math::mul(c, &persp),
+            None => persp,
+        };
         let mvp_persp = math::mul(&persp, &model);
         let inverse = math::invert(&model);
         for k in 0..self.particle_objs[i].systems.len() {
@@ -2485,26 +2761,44 @@ fn set_audio(gl: &glow::Context, prog: &Program, audio: &crate::audio::AudioFram
 /// evaluated at the scene time `time`.
 fn set_params(gl: &glow::Context, prog: &Program, constants: &HashMap<String, Value>, time: f32) {
     for p in &prog.params {
-        let v = p
-            .material
-            .as_deref()
-            .and_then(|m| {
-                constants.get(m).or_else(|| {
-                    constants
-                        .iter()
-                        .find(|(k, _)| k.eq_ignore_ascii_case(m))
-                        .map(|(_, v)| v)
-                })
-            })
-            .map(|c| match crate::keyframes::Track::parse(c) {
-                Some(track) => track.eval(time),
-                None => value::floats(c),
-            })
-            .filter(|v| !v.is_empty())
-            .unwrap_or_else(|| p.default.clone());
-        prog.set(gl, &p.uniform, &v);
+        prog.set(gl, &p.uniform, &param_value(p, constants, time));
     }
 }
+
+/// Value of an annotated material parameter: the constant named by its
+/// `material` annotation (case-insensitive; timelines evaluated at `time`),
+/// or its default.
+fn param_value(
+    p: &rustpaper_core::shader::UniformParam,
+    constants: &HashMap<String, Value>,
+    time: f32,
+) -> Vec<f32> {
+    p.material
+        .as_deref()
+        .and_then(|m| {
+            constants.get(m).or_else(|| {
+                constants
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case(m))
+                    .map(|(_, v)| v)
+            })
+        })
+        .map(|c| match crate::keyframes::Track::parse(c) {
+            Some(track) => track.eval(time),
+            None => value::floats(c),
+        })
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| p.default.clone())
+}
+
+/// Shader path of a program key (`"<shader>|COMBO=1,..."`).
+fn shader_name(key: &str) -> &str {
+    key.split('|').next().unwrap_or(key)
+}
+
+/// Frame rate whose per-frame effects Rustpaper reproduces: the harness pins
+/// WE's frame-rate limit to 60 (`WE_FPS`), the default most users keep.
+const WE_REFERENCE_FPS: f32 = 60.0;
 
 /// `visible` of an object, honoring user properties; objects whose visibility
 /// is driven by a script that spawns layer clones (`createLayer`, e.g. audio

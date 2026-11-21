@@ -209,8 +209,18 @@ capture_clock() { # capture_clock <capture dir> <seconds>
 }
 
 # Scene time at the start of a WE capture (see we-capture.sh); captures made
-# before it was recorded used a 6 s warm-up.
-capture_time() { cat "$1/we_time.txt" 2>/dev/null || echo 6; }
+# before it was recorded used a 6 s warm-up. we_time.txt counts from the
+# openWallpaper command, but WE's scene clock starts ~0.25 s later
+# (WE_CLOCK_DELAY). Measured as the phase lag of time-driven effects against
+# Rustpaper rendered from we_time:
+#   - shimmer sweeps (calibration/run_shimmer.sh), periods 3 / 5 / 7.5 s:
+#     WE's peak 0.27 / 0.30 / 0.23 s later;
+#   - camera shake (run_shake.sh), joint fit over 8 runs: 0.18 s.
+capture_time() {
+    local t
+    t=$(cat "$1/we_time.txt" 2>/dev/null || echo 6.25)
+    python3 -c "import sys; print(f'{float(sys.argv[1]) - float(sys.argv[2]):.2f}')" "$t" "${WE_CLOCK_DELAY:-0.25}"
+}
 
 # Cursor position WE saw during a capture (0..1 inside its window, clamped);
 # older captures did not record it: center.

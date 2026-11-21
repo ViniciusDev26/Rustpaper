@@ -193,6 +193,12 @@ pub struct DecodedTexture {
     /// Mipmap levels stored in the file. 1 = the texture is meant to be
     /// sampled without mipmaps (e.g. util/noise, sampled at high frequency).
     pub mip_count: u32,
+    /// The file's own smaller mip levels (1..mip_count), decoded like the
+    /// first: (width, height, rgba). WE samples THESE when minifying, not a
+    /// chain generated from level 0 (a .tex shipping red mips draws red in
+    /// WE: harness/calibration/make_minify.py `m_redmips_2130`). Empty for
+    /// embedded JPEG/PNG images.
+    pub mips: Vec<(u32, u32, Vec<u8>)>,
 }
 
 struct Cursor<'a> {
@@ -342,6 +348,47 @@ pub fn parse_image(data: &[u8], index: u32) -> Result<DecodedTexture, String> {
             .map_err(|e| format!("failed to decode embedded image: {e}"))?
             .to_rgba8();
         let (w, h) = img.dimensions();
+        // Each smaller level is its own embedded image too (Ice Princess
+        // 2802243144: 10 PNG levels, 4240x2369 down to 8x4).
+        let mut mips = Vec::new();
+        for _ in 1..mip_count {
+            let level = (|| -> Result<(u32, u32, Vec<u8>), String> {
+                if is_texb0004 && is_mp4 {
+                    c.u32()?;
+                    c.u32()?;
+                    c.null_string()?;
+                    c.u32()?;
+                }
+                let (_w, _h) = (c.u32()?, c.u32()?);
+                let (mut comp, mut unc) = (0, 0);
+                if has_comp_fields {
+                    comp = c.u32()?;
+                    unc = c.u32()?;
+                }
+                let size = c.u32()?;
+                if comp == 0 {
+                    unc = size;
+                }
+                let raw = if comp == 1 {
+                    lz4_flex::block::decompress(c.take(size as usize)?, unc as usize)
+                        .map_err(|e| format!("LZ4 failure: {e}"))?
+                } else {
+                    c.take(unc as usize)?.to_vec()
+                };
+                let m = image::load_from_memory(&raw)
+                    .map_err(|e| format!("embedded mip: {e}"))?
+                    .to_rgba8();
+                let (mw, mh) = m.dimensions();
+                Ok((mw, mh, m.into_raw()))
+            })();
+            match level {
+                Ok(m) => mips.push(m),
+                Err(_) => {
+                    mips.clear();
+                    break;
+                }
+            }
+        }
         return Ok(DecodedTexture {
             flags,
             format: 0,
@@ -351,26 +398,67 @@ pub fn parse_image(data: &[u8], index: u32) -> Result<DecodedTexture, String> {
             real_width: width,
             real_height: height,
             rgba: img.into_raw(),
+            mips,
         });
     }
 
-    let make = |rgba: Vec<u8>| {
-        Ok(DecodedTexture {
-            flags,
-            format,
-            mip_count,
-            width: mip_w,
-            height: mip_h,
-            real_width: width,
-            real_height: height,
-            rgba,
-        })
-    };
+    let rgba = to_rgba(format, &raw, mip_w, mip_h)?;
+    // the smaller levels, same layout as the first
+    let mut mips = Vec::new();
+    for _ in 1..mip_count {
+        let level = (|| -> Result<(u32, u32, Vec<u8>), String> {
+            if is_texb0004 && is_mp4 {
+                c.u32()?;
+                c.u32()?;
+                c.null_string()?;
+                c.u32()?;
+            }
+            let (w, h) = (c.u32()?, c.u32()?);
+            let (mut comp, mut unc) = (0, 0);
+            if has_comp_fields {
+                comp = c.u32()?;
+                unc = c.u32()?;
+            }
+            let size = c.u32()?;
+            if comp == 0 {
+                unc = size;
+            }
+            let raw = if comp == 1 {
+                lz4_flex::block::decompress(c.take(size as usize)?, unc as usize)
+                    .map_err(|e| format!("LZ4 failure: {e}"))?
+            } else {
+                c.take(unc as usize)?.to_vec()
+            };
+            Ok((w, h, to_rgba(format, &raw, w, h)?))
+        })();
+        match level {
+            Ok(m) => mips.push(m),
+            // a partial chain is useless (incomplete GL texture): drop it
+            Err(_) => {
+                mips.clear();
+                break;
+            }
+        }
+    }
+    Ok(DecodedTexture {
+        flags,
+        format,
+        mip_count,
+        width: mip_w,
+        height: mip_h,
+        real_width: width,
+        real_height: height,
+        rgba,
+        mips,
+    })
+}
 
+/// Decodes one mip level's bytes to RGBA (see the format notes inline).
+fn to_rgba(format: u32, raw: &[u8], mip_w: u32, mip_h: u32) -> Result<Vec<u8>, String> {
     match format {
         // ARGB8888: despite the name, the bytes are already RGBA (WE uploads as
         // GL_RGBA, not GL_BGRA) — no channel swap.
-        FORMAT_ARGB8888 => make(raw),
+        FORMAT_ARGB8888 => Ok(raw.to_vec()),
         // RG88: 2 bytes/pixel. WE stores luminance in R and alpha in G. Expands
         // to rgb = R (gray, the color comes from the particle tint) and a = G.
         FORMAT_RG88 => {
@@ -378,15 +466,15 @@ pub fn parse_image(data: &[u8], index: u32) -> Result<DecodedTexture, String> {
             for px in raw.as_chunks::<2>().0 {
                 rgba.extend_from_slice(&[px[0], px[0], px[0], px[1]]);
             }
-            make(rgba)
+            Ok(rgba)
         }
         // R8: 1 byte/pixel, used as a mask (luminance = alpha).
         FORMAT_R8 => {
             let mut rgba = Vec::with_capacity(raw.len() * 4);
-            for &r in &raw {
+            for &r in raw {
                 rgba.extend_from_slice(&[r, r, r, r]);
             }
-            make(rgba)
+            Ok(rgba)
         }
         // DXT/BC (S3TC): compressed 4x4 blocks -> RGBA via texpresso.
         FORMAT_DXT1 | FORMAT_DXT3 | FORMAT_DXT5 => {
@@ -396,8 +484,8 @@ pub fn parse_image(data: &[u8], index: u32) -> Result<DecodedTexture, String> {
                 _ => texpresso::Format::Bc3,
             };
             let mut rgba = vec![0u8; (mip_w * mip_h * 4) as usize];
-            bc.decompress(&raw, mip_w as usize, mip_h as usize, &mut rgba);
-            make(rgba)
+            bc.decompress(raw, mip_w as usize, mip_h as usize, &mut rgba);
+            Ok(rgba)
         }
         other => Err(format!(
             "texture format {other} not supported yet (ARGB8888/RG88/R8/DXT/free-image)"
