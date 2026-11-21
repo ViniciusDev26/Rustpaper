@@ -12,15 +12,15 @@
       {
         "label": "main",
         "title": "Rustpaper",
-        "width": 1000,
-        "height": 700
+        "width": 1200,
+        "height": 760
       }
     ],
     "security": {
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": ["/home/vscode/wallpapers/**"]
+        "scope": []
       }
     }
   },

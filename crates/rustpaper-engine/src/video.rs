@@ -1,14 +1,14 @@
-// Módulo `video`: decodifica um vídeo usando o ffmpeg como subprocesso. Uma
-// thread lê frames RGBA crus do stdout do ffmpeg e guarda sempre o mais recente
-// num slot compartilhado. O render lê esse slot quando quer atualizar a textura.
+// `video` module: decodes a video using ffmpeg as a subprocess. A
+// thread reads raw RGBA frames from ffmpeg's stdout and always keeps the most recent one
+// in a shared slot. The renderer reads that slot when it wants to update the texture.
 
 use std::io::Read;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-// O frame mais recente + um contador de "geração" (incrementa a cada frame novo),
-// pra o render saber se já viu este frame.
+// The most recent frame + a "generation" counter (incremented on every new frame),
+// so the renderer knows whether it has already seen this frame.
 struct Frame {
     data: Vec<u8>,
     generation: u64,
@@ -18,7 +18,7 @@ pub struct Video {
     pub width: u32,
     pub height: u32,
     slot: Arc<Mutex<Frame>>,
-    child: Mutex<Option<Child>>, // guardado só pra matar o ffmpeg no Drop
+    child: Mutex<Option<Child>>, // kept only to kill ffmpeg on Drop
 }
 
 impl Video {
@@ -27,12 +27,12 @@ impl Video {
         let frame_size = (width * height * 4) as usize; // RGBA = 4 bytes/pixel
 
         let slot = Arc::new(Mutex::new(Frame {
-            data: vec![0u8; frame_size], // começa preto até o 1º frame chegar
+            data: vec![0u8; frame_size], // starts black until the 1st frame arrives
             generation: 0,
         }));
 
-        // ffmpeg: -stream_loop -1 = repete pra sempre; -re = ritmo real (paceia
-        // na fps do vídeo); saída = rawvideo RGBA no stdout.
+        // ffmpeg: -stream_loop -1 = repeat forever; -re = real-time pace (paces
+        // at the video's fps); output = rawvideo RGBA on stdout.
         let mut child = Command::new("ffmpeg")
             .args([
                 "-loglevel",
@@ -50,18 +50,18 @@ impl Video {
             ])
             .stdout(Stdio::piped())
             .spawn()
-            .expect("falha ao iniciar o ffmpeg (instalado?)");
+            .expect("failed to start ffmpeg (is it installed?)");
 
         let mut stdout = child.stdout.take().unwrap();
         let slot_thread = Arc::clone(&slot);
 
-        // Thread de decodificação: lê um frame inteiro por vez e atualiza o slot.
+        // Decoding thread: reads one whole frame at a time and updates the slot.
         thread::spawn(move || {
             loop {
                 let mut frame = vec![0u8; frame_size];
-                // read_exact preenche o buffer inteiro (bloqueia até ter um frame completo).
+                // read_exact fills the whole buffer (blocks until a complete frame is available).
                 if stdout.read_exact(&mut frame).is_err() {
-                    break; // ffmpeg terminou ou o pipe quebrou
+                    break; // ffmpeg finished or the pipe broke
                 }
                 let mut s = slot_thread.lock().unwrap();
                 s.data = frame;
@@ -77,8 +77,8 @@ impl Video {
         }
     }
 
-    // Se houver um frame mais novo que `last_seen`, chama `f` com os bytes dele
-    // (segurando o lock — sem cópia extra) e devolve a nova geração.
+    // If there is a frame newer than `last_seen`, calls `f` with its bytes
+    // (holding the lock - no extra copy) and returns the new generation.
     pub fn upload_if_newer<F: FnOnce(&[u8])>(&self, last_seen: u64, f: F) -> Option<u64> {
         let s = self.slot.lock().unwrap();
         if s.generation > last_seen {
@@ -98,7 +98,7 @@ impl Drop for Video {
     }
 }
 
-// Descobre largura/altura do vídeo rodando o ffprobe.
+// Discovers the video's width/height by running ffprobe.
 fn probe(path: &str) -> (u32, u32) {
     let out = Command::new("ffprobe")
         .args([
@@ -113,13 +113,13 @@ fn probe(path: &str) -> (u32, u32) {
             path,
         ])
         .output()
-        .expect("falha ao rodar ffprobe");
+        .expect("failed to run ffprobe");
     let s = String::from_utf8_lossy(&out.stdout);
-    parse_dimensions(&s).expect("saída do ffprobe inválida")
+    parse_dimensions(&s).expect("invalid ffprobe output")
 }
 
-// Parse PURO da saída do ffprobe ("1920,1080"). Separado do subprocesso pra ser
-// testável. Devolve None se a entrada não tiver dois números válidos.
+// PURE parse of ffprobe's output ("1920,1080"). Separate from the subprocess so it is
+// testable. Returns None if the input doesn't have two valid numbers.
 fn parse_dimensions(s: &str) -> Option<(u32, u32)> {
     let s = s.trim();
     let mut it = s.split(',');
@@ -139,14 +139,14 @@ mod tests {
 
     #[test]
     fn parses_with_whitespace() {
-        // ffprobe às vezes acrescenta \n/espaços.
+        // ffprobe sometimes appends \n/whitespace.
         assert_eq!(parse_dimensions("  1920,1080\n"), Some((1920, 1080)));
     }
 
     #[test]
     fn rejects_garbage() {
         assert_eq!(parse_dimensions("abc"), None);
-        assert_eq!(parse_dimensions("1920"), None); // falta a altura
+        assert_eq!(parse_dimensions("1920"), None); // the height is missing
         assert_eq!(parse_dimensions(""), None);
     }
 }

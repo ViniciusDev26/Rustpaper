@@ -1,0 +1,26 @@
+[package]
+name = "rustpaper-gl"
+version = "0.1.0"
+edition = "2024"
+
+# OpenGL scene renderer. WE shaders are written for (a dialect of) GL, so running
+# them on GL avoids the whole Vulkan/SPIR-V translation layer of rustpaper-engine.
+# Renders offscreen through a headless EGL context; the caller decides where the
+# pixels go (PNG for the reference harness, the desktop for the live engine).
+[dependencies]
+rustpaper-core = { path = "../rustpaper-core" }
+# SceneScripts, run in a sandboxed worker process
+rustpaper-script = { path = "../rustpaper-script" }
+glow = "0.18.0"
+khronos-egl = { version = "6.0.0", features = ["static", "1_5"] }
+serde_json = "1.0.150"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+# text objects: glyph rasterization + local time for the native clock presets
+ab_glyph = "0.2"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# audio-reactive wallpapers: spectrum of the captured system audio
+rustfft = "6"
+
+[[bin]]
+name = "rustpaper-render"
+path = "src/bin/rustpaper-render.rs"

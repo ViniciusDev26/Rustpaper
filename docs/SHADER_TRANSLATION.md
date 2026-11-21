@@ -1,33 +1,33 @@
-# Boss final: tradução de shaders WE → WGSL
+# Final boss: translating WE shaders to WGSL
 
-Objetivo: renderizar cenas do Wallpaper Engine com fidelidade (materiais/efeitos
-usam os shaders do WE). É o maior componente que falta — o grosso do
+Goal: render Wallpaper Engine scenes faithfully (materials/effects use the WE
+shaders). This is the largest missing component — the bulk of
 linux-wallpaperengine.
 
-## O que os shaders do WE são (investigado)
+## What WE shaders are (investigated)
 
-GLSL **legado** (estilo GLSL ES 1.0). Ex.: `assets/shaders/genericimage2.frag`:
-- `#include "common_pbr.h"`, `#include "common_blending.h"` — includes próprios
-  (resolver a partir de `assets/shaders/` e `assets/shaders/base/`).
+**Legacy** GLSL (GLSL ES 1.0 style). E.g. `assets/shaders/genericimage2.frag`:
+- `#include "common_pbr.h"`, `#include "common_blending.h"` — custom includes
+  (resolve from `assets/shaders/` and `assets/shaders/base/`).
 - `uniform sampler2D g_Texture0; // {"label":...,"combo":"NORMALMAP","default":...}`
-  — uniforms anotados com JSON (defaults, ranges, combos, formato de textura).
-- `#if COMBO` / `#ifndef VERSION` — **combos** são feature flags setadas por
-  material (`passes[].combos` no material.json) e por presença de texturas.
-- `varying vec2 v_TexCoord;`, `texture2D(...)`, provavelmente `gl_FragColor` —
-  construções GLSL antigas.
+  — uniforms annotated with JSON (defaults, ranges, combos, texture format).
+- `#if COMBO` / `#ifndef VERSION` — **combos** are feature flags set per
+  material (`passes[].combos` in material.json) and by texture presence.
+- `varying vec2 v_TexCoord;`, `texture2D(...)`, probably `gl_FragColor` —
+  old GLSL constructs.
 
-## Por que o lwe tem vantagem
+## Why lwe has an advantage
 
-Ele usa **OpenGL**, então roda o GLSL do WE quase direto: só resolve includes +
-injeta `#define`s dos combos + alguns patches. Nós usamos **wgpu (WGSL)**, então
-precisamos de GLSL→WGSL.
+It uses **OpenGL**, so it runs the WE GLSL almost directly: it only resolves includes +
+injects the combo `#define`s + a few patches. We use **wgpu (WGSL)**, so
+we need GLSL→WGSL.
 
-## Pipeline PROVADO (compila ponta-a-ponta com genericimage2 real)
+## PROVEN pipeline (compiles end to end with the real genericimage2)
 
     WE .vert/.frag
       │  shader::translate  (rustpaper-core)
-      ▼  resolve #include + prelúdio (dialeto→GLSL) + combos + SEPARA samplers
-    GLSL 450 (Vulkan-flavored, samplers separados)
+      ▼  resolves #include + prelude (dialect→GLSL) + combos + SPLITS samplers
+    GLSL 450 (Vulkan-flavored, separate samplers)
       │  glslangValidator -V -R --amb --aml --sdub WeGlobals 0 0 -S <stage>
       ▼
     SPIR-V Vulkan   (spirv-val limpo)
@@ -35,94 +35,102 @@ precisamos de GLSL→WGSL.
       ▼
     naga::Module    → wgpu::ShaderSource::SpirV
 
-Bindings resultantes (determinísticos, ver `shader::texture_bindings`):
-bloco de uniforms livres `WeGlobals` = set 0 binding 0; textura `g_TextureN` =
+Resulting bindings (deterministic, see `shader::texture_bindings`):
+the free-uniforms block `WeGlobals` = set 0 binding 0; texture `g_TextureN` =
 binding `2N+1`; sampler `_smp_g_TextureN` = binding `2N+2`.
 
-### Descobertas empíricas (por que este caminho, e não outro)
+### Empirical findings (why this path and not another)
 
-- **naga glsl-in é fraco demais**: rejeita `#version 330`, exige que uniforms
-  livres estejam em blocos com binding, e NÃO implementa qualifiers de sampler
-  (`uniform sampler2D` → `NotImplemented("variable qualifier")`). Descartado.
-- **glslang aceita o dialeto** (com o prelúdio) e gera SPIR-V Vulkan limpo. Só que
-  Vulkan proíbe uniforms livres → `-R` (regras relaxadas) + `--sdub` junta todos
-  num bloco default nomeado.
-- **naga spv-in rejeita samplers COMBINADOS** (o `sampler2D` estilo GL que o
-  glslang emite: `InvalidId` no `OpLoad` da imagem-amostrada). Além disso, o modelo
-  de bind group do wgpu é SEPARADO (textura + sampler distintos) — não existe
-  sampler combinado. Por isso `translate` reescreve
+- **naga glsl-in is too weak**: it rejects `#version 330`, requires free uniforms
+  to live in blocks with a binding, and does NOT implement sampler qualifiers
+  (`uniform sampler2D` → `NotImplemented("variable qualifier")`). Discarded.
+- **glslang accepts the dialect** (with the prelude) and emits clean Vulkan SPIR-V.
+  However, Vulkan forbids free uniforms → `-R` (relaxed rules) + `--sdub` gathers all
+  of them into a named default block.
+- **naga spv-in rejects COMBINED samplers** (the GL-style `sampler2D` that
+  glslang emits: `InvalidId` on the `OpLoad` of the sampled image). Besides, wgpu's
+  bind group model is SEPARATE (distinct texture + sampler) — there is no
+  combined sampler. So `translate` rewrites
   `uniform sampler2D g_TexN` → `uniform texture2D g_TexN` + `uniform sampler
-  _smp_g_TexN`, e as macros `texSample2D/Lod` remontam `sampler2D(tex, smp)` na
-  amostragem. glslang então emite imagem+sampler separados, que o naga spv-in
-  ACEITA.
+  _smp_g_TexN`, and the `texSample2D/Lod` macros reassemble `sampler2D(tex, smp)` at
+  sampling time. glslang then emits separate image+sampler, which naga spv-in
+  ACCEPTS.
 
-Provado por `crates/rustpaper-core/tests/naga_compile.rs` (genericimage2 vert+frag).
+Proven by `crates/rustpaper-core/tests/naga_compile.rs` (genericimage2 vert+frag).
 
-## Estado do render (offscreen, verificado por PNG)
+## Render status (offscreen, verified by PNG)
 
-- **Fundo real** renderiza pelo shader real do WE (`render_scene` example, cena Zoro).
-- **Cadeia de efeitos** funciona (`render_effect`): fundo → efeito `tint` amostrando
-  o quadro anterior. `postprocess::Pass` é a primitiva de passe reutilizável.
-- **Reflexão** (`shader_compile::reflect`): lê do SPIR-V o layout do bloco de
-  uniforms (offsets por nome) e os bindings de textura/sampler via naga.
+- **Real background** renders through the real WE shader (`render_scene` example, Zoro scene).
+- **Effect chain** works (`render_effect`): background → `tint` effect sampling
+  the previous frame. `postprocess::Pass` is the reusable pass primitive.
+- **Reflection** (`shader_compile::reflect`): reads the uniform block layout from the SPIR-V
+  (offsets by name) and the texture/sampler bindings via naga.
 - **Parsers** (rustpaper-core): `scene::MaterialInfo` (shader/combos/constants),
-  `effects` (grafo de efeitos: objeto→effect.json→passes/fbos/binds + overrides),
-  `shader::parse_params` (anotações `// {json}`: uniform↔material + defaults).
+  `effects` (effect graph: object→effect.json→passes/fbos/binds + overrides),
+  `shader::parse_params` (`// {json}` annotations: uniform↔material + defaults).
 
-### UBO unificado entre estágios (o último bloqueio, resolvido)
+### UBO unified across stages (the last blocker, resolved)
 
-A maioria dos efeitos precisa do VERTEX do WE (ex.: filmgrain calcula
-`v_TexCoordNoise` a partir de `g_Time` no vertex). Mas vertex e fragment declaram
-membros DIFERENTES no bloco `WeGlobals` — compilados separados, colidiriam no
-binding 0. Solução: compilar vertex+fragment LINKADOS (`glslang -l`), que UNIFICA o
-bloco default — os dois SPIR-V saem com o MESMO struct e os MESMOS offsets. Ver
-`shader_compile::compile_linked` e o teste `rustpaper-engine/tests/linked_compile.rs`
-(genericimage2: UBO unificado de 96 bytes, `g_ModelViewProjectionMatrix@0` +
-`g_Brightness@88` visíveis nos dois estágios).
+Most effects need the WE VERTEX shader (e.g. filmgrain computes
+`v_TexCoordNoise` from `g_Time` in the vertex stage). But vertex and fragment declare
+DIFFERENT members in the `WeGlobals` block — compiled separately, they would collide on
+binding 0. Solution: compile vertex+fragment LINKED (`glslang -l`), which UNIFIES the
+default block — both SPIR-V outputs have the SAME struct and the SAME offsets. See
+`shader_compile::compile_linked` and the test `rustpaper-engine/tests/linked_compile.rs`
+(genericimage2: unified 96-byte UBO, `g_ModelViewProjectionMatrix@0` +
+`g_Brightness@88` visible in both stages).
 
-### O que falta pro render fiel de efeitos animados
+### What is missing for faithful animated effects
 
-Orquestração (sem incógnitas): usar `compile_linked` (vert+frag do WE) por passe,
-montar o UBO unificado com `parse_params` (defaults) + constants (material/cena) +
-builtins (`g_Time`, resoluções), resolver texturas de entrada do efeito (framebuffer
-anterior via `bind`, mais texturas base tipo `util/noise`), e orquestrar
-multi-passe/multi-FBO (blur, godrays). Integração ao vivo no `wallpaper.rs` por fim.
+Orchestration (no unknowns): use `compile_linked` (WE vert+frag) per pass,
+build the unified UBO from `parse_params` (defaults) + constants (material/scene) +
+builtins (`g_Time`, resolutions), resolve the effect's input textures (previous
+framebuffer via `bind`, plus base textures such as `util/noise`), and orchestrate
+multi-pass/multi-FBO (blur, godrays). Live integration into `wallpaper.rs` last.
 
-### Fases (para uma sessão futura, com contexto fresco)
+### Phases (for a future session, with fresh context)
 
-1. **Resolver includes** — módulo que lê um shader do WE e expande `#include "x.h"`
-   recursivamente a partir de `we-assets/shaders/` (+ `/base`). Pura lógica de
-   texto → testável no rustpaper-core.
-2. **Combos/defines** — ler `passes[].combos` do material + os combos implícitos
-   (ex.: textura presente liga um combo). Montar a lista de `#define NOME valor`.
-   As anotações `// {json}` dos uniforms dão os defaults dos combos.
-3. **Modernizar o GLSL** pra o naga aceitar: `#version 450`, `varying`→`in/out`
-   (por estágio), `attribute`→`in`, `texture2D`→`texture`, `gl_FragColor`→um
-   `layout(location=0) out vec4`, remover/adaptar o que o naga não engole. Este é
-   o passo mais chato e iterativo (o frontend GLSL do naga é exigente).
-4. **Bindings/uniforms** — mapear os `g_*` (matrizes MVP, g_Time, g_Texture0..N,
-   parâmetros de material) pra um uniform buffer + bind groups. Precisa casar com
-   o que os vert/frag esperam (as `varying` conectam os dois estágios).
-5. **Wire no engine** — em vez do nosso `shader.wgsl` fixo por cena, compilar o
-   material da cena (shader + combos + texturas) e desenhar cada camada de imagem
-   com seu material. Isso também destrava **múltiplas camadas** de imagem.
-6. **Efeitos / FBO** — cadeia de efeitos (bloom, etc.) renderiza pra textura
-   (FBO) e encadeia passes. HDR/tonemapping. É o que falta pras cenas "pesadas"
-   não estourarem em branco (o problema atual das partículas additive).
+1. **Resolve includes** — a module that reads a WE shader and expands `#include "x.h"`
+   recursively from `we-assets/shaders/` (+ `/base`). Pure text logic →
+   testable in rustpaper-core.
+2. **Combos/defines** — read `passes[].combos` from the material + the implicit combos
+   (e.g. a present texture turns on a combo). Build the list of `#define NAME value`.
+   The `// {json}` annotations on uniforms give the combo defaults.
+3. **Modernize the GLSL** so naga accepts it: `#version 450`, `varying`→`in/out`
+   (per stage), `attribute`→`in`, `texture2D`→`texture`, `gl_FragColor`→a
+   `layout(location=0) out vec4`, remove/adapt whatever naga cannot swallow. This is
+   the most tedious and iterative step (naga's GLSL frontend is demanding).
+4. **Bindings/uniforms** — map the `g_*` (MVP matrices, g_Time, g_Texture0..N,
+   material parameters) to a uniform buffer + bind groups. It must match
+   what the vert/frag expect (the `varying`s connect the two stages).
+5. **Wire into the engine** — instead of our fixed per-scene `shader.wgsl`, compile the
+   scene's material (shader + combos + textures) and draw each image layer
+   with its material. This also unlocks **multiple image layers**.
+6. **Effects / FBO** — the effect chain (bloom, etc.) renders to a texture
+   (FBO) and chains passes. HDR/tonemapping. This is what "heavy" scenes need so they
+   do not blow out to white (the current problem with additive particles).
 
-### Riscos / realidade
+### Risks / reality
 
-- O frontend GLSL do naga não aceita tudo (ES 1.0 antigo, extensões). Fase 3 é
-  tentativa-e-erro; alguns shaders podem não compilar sem patches específicos.
-- Combos: a explosão de variantes (`#if`) é grande; começar só com os combos que
-  as cenas-alvo usam (ex.: `genericimage2` sem PBR/lighting).
-- Isso é trabalho de **semanas**. Estratégia: fazer UM material simples
-  (`genericimage2`, sem combos) renderizar via naga primeiro (marco 1), depois
-  crescer. Não tentar tudo de uma vez.
+- naga's GLSL frontend does not accept everything (old ES 1.0, extensions). Phase 3 is
+  trial and error; some shaders may not compile without specific patches.
+- Combos: the explosion of variants (`#if`) is large; start only with the combos that
+  the target scenes use (e.g. `genericimage2` without PBR/lighting).
+- This is **weeks** of work. Strategy: get ONE simple material
+  (`genericimage2`, no combos) rendering through naga first (milestone 1), then
+  grow. Do not try everything at once.
 
-## Ponto de partida sugerido (marco 1)
+## Suggested starting point (milestone 1)
 
-Pegar `genericimage2.vert/.frag`, resolver includes, sem combos, modernizar o
-mínimo, compilar via `ShaderSource::Glsl`, e desenhar a camada de fundo de uma
-cena de imagem simples com ELE (em vez do nosso shader fixo). Se um quad texturado
-aparecer via o shader do WE traduzido pelo naga, o caminho está provado.
+Take `genericimage2.vert/.frag`, resolve includes, no combos, modernize the
+minimum, compile via `ShaderSource::Glsl`, and draw the background layer of a
+simple image scene with IT (instead of our fixed shader). If a textured quad
+shows up through the WE shader translated by naga, the path is proven.
+
+## `clamp` argument order (GL renderer)
+
+Some Workshop shaders call `clamp(x, lo, hi)` with lo > hi, e.g. bokeh
+2798319181's `clamp(0, 0.15, depth)`. HLSL defines that as
+`min(max(x, lo), hi)`, while GLSL leaves it undefined (NVIDIA returns lo). The
+GL prelude maps `clamp` to the HLSL form (こきん 3146507587 FAIL -> PASS, see
+GL_RENDERER.md).

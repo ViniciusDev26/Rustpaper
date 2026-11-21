@@ -1,13 +1,13 @@
-// Render OFFSCREEN de uma CENA REAL: carrega o material e a textura de fundo de um
-// wallpaper do Workshop, compila o fragment shader REAL do WE (via glslang) e
-// renderiza a imagem de fundo num PNG — pra eu verificar que o caminho
-// parse -> decode .tex -> translate -> compile -> reflect -> render funciona em
-// assets de verdade.
+// OFFSCREEN render of a REAL SCENE: loads the material and the background texture of a
+// Workshop wallpaper, compiles the REAL WE fragment shader (via glslang) and
+// renders the background image to a PNG - so I can verify that the path
+// parse -> decode .tex -> translate -> compile -> reflect -> render works on
+// real assets.
 //
-// Usa nosso vertex fullscreen (WGSL) + o FRAGMENT do WE. Isso vale pros shaders de
-// fundo cujo frag só precisa de v_TexCoord (ex.: genericimage2).
+// Uses our fullscreen vertex (WGSL) + the WE FRAGMENT. This works for background shaders
+// whose frag only needs v_TexCoord (e.g. genericimage2).
 //
-// Uso: cargo run -p rustpaper-engine --example render_scene -- <pasta-do-wallpaper> [saida.png]
+// Usage: cargo run -p rustpaper-engine --example render_scene -- <wallpaper-dir> [out.png]
 
 use std::path::Path;
 
@@ -37,30 +37,30 @@ fn align256(n: u32) -> u32 {
 fn main() {
     let dir = std::env::args()
         .nth(1)
-        .expect("uso: render_scene <pasta-do-wallpaper> [saida.png]");
+        .expect("usage: render_scene <wallpaper-dir> [out.png]");
     let out_png = std::env::args()
         .nth(2)
         .unwrap_or_else(|| "/tmp/render_scene.png".into());
     let shaders_dir =
         std::env::var("WE_SHADERS_DIR").unwrap_or_else(|_| "/home/vscode/we-assets/shaders".into());
 
-    // --- material + textura de fundo ---
-    let pkg = Pkg::open(Path::new(&dir).join("scene.pkg").as_path()).expect("abrir scene.pkg");
-    let material = scene::background_material(&pkg).expect("material de fundo");
-    let tex_path = scene::background_texture(&pkg).expect("textura de fundo");
+    // --- material + background texture ---
+    let pkg = Pkg::open(Path::new(&dir).join("scene.pkg").as_path()).expect("open scene.pkg");
+    let material = scene::background_material(&pkg).expect("background material");
+    let tex_path = scene::background_texture(&pkg).expect("background texture");
     println!(
         "shader={} combos={:?} tex={}",
         material.shader, material.combos, tex_path
     );
 
-    let tex_bytes = pkg.read(&tex_path).expect("ler .tex do pkg");
-    let decoded = tex::parse(tex_bytes).expect("decodificar .tex");
+    let tex_bytes = pkg.read(&tex_path).expect("read .tex from the pkg");
+    let decoded = tex::parse(tex_bytes).expect("decode .tex");
     println!(
-        "tex buffer={}x{} conteúdo={}x{}",
+        "tex buffer={}x{} content={}x{}",
         decoded.width, decoded.height, decoded.real_width, decoded.real_height
     );
 
-    // recorta o conteúdo (ignora o padding pra potência de 2 do buffer)
+    // crop the content (ignores the power-of-two padding of the buffer)
     let (cw, ch) = (decoded.real_width, decoded.real_height);
     let mut content = vec![0u8; (cw * ch * 4) as usize];
     for y in 0..ch {
@@ -73,19 +73,19 @@ fn main() {
         ));
     }
 
-    // --- compila o fragment do WE + reflete o layout ---
+    // --- compile the WE fragment + reflect the layout ---
     let frag_src = std::fs::read_to_string(format!("{shaders_dir}/{}.frag", material.shader))
-        .expect("ler .frag");
+        .expect("read .frag");
     let frag_spirv = shader_compile::compile(
         Stage::Fragment,
         &frag_src,
         &material.combos,
         Path::new(&shaders_dir),
     )
-    .expect("compilar frag");
-    let refl = shader_compile::reflect(&frag_spirv).expect("refletir");
+    .expect("compile frag");
+    let refl = shader_compile::reflect(&frag_spirv).expect("reflect");
     println!(
-        "reflection: ubo_size={} membros={:?} tex_bindings={:?} smp_bindings={:?}",
+        "reflection: ubo_size={} members={:?} tex_bindings={:?} smp_bindings={:?}",
         refl.uniform_size, refl.uniform_offsets, refl.texture_bindings, refl.sampler_bindings
     );
 
@@ -100,7 +100,7 @@ fn main() {
     let (device, queue) =
         pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
 
-    // textura de entrada (conteúdo recortado)
+    // input texture (cropped content)
     let extent = wgpu::Extent3d {
         width: cw,
         height: ch,
@@ -138,8 +138,8 @@ fn main() {
         ..Default::default()
     });
 
-    // UBO: aloca o tamanho refletido (min 16) e seta brilho/alpha = 1 (defaults).
-    let ubo_size = align256(refl.uniform_size.max(16)) as u64; // 256 evita qualquer erro de min size
+    // UBO: allocates the reflected size (min 16) and sets brightness/alpha = 1 (defaults).
+    let ubo_size = align256(refl.uniform_size.max(16)) as u64; // 256 avoids any min-size error
     let mut ubo_data = vec![0u8; ubo_size as usize];
     for (name, off) in &refl.uniform_offsets {
         if name == "g_Brightness" || name == "g_UserAlpha" {
@@ -155,7 +155,7 @@ fn main() {
     });
     queue.write_buffer(&ubo, 0, &ubo_data);
 
-    // módulos + pipeline
+    // modules + pipeline
     let vs = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("vs"),
         source: wgpu::ShaderSource::Wgsl(VERTEX_WGSL.into()),
@@ -248,7 +248,7 @@ fn main() {
         cache: None,
     });
 
-    // alvo + render
+    // target + render
     let out_tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("out"),
         size: extent,
@@ -283,7 +283,7 @@ fn main() {
         rp.draw(0..3, 0..1);
     }
 
-    // readback com row alignment (256)
+    // readback with row alignment (256)
     let bpr = align256(4 * cw);
     let readback = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("rb"),
@@ -314,7 +314,7 @@ fn main() {
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     let data = slice.get_mapped_range();
 
-    // remove o padding de linha e salva
+    // remove the row padding and save
     let mut pixels = vec![0u8; (cw * ch * 4) as usize];
     for y in 0..ch {
         let s = (y * bpr) as usize;
@@ -322,10 +322,10 @@ fn main() {
         pixels[d..d + (cw * 4) as usize].copy_from_slice(&data[s..s + (cw * 4) as usize]);
     }
     image::save_buffer(&out_png, &pixels, cw, ch, image::ColorType::Rgba8).unwrap();
-    println!("PNG salvo em {out_png} ({cw}x{ch})");
+    println!("PNG saved to {out_png} ({cw}x{ch})");
 }
 
-// Helper: fatia uma linha do buffer RGBA (evita panics de índice em código inline).
+// Helper: slices one row of the RGBA buffer (avoids index panics in inline code).
 fn tex_bytes_row(rgba: &[u8], start: usize, len: usize) -> Vec<u8> {
     rgba[start..start + len].to_vec()
 }

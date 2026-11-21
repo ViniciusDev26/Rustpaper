@@ -1,4 +1,6 @@
 /target
 
-# vídeos de teste (grandes; não versionar)
+# test videos (large; not versioned)
 assets/*.mp4
+/harness-out
+__pycache__/

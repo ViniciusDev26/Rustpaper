@@ -1,26 +1,26 @@
-// Módulo `particles`: simula na CPU os sistemas de partículas da cena e os
-// renderiza como sprites (quads) via INSTANCING. CADA sistema tem sua PRÓPRIA
-// textura (sprite) e seu blend (additive/translucent). O buffer de instâncias é
-// compartilhado; cada sistema ocupa um range contíguo e é desenhado com seu
-// bind group + pipeline (blend) próprios.
+// `particles` module: simulates the scene's particle systems on the CPU and
+// renders them as sprites (quads) via INSTANCING. EACH system has its OWN
+// texture (sprite) and its own blend (additive/translucent). The instance buffer is
+// shared; each system occupies a contiguous range and is drawn with its own
+// bind group + pipeline (blend).
 
 use bytemuck::{Pod, Zeroable};
 
 use rustpaper_core::particle::ParticleSystem;
 
-// Dados que o engine passa pra criar um sistema: os parâmetros + o sprite decodificado.
+// Data the engine passes to create a system: the parameters + the decoded sprite.
 pub struct ParticleInit {
     pub system: ParticleSystem,
     pub additive: bool,
-    pub sprite_rgba: Vec<u8>, // conteúdo já recortado (sem padding)
+    pub sprite_rgba: Vec<u8>, // content already cropped (no padding)
     pub sprite_w: u32,
     pub sprite_h: u32,
-    pub origin: [f32; 3], // posição do objeto na cena (emitter é local a ela)
-    pub scale: f32,       // escala do objeto (tamanho/velocidade/distância/gravidade)
-    pub sheet: Option<rustpaper_core::tex::SpriteSheet>, // flipbook (None = sprite único)
+    pub origin: [f32; 3], // object position in the scene (the emitter is local to it)
+    pub scale: f32,       // object scale (size/velocity/distance/gravity)
+    pub sheet: Option<rustpaper_core::tex::SpriteSheet>, // flipbook (None = single sprite)
 }
 
-// PRNG minúsculo (xorshift64*), determinístico, sem crate externa.
+// Tiny deterministic PRNG (xorshift64*), no external crate.
 struct Rng(u64);
 impl Rng {
     fn new(seed: u64) -> Self {
@@ -55,18 +55,18 @@ struct Particle {
     age: f32,
     life: f32,
     size: f32,
-    color: [f32; 3], // cor base (colorrandom, 0-255)
+    color: [f32; 3], // base color (colorrandom, 0-255)
     osc_freq: f32,
     osc_phase: f32,
     osc_scale: f32,
 }
 
-// Simulação de um sistema (parâmetros + partículas vivas + acumulador de spawn).
+// Simulation of one system (parameters + live particles + spawn accumulator).
 struct Sim {
     sys: ParticleSystem,
     additive: bool,
-    origin: [f32; 3], // posição do objeto na cena (somada ao emitter local)
-    scale: f32,       // escala do objeto (tamanho/velocidade/distância/gravidade)
+    origin: [f32; 3], // object position in the scene (added to the local emitter)
+    scale: f32,       // object scale (size/velocity/distance/gravity)
     sheet: Option<rustpaper_core::tex::SpriteSheet>,
     particles: Vec<Particle>,
     spawn_accum: f32,
@@ -95,14 +95,14 @@ impl Sim {
         for p in &mut self.particles {
             p.age += dt;
             for i in 0..3 {
-                // gravidade escalada pelo objeto: senão (gravity 100) ela domina e
-                // "estica" as bolhas numa coluna vertical em vez de espalhar.
+                // gravity scaled by the object: otherwise (gravity 100) it dominates and
+                // "stretches" the bubbles into a vertical column instead of spreading them.
                 p.vel[i] += self.sys.gravity[i] * self.scale * dt;
                 p.vel[i] -= p.vel[i] * self.sys.drag * dt;
                 p.pos[i] += p.vel[i] * dt;
             }
-            // turbulência contínua: empurrão lateral aleatório pra as bolhas vaguearem
-            // e se espalharem (aproxima o campo de turbulência do WE).
+            // continuous turbulence: random sideways push so the bubbles wander
+            // and spread out (approximates WE's turbulence field).
             if let Some((_, smax)) = self.sys.turbulent_speed {
                 p.vel[0] += rng.range(-smax, smax) * dt;
                 p.vel[1] += rng.range(-smax, smax) * dt;
@@ -147,8 +147,8 @@ impl Sim {
                 ),
                 None => (0.0, 0.0, 0.0),
             };
-            // velocidade inicial: turbulenta (direção aleatória * módulo) se o sistema
-            // usar turbulentvelocityrandom; senão a faixa velocityrandom.
+            // initial velocity: turbulent (random direction * magnitude) if the system
+            // uses turbulentvelocityrandom; otherwise the velocityrandom range.
             let vel = match self.sys.turbulent_speed {
                 Some((smin, smax)) => {
                     let d = [
@@ -162,9 +162,9 @@ impl Sim {
                 }
                 None => rng.range3(self.sys.velocity_min, self.sys.velocity_max),
             };
-            // Só o TAMANHO escala com o objeto (escala 0.1 => bolhas pequenas). A
-            // velocidade fica cheia pra as bolhas VIAJAREM e se espalharem (escalar a
-            // velocidade também as deixaria paradas, agrupando tudo num ponto).
+            // Only the SIZE scales with the object (scale 0.1 => small bubbles). The
+            // velocity stays full so the bubbles TRAVEL and spread out (scaling the
+            // velocity too would leave them stationary, clumping everything in one spot).
             self.particles.push(Particle {
                 pos,
                 vel,
@@ -179,7 +179,7 @@ impl Sim {
         }
     }
 
-    // Alpha da partícula: fade-in no começo, fade-out no fim da vida.
+    // Particle alpha: fade-in at the start, fade-out at the end of life.
     fn alpha(&self, p: &Particle) -> f32 {
         let fade_in = if self.sys.fade_in_time > 0.0 {
             (p.age / self.sys.fade_in_time).min(1.0)
@@ -192,19 +192,19 @@ impl Sim {
     }
 }
 
-// Dados por instância (32 bytes). Bate com o layout no shader.
+// Per-instance data (32 bytes). Matches the layout in the shader.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct Instance {
     center: [f32; 2],
     half: [f32; 2],
     color: [f32; 4],
-    uv_offset: [f32; 2], // canto do frame no sprite sheet
-    uv_scale: [f32; 2],  // tamanho do frame (1,1 se não for sheet)
+    uv_offset: [f32; 2], // frame corner in the sprite sheet
+    uv_scale: [f32; 2],  // frame size (1,1 if not a sheet)
 }
 
-// Um sistema já pronto na GPU: a simulação + o bind group do seu sprite + o range
-// que ele ocupa no buffer de instâncias neste frame.
+// A system ready on the GPU: the simulation + its sprite's bind group + the range
+// it occupies in the instance buffer this frame.
 struct SystemGpu {
     sim: Sim,
     bind_group: wgpu::BindGroup,
@@ -235,8 +235,8 @@ impl Particles {
             .sum::<usize>()
             .max(1);
 
-        // Bind group layout explícito (textura + sampler), compartilhado por todos
-        // os sistemas e pelos 2 pipelines.
+        // Explicit bind group layout (texture + sampler), shared by all
+        // systems and by both pipelines.
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("particle bgl"),
             entries: &[
@@ -340,7 +340,7 @@ impl Particles {
             "particle additive",
         );
 
-        // Sampler compartilhado (clamp + linear).
+        // Shared sampler (clamp + linear).
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("particle sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -351,7 +351,7 @@ impl Particles {
             ..Default::default()
         });
 
-        // Um sistema por textura própria.
+        // One system per own texture.
         let mut systems = Vec::new();
         for init in inits {
             let extent = wgpu::Extent3d {
@@ -430,7 +430,7 @@ impl Particles {
         }
     }
 
-    // Avança a simulação por `dt` e sobe as instâncias vivas (por sistema) pra GPU.
+    // Advances the simulation by `dt` and uploads the live instances (per system) to the GPU.
     pub fn update(&mut self, dt: f32, queue: &wgpu::Queue) {
         for s in &mut self.systems {
             s.sim.update(dt, &mut self.rng);
@@ -477,17 +477,17 @@ impl Particles {
                 }
                 None => [p.color[0] / 255.0, p.color[1] / 255.0, p.color[2] / 255.0],
             };
-            // Aditivo sem HDR/tonemap satura em branco quando sprites se sobrepõem.
-            // O WE compõe em HDR e faz tonemap; nós amortecemos a contribuição pra
-            // manter o brilho sutil (aproxima o resultado tonemapeado).
+            // Additive without HDR/tonemap saturates to white when sprites overlap.
+            // WE composes in HDR and tonemaps; we dampen the contribution to
+            // keep the brightness subtle (approximates the tonemapped result).
             let rgb = if sim.additive {
                 [rgb[0] * 0.35, rgb[1] * 0.35, rgb[2] * 0.35]
             } else {
                 rgb
             };
             let hx = p.size / (scene[0] * 0.5);
-            // Sprite sheet: escolhe a célula do frame pela idade (toca a animação uma
-            // vez ao longo da vida). Sem sheet, usa a textura inteira (0..1).
+            // Sprite sheet: picks the frame cell by age (plays the animation once
+            // over the lifetime). Without a sheet, uses the whole texture (0..1).
             let (uv_offset, uv_scale) = match sim.sheet {
                 Some(s) => {
                     let f = ((p.age / p.life) * s.frames as f32).floor() as u32;
@@ -500,8 +500,8 @@ impl Particles {
                 }
                 None => ([0.0, 0.0], [1.0, 1.0]),
             };
-            // Posição da cena (0..scene, y pra baixo) -> clip space [-1,1] com Y
-            // invertido. Sem o -1/flip as partículas ficavam presas num quadrado.
+            // Scene position (0..scene, y down) -> clip space [-1,1] with Y
+            // flipped. Without the -1/flip the particles were stuck in a square.
             out.push(Instance {
                 center: [px / (scene[0] * 0.5) - 1.0, 1.0 - py / (scene[1] * 0.5)],
                 half: [hx, hx * scene_aspect],
@@ -512,7 +512,7 @@ impl Particles {
         }
     }
 
-    // Desenha cada sistema com seu sprite (bind group) e blend (pipeline).
+    // Draws each system with its sprite (bind group) and blend (pipeline).
     pub fn draw(&self, pass: &mut wgpu::RenderPass) {
         pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
         for s in &self.systems {

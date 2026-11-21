@@ -24,6 +24,10 @@ wayland-client = "0.31"
 wayland-backend = { version = "0.3", features = ["client_system"] }
 calloop = "0.14"
 calloop-wayland-source = "0.4"
+# Scenes render on OpenGL (rustpaper-gl) into one EGL window per output.
+rustpaper-gl = { path = "../rustpaper-gl" }
+wayland-egl = "0.32"
+wayland-protocols = { version = "0.32", features = ["client"] }
 
 # Só pros examples (ex.: render_material grava PNG pra inspeção offscreen).
 [dev-dependencies]

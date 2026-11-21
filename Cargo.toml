@@ -2,6 +2,7 @@
 #   rustpaper-core     : lógica dos formatos do Wallpaper Engine (compartilhada)
 #   rustpaper-engine   : o renderer (usa rustpaper-core), binário `rustpaper`
 #   rustpaper-selector : app desktop pra escolher wallpaper (usa rustpaper-core)
+#   rustpaper-gl       : OpenGL scene renderer (offscreen, EGL) + `rustpaper-render` CLI
 [workspace]
 resolver = "3"
-members = ["crates/rustpaper-core", "crates/rustpaper-engine", "crates/rustpaper-selector"]
+members = ["crates/rustpaper-core", "crates/rustpaper-engine", "crates/rustpaper-gl", "crates/rustpaper-script", "crates/rustpaper-selector"]

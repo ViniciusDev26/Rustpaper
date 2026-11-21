@@ -1,9 +1,9 @@
-// Módulo `shader_compile`: pega um shader do WE, traduz pra GLSL (via rustpaper-core),
-// compila pra SPIR-V Vulkan chamando o glslangValidator, e reflete o layout
-// (bloco de uniforms + bindings de textura) do módulo resultante.
+// `shader_compile` module: takes a WE shader, translates it to GLSL (via rustpaper-core),
+// compiles it to Vulkan SPIR-V by calling glslangValidator, and reflects the layout
+// (uniform block + texture bindings) of the resulting module.
 //
-// Por que glslang como subprocesso: o frontend GLSL do naga é fraco demais pros
-// shaders do WE (ver docs/SHADER_TRANSLATION.md). O glslang já vem no container.
+// Why glslang as a subprocess: naga's GLSL frontend is too weak for the
+// WE shaders (see docs/SHADER_TRANSLATION.md). glslang already ships in the container.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -11,7 +11,7 @@ use std::process::Command;
 
 use rustpaper_core::shader::{Stage, translate};
 
-// Acha o glslangValidator (não costuma estar no PATH do processo).
+// Finds glslangValidator (it is usually not on the process's PATH).
 fn glslang_bin() -> &'static str {
     use std::sync::OnceLock;
     static BIN: OnceLock<String> = OnceLock::new();
@@ -30,14 +30,14 @@ fn glslang_bin() -> &'static str {
                 return c.to_string();
             }
         }
-        panic!("glslangValidator não encontrado (instale glslang no container)");
+        panic!("glslangValidator not found (install glslang in the container)");
     })
 }
 
-/// Compila GLSL (já traduzido) pra SPIR-V Vulkan. `stage` = "vert" | "frag".
+/// Compiles (already translated) GLSL to Vulkan SPIR-V. `stage` = "vert" | "frag".
 pub fn glsl_to_spirv(stage: &str, glsl: &str) -> Result<Vec<u32>, String> {
     let dir = std::env::temp_dir();
-    // nome único por processo+estágio pra não colidir entre chamadas concorrentes
+    // name unique per process+stage to avoid collisions between concurrent calls
     let base = format!("we_{}_{stage}", std::process::id());
     let inp = dir.join(format!("{base}.{stage}"));
     let outp = dir.join(format!("{base}.{stage}.spv"));
@@ -63,7 +63,7 @@ pub fn glsl_to_spirv(stage: &str, glsl: &str) -> Result<Vec<u32>, String> {
         .map_err(|e| e.to_string())?;
     if !out.status.success() {
         return Err(format!(
-            "glslang falhou ({stage}):\n{}\n{}",
+            "glslang failed ({stage}):\n{}\n{}",
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
         ));
@@ -72,21 +72,23 @@ pub fn glsl_to_spirv(stage: &str, glsl: &str) -> Result<Vec<u32>, String> {
     let _ = std::fs::remove_file(&inp);
     let _ = std::fs::remove_file(&outp);
     Ok(bytes
-        .chunks_exact(4)
-        .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| u32::from_le_bytes(*c))
         .collect())
 }
 
-/// Compila vertex + fragment JUNTOS (linkados) pra SPIR-V. Isso faz o glslang
-/// UNIFICAR o bloco default de uniforms (WeGlobals) entre os dois estágios: os dois
-/// SPIR-V resultantes têm o MESMO struct, com os mesmos offsets. É o que permite usar
-/// o vertex do WE (que a maioria dos efeitos precisa, pra coords animadas) junto do
-/// fragment, compartilhando um único UBO no binding 0. Retorna (vert_spirv, frag_spirv).
+/// Compiles vertex + fragment TOGETHER (linked) to SPIR-V. This makes glslang
+/// UNIFY the default uniform block (WeGlobals) across the two stages: the two resulting
+/// SPIR-V modules have the SAME struct, with the same offsets. This is what allows using
+/// WE's vertex shader (which most effects need, for animated coords) together with the
+/// fragment, sharing a single UBO at binding 0. Returns (vert_spirv, frag_spirv).
 pub fn glsl_to_spirv_linked(
     vert_glsl: &str,
     frag_glsl: &str,
 ) -> Result<(Vec<u32>, Vec<u32>), String> {
-    // subdiretório único: o glslang com -l escreve vert.spv/frag.spv no CWD.
+    // unique subdirectory: glslang with -l writes vert.spv/frag.spv into the CWD.
     let dir = std::env::temp_dir().join(format!("we_link_{}", std::process::id()));
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     std::fs::write(dir.join("s.vert"), vert_glsl).map_err(|e| e.to_string())?;
@@ -111,7 +113,7 @@ pub fn glsl_to_spirv_linked(
         .map_err(|e| e.to_string())?;
     if !out.status.success() {
         return Err(format!(
-            "glslang -l falhou:\n{}\n{}",
+            "glslang -l failed:\n{}\n{}",
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
         ));
@@ -119,8 +121,10 @@ pub fn glsl_to_spirv_linked(
     let read = |name: &str| -> Result<Vec<u32>, String> {
         let bytes = std::fs::read(dir.join(name)).map_err(|e| format!("{name}: {e}"))?;
         Ok(bytes
-            .chunks_exact(4)
-            .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| u32::from_le_bytes(*c))
             .collect())
     };
     let vert = read("vert.spv")?;
@@ -129,7 +133,7 @@ pub fn glsl_to_spirv_linked(
     Ok((vert, frag))
 }
 
-/// Traduz vertex + fragment do WE e compila linkados (UBO unificado).
+/// Translates the WE vertex + fragment and compiles them linked (unified UBO).
 pub fn compile_linked(
     vert_src: &str,
     frag_src: &str,
@@ -141,7 +145,7 @@ pub fn compile_linked(
     glsl_to_spirv_linked(&v, &f)
 }
 
-/// Traduz um shader do WE e compila pra SPIR-V.
+/// Translates a WE shader and compiles it to SPIR-V.
 pub fn compile(
     stage: Stage,
     source: &str,
@@ -156,35 +160,35 @@ pub fn compile(
     glsl_to_spirv(sflag, &glsl)
 }
 
-/// Layout refletido de um shader compilado: o bloco de uniforms (WeGlobals) e os
-/// bindings de textura/sampler. Serve pra montar o UBO e o bind group corretos.
+/// Reflected layout of a compiled shader: the uniform block (WeGlobals) and the
+/// texture/sampler bindings. Used to build the correct UBO and bind group.
 #[derive(Debug, Default, Clone)]
 pub struct Reflection {
-    /// Tamanho (bytes) do bloco de uniforms WeGlobals (0 se não houver).
+    /// Size (bytes) of the WeGlobals uniform block (0 if there is none).
     pub uniform_size: u32,
-    /// Offset de cada membro do bloco, por nome (ex.: "g_Brightness" -> 0).
+    /// Offset of each member of the block, by name (e.g. "g_Brightness" -> 0).
     pub uniform_offsets: HashMap<String, u32>,
-    /// Bindings das texturas (globais `Handle` do tipo imagem).
+    /// Texture bindings (global `Handle`s of image type).
     pub texture_bindings: Vec<u32>,
-    /// Bindings dos samplers (globais `Handle` do tipo sampler).
+    /// Sampler bindings (global `Handle`s of sampler type).
     pub sampler_bindings: Vec<u32>,
 }
 
-/// Uma entrada (attribute) do vertex: local (location) e nº de componentes.
+/// A vertex entry (attribute): location and number of components.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VertexInput {
     pub location: u32,
     pub components: u32,
 }
 
-/// Reflete os attributes de entrada do vertex (a_Position, a_TexCoord, ...) — local
-/// e dimensão de cada um. Usado pra montar o layout do vertex buffer casando as
-/// locations que o glslang atribuiu.
+/// Reflects the vertex's input attributes (a_Position, a_TexCoord, ...) - location
+/// and dimension of each one. Used to build the vertex buffer layout by matching the
+/// locations that glslang assigned.
 pub fn reflect_vertex_inputs(spirv: &[u32]) -> Result<Vec<VertexInput>, String> {
     let module = naga::front::spv::Frontend::new(spirv.iter().copied(), &Default::default())
         .parse()
         .map_err(|e| format!("naga spv-in: {e:?}"))?;
-    let ep = module.entry_points.first().ok_or("sem entry point")?;
+    let ep = module.entry_points.first().ok_or("no entry point")?;
     let mut out = Vec::new();
     for arg in &ep.function.arguments {
         if let Some(naga::Binding::Location { location, .. }) = arg.binding {
@@ -203,7 +207,7 @@ pub fn reflect_vertex_inputs(spirv: &[u32]) -> Result<Vec<VertexInput>, String> 
     Ok(out)
 }
 
-/// Reflete o SPIR-V usando o naga (o mesmo parser que o wgpu usa).
+/// Reflects the SPIR-V using naga (the same parser wgpu uses).
 pub fn reflect(spirv: &[u32]) -> Result<Reflection, String> {
     let module = naga::front::spv::Frontend::new(spirv.iter().copied(), &Default::default())
         .parse()

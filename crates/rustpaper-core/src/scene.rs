@@ -1,9 +1,9 @@
-// Módulo `scene`: entende o suficiente do scene.json (e dos JSONs de modelo e
-// material) pra achar a textura da imagem de FUNDO. A cadeia no Wallpaper Engine:
-//   scene.json  -> objeto com "image": "models/x.json"
+// Module `scene`: understands enough of scene.json (and the model and material
+// JSONs) to find the BACKGROUND image texture. The chain in Wallpaper Engine:
+//   scene.json  -> object with "image": "models/x.json"
 //   model json  -> "material": "materials/x.json"
-//   material    -> passes[0].textures[0]: "nome-da-textura"
-//   arquivo real: "materials/nome-da-textura.tex"
+//   material    -> passes[0].textures[0]: "texture-name"
+//   actual file: "materials/texture-name.tex"
 
 use crate::particle::ParticleSystem;
 use crate::pkg::Pkg;
@@ -14,10 +14,10 @@ struct SceneObject {
     image: Option<String>,
     #[serde(default)]
     particle: Option<String>,
-    // posição do objeto na cena ("x y z"); o emitter da partícula é LOCAL a ela.
+    // object position in the scene ("x y z"); the particle emitter is LOCAL to it.
     #[serde(default)]
     origin: Option<String>,
-    // escala do objeto ("x y z"); escala o sistema de partículas (tamanho/velocidade).
+    // object scale ("x y z"); scales the particle system (size/velocity).
     #[serde(default)]
     scale: Option<String>,
 }
@@ -37,16 +37,16 @@ struct ModelRaw {
 #[derive(serde::Deserialize)]
 struct MaterialPass {
     #[serde(default)]
-    shader: Option<String>, // ex.: "genericimage2", "effects/nitro"
-    // texturas podem ter nulos no array (slots vazios) -> Option.
+    shader: Option<String>, // e.g. "genericimage2", "effects/nitro"
+    // textures may have nulls in the array (empty slots) -> Option.
     #[serde(default)]
     textures: Vec<Option<String>>,
     #[serde(default)]
     blending: Option<String>, // "translucent" | "additive" | "normal" | ...
-    // combos: feature flags do shader ({} quando nenhuma). Valores são inteiros.
+    // combos: shader feature flags ({} when there are none). Values are integers.
     #[serde(default)]
     combos: serde_json::Map<String, serde_json::Value>,
-    // constantshadervalues: overrides de parâmetros de material (g_Brightness, etc).
+    // constantshadervalues: material parameter overrides (g_Brightness, etc).
     #[serde(default)]
     constantshadervalues: serde_json::Map<String, serde_json::Value>,
 }
@@ -57,9 +57,9 @@ struct MaterialRaw {
     passes: Vec<MaterialPass>,
 }
 
-/// Tudo que precisamos de um pass de material pra compilar+desenhar: o shader, seus
-/// combos, as texturas e os overrides de parâmetro. Reutilizável tanto pro material
-/// de fundo quanto pros materiais de efeito.
+/// Everything we need from a material pass to compile and draw it: the shader, its
+/// combos, the textures and the parameter overrides. Reusable for both the
+/// background material and effect materials.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MaterialInfo {
     pub shader: String,
@@ -69,17 +69,17 @@ pub struct MaterialInfo {
     pub constants: Vec<(String, serde_json::Value)>,
 }
 
-/// Converte o primeiro pass de um material json (string) em MaterialInfo.
+/// Converts the first pass of a material JSON (string) into a MaterialInfo.
 pub fn material_info_str(material_json: &str) -> Option<MaterialInfo> {
     material_info(material_json)
 }
 
-// Converte o primeiro pass de um material json em MaterialInfo.
+// Converts the first pass of a material JSON into a MaterialInfo.
 fn material_info(material_json: &str) -> Option<MaterialInfo> {
     let mat: MaterialRaw = serde_json::from_str(material_json).ok()?;
     let pass = mat.passes.into_iter().next()?;
     let shader = pass.shader?;
-    // combos: só os valores inteiros (é o que o WE usa nos #if).
+    // combos: integer values only (that is what WE uses in the #if).
     let combos = pass
         .combos
         .into_iter()
@@ -95,19 +95,19 @@ fn material_info(material_json: &str) -> Option<MaterialInfo> {
     })
 }
 
-// O caminho (dentro do pkg) do model do primeiro objeto que tem imagem.
+// The path (inside the pkg) of the model of the first object that has an image.
 fn first_image_model(scene_json: &str) -> Option<String> {
     let scene: SceneRaw = serde_json::from_str(scene_json).ok()?;
     scene.objects.into_iter().find_map(|o| o.image)
 }
 
-// O caminho do material referenciado por um model json.
+// The path of the material referenced by a model JSON.
 fn material_of_model(model_json: &str) -> Option<String> {
     let model: ModelRaw = serde_json::from_str(model_json).ok()?;
     model.material
 }
 
-// O nome da primeira textura de um material json.
+// The name of the first texture of a material JSON.
 fn first_texture(material_json: &str) -> Option<String> {
     let mat: MaterialRaw = serde_json::from_str(material_json).ok()?;
     mat.passes
@@ -115,7 +115,7 @@ fn first_texture(material_json: &str) -> Option<String> {
         .find_map(|p| p.textures.into_iter().flatten().next())
 }
 
-// O modo de blending do primeiro pass (default "translucent").
+// The blending mode of the first pass (default "translucent").
 fn first_blending(material_json: &str) -> String {
     serde_json::from_str::<MaterialRaw>(material_json)
         .ok()
@@ -124,7 +124,7 @@ fn first_blending(material_json: &str) -> String {
         .unwrap_or_else(|| "translucent".to_string())
 }
 
-// Integra tudo: dado um pkg de cena, resolve o caminho do .tex de fundo.
+// Ties it all together: given a scene pkg, resolves the path of the background .tex.
 pub fn background_texture(pkg: &Pkg) -> Option<String> {
     let scene = std::str::from_utf8(pkg.read("scene.json")?).ok()?;
     let model_path = first_image_model(scene)?;
@@ -138,8 +138,9 @@ pub fn background_texture(pkg: &Pkg) -> Option<String> {
     Some(format!("materials/{tex_name}.tex"))
 }
 
-// Como background_texture, mas devolve o MaterialInfo completo do fundo (shader,
-// combos, texturas, constantes) — a base pra renderizar o fundo pelo material real.
+// Like background_texture, but returns the full background MaterialInfo (shader,
+// combos, textures, constants) — the basis for rendering the background through
+// its real material.
 pub fn background_material(pkg: &Pkg) -> Option<MaterialInfo> {
     let scene = std::str::from_utf8(pkg.read("scene.json")?).ok()?;
     let model_path = first_image_model(scene)?;
@@ -149,16 +150,16 @@ pub fn background_material(pkg: &Pkg) -> Option<MaterialInfo> {
     material_info(material)
 }
 
-// Um sistema de partículas da cena, já com o nome da textura do sprite resolvido.
+// A particle system of the scene, with the sprite texture name already resolved.
 pub struct SceneParticles {
     pub system: ParticleSystem,
-    pub texture: String,  // ex.: "particle/halo" (o engine resolve pro .tex)
-    pub additive: bool,   // blend do material: additive (luz) vs translucent
-    pub origin: [f32; 3], // posição do objeto na cena (soma-se ao emitter local)
-    pub scale: f32,       // escala do objeto (multiplica tamanho/velocidade/distância)
+    pub texture: String, // e.g. "particle/halo" (the engine resolves it to the .tex)
+    pub additive: bool,  // material blend: additive (light) vs translucent
+    pub origin: [f32; 3], // object position in the scene (added to the local emitter)
+    pub scale: f32,      // object scale (multiplies size/velocity/distance)
 }
 
-// Extrai todos os sistemas de partículas da cena (objetos com "particle").
+// Extracts all particle systems from the scene (objects with "particle").
 pub fn particle_systems(pkg: &Pkg) -> Vec<SceneParticles> {
     let Some(scene_json) = pkg
         .read("scene.json")
@@ -179,13 +180,13 @@ pub fn particle_systems(pkg: &Pkg) -> Vec<SceneParticles> {
         let Ok(system) = ParticleSystem::parse(pjson) else {
             continue;
         };
-        // material -> nome da textura do sprite + modo de blend
+        // material -> sprite texture name + blend mode
         let material_json = pkg
             .read(&system.material)
             .and_then(|b| std::str::from_utf8(b).ok());
         let texture = material_json.and_then(first_texture).unwrap_or_default();
         let additive = material_json.map(first_blending).as_deref() == Some("additive");
-        // origin do OBJETO (o emitter da partícula é local a ele).
+        // origin of the OBJECT (the particle emitter is local to it).
         let origin = obj
             .origin
             .as_deref()
@@ -201,7 +202,7 @@ pub fn particle_systems(pkg: &Pkg) -> Vec<SceneParticles> {
                 ]
             })
             .unwrap_or([0.0; 3]);
-        // escala do objeto (usa o X; a maioria é uniforme).
+        // object scale (uses X; most are uniform).
         let scale = obj
             .scale
             .as_deref()
@@ -264,7 +265,7 @@ mod tests {
         let info = material_info(material).unwrap();
         assert_eq!(info.shader, "genericimage2");
         assert_eq!(info.blending, "translucent");
-        // combos ordenados? não garantimos ordem; checa como conjunto
+        // ordered combos? we do not guarantee order; check as a set
         assert!(info.combos.contains(&("LIGHTING".into(), 1)));
         assert!(info.combos.contains(&("BLENDMODE".into(), 3)));
         assert_eq!(info.textures, vec![Some("bg".to_string()), None]);

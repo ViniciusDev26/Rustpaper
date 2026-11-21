@@ -1,16 +1,16 @@
-// Módulo `postprocess`: a primitiva de "passe" — renderiza um FRAGMENT shader do WE
-// (já compilado pra SPIR-V) sobre uma textura de entrada, escrevendo numa textura de
-// saída. É o tijolo tanto do material de fundo quanto da cadeia de efeitos (cada
-// efeito é um passe que amostra o framebuffer anterior como g_Texture0).
+// `postprocess` module: the "pass" primitive - renders a WE FRAGMENT shader
+// (already compiled to SPIR-V) over an input texture, writing into an output
+// texture. It is the building block of both the background material and the effect chain (each
+// effect is a pass that samples the previous framebuffer as g_Texture0).
 //
-// O vertex é nosso (fullscreen). Os shaders do WE declaram v_TexCoord como vec2 OU
-// vec4 (efeitos usam .zw pra máscara) — geramos o vertex com a aridade certa pra
-// casar a interface com o fragment.
+// The vertex shader is ours (fullscreen). WE shaders declare v_TexCoord as either vec2 OR
+// vec4 (effects use .zw for the mask) - we generate the vertex with the right arity to
+// match the interface with the fragment.
 
 use crate::shader_compile::Reflection;
 
 fn vertex_wgsl(uv_vec4: bool) -> String {
-    // uv em location 0; vec4 replica xy em zw (máscaras amostram no mesmo uv).
+    // uv at location 0; vec4 replicates xy into zw (masks sample at the same uv).
     let (ty, build) = if uv_vec4 {
         ("vec4<f32>", "vec4(u, u.x, u.y)")
     } else {
@@ -33,7 +33,7 @@ fn vs_main(@builtin(vertex_index) i: u32) -> VsOut {{
     )
 }
 
-/// Um passe compilado: pipeline (nosso vertex + o frag do WE) + layout do bind group.
+/// A compiled pass: pipeline (our vertex + the WE frag) + bind group layout.
 pub struct Pass {
     pipeline: wgpu::RenderPipeline,
     bgl: wgpu::BindGroupLayout,
@@ -43,7 +43,7 @@ pub struct Pass {
 }
 
 impl Pass {
-    /// Cria o passe. `uv_vec4` = o frag declara v_TexCoord como vec4.
+    /// Creates the pass. `uv_vec4` = the frag declares v_TexCoord as vec4.
     pub fn new(
         device: &wgpu::Device,
         frag_spirv: &[u32],
@@ -62,7 +62,7 @@ impl Pass {
 
         let tex_binding = refl.texture_bindings.first().copied().unwrap_or(1);
         let smp_binding = refl.sampler_bindings.first().copied().unwrap_or(2);
-        // UBO com no mínimo 16 bytes; usa o tamanho refletido arredondado.
+        // UBO with at least 16 bytes; uses the reflected size, rounded up.
         let ubo_size = refl.uniform_size.max(16).next_multiple_of(16) as u64;
 
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -140,8 +140,8 @@ impl Pass {
         self.ubo_size
     }
 
-    /// Renderiza: amostra `input` pelo frag do WE (com `ubo_bytes` no bloco de
-    /// uniforms) e escreve em `output`.
+    /// Renders: samples `input` through the WE frag (with `ubo_bytes` in the uniform
+    /// block) and writes into `output`.
     pub fn render(
         &self,
         device: &wgpu::Device,

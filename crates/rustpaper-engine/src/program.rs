@@ -1,21 +1,21 @@
-// Módulo `program`: um material do WE compilado num pipeline pronto pra desenhar uma
-// camada/passe — vertex+fragment LINKADOS (UBO unificado), com layout de vertex
-// buffer (a_Position vec3 + a_TexCoord vec2), bind group (UBO + texturas/samplers) e
-// estado de blend. Reúne a compilação, a reflexão e a montagem do UBO.
+// `program` module: a WE material compiled into a pipeline ready to draw a
+// layer/pass - LINKED vertex+fragment (unified UBO), with a vertex
+// buffer layout (a_Position vec3 + a_TexCoord vec2), bind group (UBO + textures/samplers) and
+// blend state. Brings together compilation, reflection and UBO assembly.
 
 use std::collections::HashMap;
 
 use crate::shader_compile as sc;
 use rustpaper_core::shader::{self, UniformParam};
 
-/// Modo de blend de uma camada/passe.
+/// Blend mode of a layer/pass.
 #[derive(Clone, Copy, PartialEq)]
 pub enum Blend {
     /// alpha over (normal/translucent)
     Alpha,
-    /// aditivo (soma luz)
+    /// additive (adds light)
     Additive,
-    /// substitui (sem blend)
+    /// replaces (no blend)
     Opaque,
 }
 
@@ -70,8 +70,8 @@ pub struct Program {
 }
 
 impl Program {
-    /// Compila e monta o pipeline a partir das fontes do vertex e fragment do WE.
-    /// `combos` já deve incluir defaults + overrides. `target` é o formato do alvo.
+    /// Compiles and assembles the pipeline from the WE vertex and fragment sources.
+    /// `combos` must already include defaults + overrides. `target` is the target format.
     pub fn build(
         device: &wgpu::Device,
         vert_src: &str,
@@ -81,7 +81,7 @@ impl Program {
         target: wgpu::TextureFormat,
         shaders_dir: &std::path::Path,
     ) -> Result<Program, String> {
-        // combos efetivos: defaults das anotações // [COMBO], sobrescritos pelos dados.
+        // effective combos: defaults from the // [COMBO] annotations, overridden by the data.
         let mut eff = shader::parse_combo_defaults(vert_src);
         eff.extend(shader::parse_combo_defaults(frag_src));
         for (k, v) in combos {
@@ -98,8 +98,8 @@ impl Program {
         let mut sampler_defaults = shader::parse_sampler_defaults(vert_src);
         sampler_defaults.extend(shader::parse_sampler_defaults(frag_src));
 
-        // Captura erros de validação (ex.: interface vertex/fragment incompatível em
-        // alguns shaders do WE) em vez de deixar o wgpu dar panic e derrubar tudo.
+        // Captures validation errors (e.g. incompatible vertex/fragment interface in
+        // some WE shaders) instead of letting wgpu panic and take everything down.
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
 
         let vs = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -111,7 +111,7 @@ impl Program {
             source: wgpu::ShaderSource::SpirV(f_spv.into()),
         });
 
-        // layout do vertex buffer: casa por dimensão (vec3=a_Position@0, vec2=a_TexCoord@12)
+        // vertex buffer layout: matches by dimension (vec3=a_Position@0, vec2=a_TexCoord@12)
         let mut attrs = Vec::new();
         for vi in &vinputs {
             let (offset, format) = match vi.components {
@@ -198,7 +198,7 @@ impl Program {
         });
 
         if let Some(err) = pollster::block_on(scope.pop()) {
-            return Err(format!("pipeline inválido: {err}"));
+            return Err(format!("invalid pipeline: {err}"));
         }
 
         Ok(Program {
@@ -213,8 +213,8 @@ impl Program {
         })
     }
 
-    /// Monta os bytes do UBO: builtins (MVP, tempo, resolução, cor/brilho/alpha da
-    /// camada) + params (default ou constant do material/cena por nome "material").
+    /// Builds the UBO bytes: builtins (MVP, time, resolution, layer
+    /// color/brightness/alpha) + params (default or material/scene constant by "material" name).
     #[allow(clippy::too_many_arguments)]
     pub fn build_ubo(
         &self,
@@ -251,7 +251,7 @@ impl Program {
                 write(&mut buf, o, &[w as f32, h as f32, w as f32, h as f32]);
             }
         }
-        // cor/brilho/alpha da camada (nomes usuais dos genericimage*)
+        // layer color/brightness/alpha (usual names in genericimage*)
         if let Some(&o) = self.offsets.get("g_Brightness") {
             write(&mut buf, o, &[brightness]);
         }
@@ -264,7 +264,7 @@ impl Program {
         if let Some(&o) = self.offsets.get("g_Color4") {
             write(&mut buf, o, &[color[0], color[1], color[2], alpha]);
         }
-        // params anotados: default, sobrescrito por constant do material/cena
+        // annotated params: default, overridden by material/scene constant
         for p in &self.params {
             let Some(&o) = self.offsets.get(&p.uniform) else {
                 continue;
@@ -282,8 +282,8 @@ impl Program {
     }
 }
 
-/// Projeção ortográfica do WE: espaço de cena [0,w]x[0,h] -> NDC, com Y invertido
-/// (y=0 no topo). Coluna-maior (como o GLSL espera).
+/// WE orthographic projection: scene space [0,w]x[0,h] -> NDC, with Y flipped
+/// (y=0 at the top). Column-major (as GLSL expects).
 pub fn ortho(w: f32, h: f32) -> [f32; 16] {
     [
         2.0 / w,
