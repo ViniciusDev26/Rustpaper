@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Rustpaper
+Comment=Wallpaper Engine wallpapers on Linux
+Exec=rustpaper-selector
+Icon=rustpaper
+Categories=Utility;Graphics;

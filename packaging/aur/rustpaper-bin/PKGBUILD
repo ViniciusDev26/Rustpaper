@@ -1,0 +1,29 @@
+# Maintainer: Carlos Vinicius <https://github.com/ViniciusDev26>
+#
+# Prebuilt binaries from the GitHub release (built by .github/workflows/
+# release.yml in an Arch container). pkgver and sha256sums are updated by CI.
+pkgname=rustpaper-bin
+pkgver=0.1.0 # x-release-please-version
+pkgrel=1
+pkgdesc="Wallpaper Engine scene and video wallpapers on Wayland (live engine + selector)"
+arch=('x86_64')
+url="https://github.com/ViniciusDev26/Rustpaper"
+license=('MIT')
+depends=('gcc-libs' 'glibc' 'gtk3' 'libglvnd' 'libxkbcommon' 'wayland' 'webkit2gtk-4.1'
+         'ffmpeg' 'vulkan-icd-loader')
+optdepends=('pipewire: audio-reactive wallpapers (pw-record)'
+            'hyprland: pause while a window is fullscreen, cursor effects'
+            'steam: Wallpaper Engine (its assets and Workshop wallpapers are required)')
+provides=('rustpaper')
+conflicts=('rustpaper')
+source=("https://github.com/ViniciusDev26/Rustpaper/releases/download/v$pkgver/rustpaper-$pkgver-x86_64-linux.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+    cd "rustpaper-$pkgver"
+    install -Dm755 -t "$pkgdir/usr/bin" bin/*
+    install -Dm644 share/applications/rustpaper.desktop "$pkgdir/usr/share/applications/rustpaper.desktop"
+    install -Dm644 share/icons/hicolor/128x128/apps/rustpaper.png \
+        "$pkgdir/usr/share/icons/hicolor/128x128/apps/rustpaper.png"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
