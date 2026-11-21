@@ -1,0 +1,14 @@
+# Scenes left out of the fidelity score, with the reason. batch.sh skips them.
+# Columns: id, reason, note
+2903412088	we-crash	Wallpaper Engine crashes / never opens a window for it
+3326873240	we-black	WE shows a black window even with a 15 s warm-up
+3470764447	we-black	WE shows a black window even with a 15 s warm-up
+3832440765	we-black	WE shows a black window even with a 15 s warm-up
+3122339805	scenescript	built by SceneScript (placeholders + scripted media); both sides black
+3444535389	scenescript	built by SceneScript (placeholders); both sides black
+3509243656	scenescript	built by SceneScript (render targets created by script); both sides black
+3288381550	we-crash	WE shows its crash dialog (access violation) for this scene
+3832902426	we-crash	WE shows its crash dialog over the scene in every capture (2026-11-15, recaptured 2026-11-21)
+3835519862	we-crash	WE shows its crash dialog over the scene in every capture (2026-11-15, recaptured 2026-11-21)
+3025975631	we-crash	WE shows its crash dialog over the scene in every capture (2026-11-15)
+2938612768	we-crash	WE shows its crash dialog over the media player in every capture (2026-11-15, recaptured 2026-11-21)

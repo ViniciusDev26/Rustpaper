@@ -1,10 +1,10 @@
-// Módulo `compositor`: renderiza uma cena INTEIRA do WE (todas as camadas-imagem,
-// em ordem, com transform/blend/alpha, mais os efeitos de cada camada) numa textura
-// de conteúdo. É a versão "engine" do que o example render_composite prova offscreen,
-// pronta pra ser chamada a cada frame pelo renderer ao vivo (com `time` avançando).
+// `compositor` module: renders an ENTIRE WE scene (all image layers,
+// in order, with transform/blend/alpha, plus each layer's effects) into a
+// content texture. It is the "engine" version of what the render_composite example proves offscreen,
+// ready to be called every frame by the live renderer (with `time` advancing).
 //
-// Cada camada é pré-construída em `new` (textura, programa, quad, constants). Camadas
-// com efeitos são renderizadas num scratch, passam pelos efeitos e são compostas.
+// Each layer is pre-built in `new` (texture, program, quad, constants). Layers
+// with effects are rendered into a scratch, go through the effects and are composited.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -20,8 +20,8 @@ use crate::program::{Blend, Program, ortho};
 
 const BASE: &str = "/home/vscode/we-assets";
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
-// Partículas ligadas? Agora com sprite sheet (flipbook) — antes os "quadrados de
-// bolhas" eram a grade inteira do sheet amostrada de uma vez.
+// Particles enabled? Now with sprite sheet (flipbook) - before, the "bubble
+// squares" were the whole sheet grid sampled at once.
 const PARTICLES_ENABLED: bool = true;
 
 fn resolve(pkg: &Pkg, path: &str) -> Option<Vec<u8>> {
@@ -99,12 +99,12 @@ fn layer_quad(l: &Layer) -> [f32; 20] {
     v
 }
 
-// Um efeito resolvido de uma camada: shader + combos + constants (já mesclados).
+// A resolved effect of a layer: shader + combos + constants (already merged).
 #[allow(dead_code)]
 struct EffectPassGpu {
     key: String,
     constants: HashMap<String, Vec<f32>>,
-    noise: Option<wgpu::Texture>, // textura extra (ex.: util/noise) já carregada
+    noise: Option<wgpu::Texture>, // extra texture (e.g. util/noise), already loaded
     noise_view: Option<wgpu::TextureView>,
 }
 
@@ -112,15 +112,15 @@ struct LayerGpu {
     key: String,
     _tex: wgpu::Texture,
     tex_view: wgpu::TextureView,
-    extra: Vec<(u32, wgpu::Texture, wgpu::TextureView)>, // (binding, tex, view) pros slots >0
+    extra: Vec<(u32, wgpu::Texture, wgpu::TextureView)>, // (binding, tex, view) for the slots >0
     vbuf: wgpu::Buffer,
     constants: HashMap<String, Vec<f32>>,
     brightness: f32,
     alpha: f32,
     color: [f32; 3],
     blend: Blend,
-    // Cadeia de efeitos da camada: montada, mas ainda não aplicada no render
-    // (pipeline de efeitos gated — ver roadmap no CLAUDE.md).
+    // Layer effect chain: built, but not yet applied in render
+    // (effect pipeline gated - see the roadmap in CLAUDE.md).
     #[allow(dead_code)]
     effects: Vec<EffectPassGpu>,
 }
@@ -135,23 +135,23 @@ pub struct Compositor {
     ibuf: wgpu::Buffer,
     clamp: wgpu::Sampler,
     repeat: wgpu::Sampler,
-    // ping-pong pros efeitos (tamanho da cena); alocadas, mas só usadas quando o
-    // pipeline de efeitos for religado (gated — ver roadmap no CLAUDE.md).
+    // ping-pong for the effects (scene size); allocated, but only used when the
+    // effect pipeline is re-enabled (gated - see the roadmap in CLAUDE.md).
     #[allow(dead_code)]
     scratch_a: wgpu::Texture,
     #[allow(dead_code)]
     scratch_b: wgpu::Texture,
-    // partículas da cena (simulação + render instanciado), em espaço de cena.
+    // scene particles (simulation + instanced render), in scene space.
     particles: Option<Particles>,
 }
 
-// Sprite de partícula suportado: renderer "sprite" e tamanho moderado (os gigantes
-// additive lavam a tela sem HDR — ver nota no wallpaper.rs).
+// Supported particle sprite: "sprite" renderer and moderate size (the giant
+// additive ones wash out the screen without HDR - see the note in wallpaper.rs).
 fn particle_supported(sys: &ParticleSystem) -> bool {
     sys.renderer == "sprite" && sys.size.1 <= 400.0
 }
 
-// carrega o sprite de uma partícula (rgba recortado) do pkg/base.
+// loads a particle's sprite (cropped rgba) from the pkg/base.
 fn load_sprite(pkg: &Pkg, name: &str) -> Option<(Vec<u8>, u32, u32)> {
     if name.is_empty() {
         return None;
@@ -253,7 +253,7 @@ impl Compositor {
                 continue;
             };
 
-            // texturas extras do material (slots > 0)
+            // extra material textures (slots > 0)
             let prog = &programs[&key];
             let mut extra = Vec::new();
             for &b in &prog.tex_bindings {
@@ -297,8 +297,8 @@ impl Compositor {
             });
             queue.write_buffer(&vbuf, 0, bytemuck::cast_slice(&verts));
 
-            // efeitos por camada desligados por ora (ver render). Não compilamos os
-            // shaders de efeito no startup (economiza dezenas de chamadas ao glslang).
+            // per-layer effects disabled for now (see render). We don't compile the
+            // effect shaders at startup (saves dozens of glslang calls).
             let _ = &layer.effects;
             let fx: Vec<EffectPassGpu> = Vec::new();
 
@@ -336,12 +336,12 @@ impl Compositor {
             })
         };
 
-        // partículas da cena (em espaço de cena — usa a projeção, não a textura de
-        // fundo; era esse o bug do "quadrado no meio").
-        // DESLIGADO por ora (ver PARTICLES_ENABLED): nosso simulador é simples demais
-        // pros sistemas do WE (múltiplos emissores, operadores, alpha/blend) e o
-        // resultado vira "quadrados de bolhas" — pior que sem partícula. Religar quando
-        // o sistema estiver fiel. O código fica gated pra reativar fácil.
+        // scene particles (in scene space - uses the projection, not the background
+        // texture; that was the "square in the middle" bug).
+        // DISABLED for now (see PARTICLES_ENABLED): our simulator is too simple
+        // for WE's systems (multiple emitters, operators, alpha/blend) and the
+        // result turns into "bubble squares" - worse than no particles. Re-enable when
+        // the system is faithful. The code stays gated so it is easy to reactivate.
         let particles = if PARTICLES_ENABLED {
             let mut inits: Vec<ParticleInit> = Vec::new();
             for sp in rustpaper_core::scene::particle_systems(&pkg) {
@@ -351,7 +351,7 @@ impl Compositor {
                 let Some((rgba, sw, sh)) = load_sprite(&pkg, &sp.texture) else {
                     continue;
                 };
-                // sprite sheet (flipbook) via o JSON companheiro do .tex, se houver.
+                // sprite sheet (flipbook) via the .tex's companion JSON, if any.
                 let sheet = resolve(&pkg, &format!("materials/{}.tex-json", sp.texture))
                     .and_then(|b| String::from_utf8(b).ok())
                     .and_then(|j| rustpaper_core::tex::parse_spritesheet(&j, sw, sh));
@@ -388,8 +388,8 @@ impl Compositor {
         })
     }
 
-    /// Renderiza a cena inteira na textura `target` (deve ter o tamanho da cena e
-    /// usage RENDER_ATTACHMENT). `time` alimenta g_Time; `dt` avança as partículas.
+    /// Renders the whole scene into the `target` texture (must have the scene size and
+    /// RENDER_ATTACHMENT usage). `time` feeds g_Time; `dt` advances the particles.
     pub fn render(
         &mut self,
         device: &wgpu::Device,
@@ -400,11 +400,11 @@ impl Compositor {
     ) {
         let mut first = true;
         for layer in &self.layers {
-            // Desenha a camada DIRETO no target. (Efeitos por camada estão desligados
-            // por ora: a maioria das cenas tem cadeias enormes e frágeis que, aplicadas
-            // parcialmente, destroem a imagem — sai pior que sem efeito. O caminho de
-            // efeitos existe em draw_effect/composite e será religado por-efeito quando
-            // cada um estiver confiável.)
+            // Draws the layer DIRECTLY into the target. (Per-layer effects are disabled
+            // for now: most scenes have huge, fragile chains that, applied
+            // partially, destroy the image - it comes out worse than with no effect. The
+            // effects path exists in draw_effect/composite and will be re-enabled per effect once
+            // each one is reliable.)
             let load = if first {
                 wgpu::LoadOp::Clear(wgpu::Color {
                     r: self.clear[0] as f64,
@@ -419,7 +419,7 @@ impl Compositor {
             first = false;
         }
 
-        // partículas por cima, em espaço de cena (avança a simulação com dt)
+        // particles on top, in scene space (advances the simulation with dt)
         if let Some(p) = self.particles.as_mut() {
             p.update(dt, queue);
         }
@@ -448,9 +448,9 @@ impl Compositor {
         }
     }
 
-    // Parâmetros refletem 1:1 o estado que o WE passa pro draw call de uma camada
-    // (device/queue + a camada + tempo + alvo/blend) — agrupar num struct só pra
-    // calar o lint não ganharia clareza.
+    // Parameters mirror 1:1 the state WE passes to a layer's draw call
+    // (device/queue + the layer + time + target/blend) - grouping them into a single struct just to
+    // silence the lint would not add clarity.
     #[allow(clippy::too_many_arguments)]
     fn draw_layer(
         &self,
@@ -480,7 +480,7 @@ impl Compositor {
             mapped_at_creation: false,
         });
         queue.write_buffer(&ubo, 0, &ubo_bytes);
-        let _ = blend; // o pipeline já foi criado com o blend certo (via key)
+        let _ = blend; // the pipeline was already created with the right blend (via key)
 
         let mut entries: Vec<wgpu::BindGroupEntry> = vec![wgpu::BindGroupEntry {
             binding: 0,
@@ -547,7 +547,7 @@ impl Compositor {
         queue.submit(Some(enc.finish()));
     }
 
-    // desenha um efeito fullscreen amostrando `src` -> `dst`
+    // draws a fullscreen effect sampling `src` -> `dst`
     #[allow(dead_code)]
     #[allow(clippy::too_many_arguments)]
     fn draw_effect(
@@ -562,7 +562,7 @@ impl Compositor {
         dst: &wgpu::TextureView,
     ) {
         let prog = &self.programs[&fx.key];
-        // quad fullscreen em espaço de cena (a cena inteira)
+        // fullscreen quad in scene space (the whole scene)
         let verts: [f32; 20] = [
             0.0, 0.0, 0.0, 0.0, 0.0, w as f32, 0.0, 0.0, 1.0, 0.0, w as f32, h as f32, 0.0, 1.0,
             1.0, 0.0, h as f32, 0.0, 0.0, 1.0,
@@ -651,7 +651,7 @@ impl Compositor {
         queue.submit(Some(enc.finish()));
     }
 
-    // compõe uma textura fullscreen no target, com blend (usa o programa de composição)
+    // composites a fullscreen texture onto the target, with blend (uses the composition program)
     #[allow(dead_code)]
     fn composite(
         &self,
@@ -755,7 +755,7 @@ impl Compositor {
 
 const COMPOSITE_KEY: &str = "__composite__";
 
-// resolve os efeitos simples de uma camada em EffectPassGpu (compilando programas).
+// resolves a layer's simple effects into EffectPassGpu (compiling programs).
 #[allow(dead_code)]
 fn build_effects(
     device: &wgpu::Device,
@@ -765,7 +765,7 @@ fn build_effects(
     instances: &[EffectInstance],
 ) -> Vec<EffectPassGpu> {
     let shaders_dir = PathBuf::from(BASE).join("shaders");
-    // garante o programa de composição (passthrough alpha) — usa genericimage2.
+    // ensures the composition program (passthrough alpha) - uses genericimage2.
     if !programs.contains_key(COMPOSITE_KEY)
         && let (Some(v), Some(f)) = (
             resolve(pkg, "shaders/genericimage2.vert").and_then(|b| String::from_utf8(b).ok()),
@@ -788,7 +788,7 @@ fn build_effects(
             continue;
         };
         if !effects::is_simple(&def) {
-            continue; // multi-passe/FBO fica pra depois
+            continue; // multi-pass/FBO left for later
         }
         let epass = &def.passes[0];
         let Some(mat_json) = resolve(pkg, &epass.material).and_then(|b| String::from_utf8(b).ok())
@@ -830,7 +830,7 @@ fn build_effects(
                 Err(_) => continue,
             }
         }
-        // textura de ruído (slot >0) do efeito
+        // noise texture (slot >0) of the effect
         let prog = &programs[&key];
         let mut noise = None;
         let mut noise_view = None;

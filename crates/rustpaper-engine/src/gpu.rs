@@ -1,6 +1,6 @@
-// Módulo `gpu`: Renderer compartilhado. A fonte da textura pode ser um VÍDEO
-// (atualizada a cada frame) ou uma IMAGEM estática (subida uma vez) — o caso da
-// cena. O recorte de conteúdo (`content`) ignora o padding do buffer da textura.
+// `gpu` module: shared Renderer. The texture source can be a VIDEO
+// (updated every frame) or a static IMAGE (uploaded once) - the scene case. The
+// content crop (`content`) ignores the texture buffer's padding.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -9,24 +9,24 @@ use crate::compositor::Compositor;
 use crate::particles::{ParticleInit, Particles};
 use crate::video::Video;
 
-// De onde vêm os pixels da textura.
+// Where the texture's pixels come from.
 pub enum Source {
-    Video(String), // caminho do arquivo
+    Video(String), // path to the file
     Scene {
         rgba: Vec<u8>,
-        width: u32, // dims do buffer (pode ter padding)
+        width: u32, // buffer dims (may include padding)
         height: u32,
-        real_width: u32, // região de conteúdo
+        real_width: u32, // content region
         real_height: u32,
-        particles: Vec<ParticleInit>, // cada sistema traz seu próprio sprite
+        particles: Vec<ParticleInit>, // each system brings its own sprite
     },
-    // Cena renderizada pelo COMPOSITOR multi-camada (todas as camadas + efeitos).
-    // A cada frame o compositor desenha na textura de conteúdo; o resto do pipeline
-    // (cover-scale por monitor) segue igual.
+    // Scene rendered by the multi-layer COMPOSITOR (all layers + effects).
+    // Every frame the compositor draws into the content texture; the rest of the pipeline
+    // (per-monitor cover-scale) stays the same.
     SceneComposite(PathBuf),
 }
 
-// 16 bytes: scale@0 (vec2), content@8 (vec2). Casa com o WGSL.
+// 16 bytes: scale@0 (vec2), content@8 (vec2). Matches the WGSL.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
@@ -34,7 +34,7 @@ struct Uniforms {
     content: [f32; 2],
 }
 
-// Fator de cover: preenche a tela mantendo a proporção do conteúdo.
+// Cover factor: fills the screen while keeping the content's aspect ratio.
 fn cover_scale(screen_w: f32, screen_h: f32, img_w: f32, img_h: f32) -> [f32; 2] {
     let screen_aspect = screen_w / screen_h;
     let image_aspect = img_w / img_h;
@@ -53,17 +53,17 @@ pub struct Renderer {
     uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     format: wgpu::TextureFormat,
-    content_size: [f32; 2], // dims do conteúdo, pra o cover (aspect)
-    content_norm: [f32; 2], // conteúdo/buffer, pra o recorte no shader
-    // Vídeo: presente só quando a fonte é vídeo (textura atualizada por frame).
+    content_size: [f32; 2], // content dims, for the cover (aspect)
+    content_norm: [f32; 2], // content/buffer, for the crop in the shader
+    // Video: present only when the source is video (texture updated per frame).
     video: Option<Video>,
     texture: wgpu::Texture,
     extent: wgpu::Extent3d,
     last_gen: AtomicU64,
-    // Partículas da cena (simulação + render instanciado). None p/ vídeo/imagem.
+    // Scene particles (simulation + instanced render). None for video/image.
     particles: Option<Particles>,
     last_frame: std::time::Instant,
-    // Compositor multi-camada (cenas). Redesenha a textura de conteúdo a cada frame.
+    // Multi-layer compositor (scenes). Redraws the content texture every frame.
     compositor: Option<Compositor>,
     start: std::time::Instant,
 }
@@ -82,13 +82,13 @@ impl Renderer {
 
         let format = first_surface.get_capabilities(&adapter).formats[0];
 
-        // Resolve as dimensões e a fonte (vídeo x cena x compositor).
+        // Resolve the dimensions and the source (video vs scene vs compositor).
         let (buf_w, buf_h, content_w, content_h, initial_rgba, video, part_inits, mut compositor) =
             match source {
                 Source::Video(path) => {
                     let v = Video::open(&path);
                     let (w, h) = (v.width, v.height);
-                    // vídeo: buffer == conteúdo, sem padding, sem partículas
+                    // video: buffer == content, no padding, no particles
                     (w, h, w, h, None, Some(v), Vec::new(), None)
                 }
                 Source::Scene {
@@ -110,10 +110,10 @@ impl Renderer {
                 ),
                 Source::SceneComposite(dir) => {
                     let comp = Compositor::new(&device, &queue, &dir)
-                        .expect("falha ao montar o compositor da cena");
+                        .expect("failed to build the scene compositor");
                     let (w, h) = (comp.width, comp.height);
-                    // buffer == conteúdo (sem padding); sem vídeo/partículas; o compositor
-                    // preenche a textura de conteúdo a cada frame.
+                    // buffer == content (no padding); no video/particles; the compositor
+                    // fills the content texture every frame.
                     (w, h, w, h, None, None, Vec::new(), Some(comp))
                 }
             };
@@ -140,17 +140,17 @@ impl Renderer {
             format: wgpu::TextureFormat::Rgba8UnormSrgb,
             usage: wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_DST
-                | wgpu::TextureUsages::RENDER_ATTACHMENT, // compositor desenha aqui
+                | wgpu::TextureUsages::RENDER_ATTACHMENT, // compositor draws here
             view_formats: &[],
         });
 
-        // Compositor: renderiza o primeiro frame já, pra não piscar preto.
+        // Compositor: render the first frame right away, to avoid a black flash.
         if let Some(comp) = &mut compositor {
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             comp.render(&device, &queue, 0.0, 0.0, &view);
         }
 
-        // Imagem estática: sobe os pixels uma vez agora.
+        // Static image: upload the pixels once, now.
         if let Some(rgba) = initial_rgba {
             queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
@@ -229,7 +229,7 @@ impl Renderer {
             ],
         });
 
-        // Partículas da cena (cada sistema com seu sprite).
+        // Scene particles (each system with its own sprite).
         let particles = if part_inits.is_empty() {
             None
         } else {
@@ -266,14 +266,14 @@ impl Renderer {
         }
     }
 
-    // Avança a simulação de partículas uma vez por frame (dt medido aqui). Chamar
-    // ANTES de renderizar os monitores.
+    // Advances the particle simulation once per frame (dt measured here). Call
+    // BEFORE rendering the monitors.
     pub fn tick(&mut self) {
         let now = std::time::Instant::now();
-        let dt = (now - self.last_frame).as_secs_f32().min(0.1); // clampa picos
+        let dt = (now - self.last_frame).as_secs_f32().min(0.1); // clamp spikes
         self.last_frame = now;
-        // Compositor: redesenha a cena inteira na textura de conteúdo (g_Time avança;
-        // dt anima as partículas).
+        // Compositor: redraws the whole scene into the content texture (g_Time advances;
+        // dt animates the particles).
         let t = self.start.elapsed().as_secs_f32();
         let view = self
             .texture
@@ -308,7 +308,7 @@ impl Renderer {
         config
     }
 
-    // Só faz algo quando a fonte é vídeo: sobe o frame mais recente, se houver.
+    // Only does something when the source is video: uploads the latest frame, if any.
     fn update_video_texture(&self) {
         let Some(video) = &self.video else { return };
         let last = self.last_gen.load(Ordering::Relaxed);
@@ -384,12 +384,12 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            // Fundo (imagem/vídeo da cena).
+            // Background (scene image/video).
             render_pass.set_pipeline(&self.pipeline);
             render_pass.set_bind_group(0, &self.bind_group, &[]);
             render_pass.draw(0..3, 0..1);
 
-            // Partículas por cima (instanciadas, blend por sistema).
+            // Particles on top (instanced, blend per system).
             if let Some(p) = self.particles.as_ref() {
                 p.draw(&mut render_pass);
             }

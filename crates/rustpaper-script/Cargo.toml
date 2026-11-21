@@ -1,0 +1,23 @@
+[package]
+name = "rustpaper-script"
+version = "0.1.0"
+edition = "2024"
+
+# SceneScript (WE's JavaScript) support. Workshop scripts are untrusted code:
+# they only ever run inside `rustpaper-script-worker`, a separate process that
+# locks itself down (seccomp allowlist, no filesystem/network/exec, memory
+# limits) before it reads any script, and talks to the renderer over its
+# stdin/stdout pipes. The library side (`ScriptHost`) is what the renderer
+# links: it spawns the worker and exchanges plain JSON with it.
+[dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+rquickjs = { version = "0.14.0", features = ["loader"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+seccompiler = "0.5.0"
+libc = "0.2.186"
+
+[[bin]]
+name = "rustpaper-script-worker"
+path = "src/bin/rustpaper-script-worker.rs"

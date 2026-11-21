@@ -17,12 +17,12 @@
 
 ---
 
-**Rustpaper** (repo `wallpaper-engine-rs`) is a from-scratch reimplementation,
-in Rust, of a **Wallpaper Engine for Linux**: an *engine* that renders video
-wallpapers and Wallpaper Engine (Steam) **scenes** on the GPU (Vulkan, via
-[wgpu](https://wgpu.rs)) straight onto the desktop background
-(Wayland/KWin), plus a *selector* (desktop app) to browse your library and
-apply a wallpaper with one click.
+**Rustpaper** is a from-scratch reimplementation, in Rust, of a **Wallpaper
+Engine for Linux**: an *engine* that renders Wallpaper Engine (Steam)
+**scenes** with OpenGL — through the wallpapers' own shaders — and video
+wallpapers, straight onto the Wayland desktop (wlr-layer-shell, one surface
+per monitor), plus a *selector* to browse your library, **customize each
+wallpaper's properties like Wallpaper Engine does**, and apply it.
 
 Personal project for learning Rust and low-level graphics programming — not
 an official product, and not affiliated with Valve or Wallpaper Engine.
@@ -46,51 +46,67 @@ Without that, there's nothing for this project to render.
 
 ---
 
-## 🚧 Project status: beta, no releases
+## 🚧 Project status: beta, build from source
 
-The project is under **active development and has no downloadable
-builds/binaries yet**. For now, the only way to use it is to build the
-source yourself (see `CLAUDE.md` for the build steps, which currently
-depend on a devcontainer with Rust, Vulkan, and `glslangValidator`).
+No packaged releases yet. Build and install for your user:
 
-The plan is to eventually ship ready-to-install packages (e.g. AppImage/deb)
-so you don't need to compile anything — but that only makes sense once
-rendering fidelity (effects, particles) is more mature. Until then,
-**there are no releases** of this project.
+```sh
+./scripts/install.sh          # cargo build --release + ~/.local/bin + launcher entry
+rustpaper-selector            # or "Rustpaper" in your app launcher
+```
+
+Needs a Rust toolchain (pinned in `mise.toml`), OpenGL/EGL, Wayland with
+wlr-layer-shell (Hyprland, Sway, KDE...), `ffmpeg` for video wallpapers and,
+optionally, PipeWire's `pw-record` for audio-reactive ones. Wallpaper
+Engine's files are found in your Steam library automatically
+(`WE_ASSETS_DIR` / `WE_WORKSHOP_DIR` override it).
 
 ---
 
-## ✨ What already works (fidelity)
+## ✨ What works
 
-- **Video**: faithful — loop, cover, multi-monitor.
-- **Scenes (layers)**: faithful — multi-layer compositing with correct
-  transform, blend, alpha, and sRGB.
-- **Particles**: good approximation (sprite sheet, scale, dispersion), but
-  the simulator is still simple (some operators and emitter shapes are
-  missing).
-- **Post-processing effects/animations**: still disabled — the biggest gap
-  today, so scenes that rely on animated effects appear static.
+Fidelity is **measured against the real Wallpaper Engine** (running under
+Proton) by an automated harness, not judged by eye: every scene in the
+library is captured from WE and rendered by Rustpaper, and compared on its
+average image (SSIM) and on how much it moves
+([`docs/HARNESS.md`](./docs/HARNESS.md)).
 
-No support for audio, music, or widgets (clock, etc.) — out of scope.
+- **Scenes**: layers, blend modes, effects (multi-pass, named render
+  targets, masks), particle systems (emitters, operators, sprite sheets,
+  trails, ropes, child systems), text layers (clocks/dates), puppet warp
+  (skeletal animation), audio-reactive spectrum, bloom/HDR, camera parallax.
+- **Videos**: loop, cover, multi-monitor.
+- **Customization**: the selector shows each wallpaper's properties
+  (sliders, colors, toggles, dropdowns, text) like WE; changes are saved
+  per wallpaper and applied to the running wallpaper within a few seconds.
+- **Desktop integration**: physical-resolution rendering under fractional
+  scaling, pauses while a fullscreen window covers the monitor (Hyprland),
+  autostart.
+
+**SceneScript** (the author's JavaScript) runs in a separate, locked-down
+process (seccomp allowlist, no files/network/exec, memory and time limits):
+see [`docs/SCENESCRIPT.md`](./docs/SCENESCRIPT.md). `--no-scripts` (or
+**Run scripts** off in the selector) keeps scripted properties at their
+static values. Not supported yet: **web
+wallpapers**.
+
+Details and known gaps: [`docs/GL_RENDERER.md`](./docs/GL_RENDERER.md),
+[`docs/SELECTOR.md`](./docs/SELECTOR.md).
 
 ---
 
 ## 🧩 Architecture (summary)
 
-Cargo workspace with 3 crates under `crates/`:
+Cargo workspace under `crates/`:
 
-- **`rustpaper-core`** — parsing of Wallpaper Engine formats (project, pkg,
-  tex, scene, particles, layout, effects, shaders), with no GPU/UI
-  dependency.
-- **`rustpaper-engine`** — the actual renderer: `rustpaper` binary, using
-  wgpu/Vulkan + wlr-layer-shell (Wayland) to draw the wallpaper onto the
-  desktop background.
-- **`rustpaper-selector`** — desktop app (Tauri) to browse the catalog of
-  already-downloaded wallpapers and apply one (spawns `rustpaper` as a
-  child process).
+- **`rustpaper-core`** — Wallpaper Engine formats (project, pkg, tex,
+  scene, particles, effects, puppet models, shader dialect), no GPU/UI.
+- **`rustpaper-gl`** — the OpenGL scene renderer (+ `rustpaper-render`, an
+  offline renderer to PNG/MP4 used by the harness).
+- **`rustpaper-engine`** — the live wallpaper: `rustpaper` binary.
+- **`rustpaper-selector`** — Tauri desktop app (gallery + properties).
 
-Build details, supported formats, and architecture decisions are in
-[`CLAUDE.md`](./CLAUDE.md).
+Contributor notes: [`CLAUDE.md`](./CLAUDE.md).
 
 ---
 

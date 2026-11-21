@@ -1,13 +1,14 @@
-# Imagem de build da CI do Rustpaper: Ubuntu 24.04 + toolchain Rust + as deps de
-# sistema do workspace inteiro (rustpaper-engine precisa de wayland/xkbcommon +
-# glslangValidator pra compilar os shaders do WE nos testes; rustpaper-selector é
-# um app Tauri e precisa dos -dev do webkit2gtk/gtk). Nada aqui precisa de GPU ou
-# de um compositor Wayland rodando: wgpu (Vulkan) e o wayland-client resolvem o
-# driver/compositor via dlopen em tempo de EXECUÇÃO, não em tempo de build.
+# Rustpaper's CI build image: Ubuntu 24.04 + Rust toolchain + the system deps
+# of the whole workspace (rustpaper-engine needs wayland/xkbcommon +
+# glslangValidator to compile WE shaders in tests; rustpaper-selector is a
+# Tauri app and needs the webkit2gtk/gtk -dev packages). Nothing here needs a
+# GPU or a running Wayland compositor: wgpu (Vulkan) and wayland-client find
+# the driver/compositor through dlopen at RUN time, not at build time.
 #
-# Publicada em ghcr.io pelo job `image` de .github/workflows/ci.yml (que roda antes
-# dos outros jobs, então a imagem está sempre em dia com este arquivo). Lista de
-# pacotes validada rodando o build/test/clippy/fmt do zero num container limpo.
+# Published to ghcr.io by the `image` job of .github/workflows/ci.yml (which
+# runs before the other jobs, so the image always matches this file). Package
+# list validated by running build/test/clippy/fmt from scratch in a clean
+# container.
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -15,11 +16,16 @@ ENV DEBIAN_FRONTEND=noninteractive \
     CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:$PATH
 
+# build-essential: the linker (`cc`) and a C compiler (rquickjs builds
+# QuickJS from C for rustpaper-script). --no-install-recommends no longer
+# pulls them in through the -dev packages.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
         ca-certificates \
         curl \
         pkg-config \
         libwayland-dev \
+        libegl-dev \
         libxkbcommon-dev \
         glslang-tools \
         libwebkit2gtk-4.1-dev \
@@ -30,7 +36,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libxdo-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# --profile minimal: sem docs/extras, só o essencial pra compilar em CI.
+# --profile minimal: no docs/extras, just what CI needs to compile.
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
         sh -s -- -y --profile minimal --default-toolchain stable \
         --component rustfmt --component clippy \

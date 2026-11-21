@@ -1,15 +1,15 @@
-// Effect runner OFFSCREEN: renderiza o fundo de uma cena e depois a cadeia de
-// efeitos SIMPLES (1 pass, sem FBO extra) usando os shaders REAIS do WE
-// (vertex+fragment LINKADOS, UBO unificado). Salva PNG.
+// OFFSCREEN effect runner: renders a scene's background and then the chain of
+// SIMPLE effects (1 pass, no extra FBO) using the REAL WE shaders
+// (vertex+fragment LINKED, unified UBO). Saves a PNG.
 //
-//   fundo (genericimage2) -> texA
-//   cada efeito simples (filmgrain, ...) amostra o quadro anterior -> próximo tex
+//   background (genericimage2) -> texA
+//   each simple effect (filmgrain, ...) samples the previous frame -> next tex
 //
-// Monta o UBO com defaults das anotações + constants (material/cena) + builtins
-// (MVP identidade, g_Time, g_TextureNResolution) e resolve texturas (quadro anterior
-// no slot 0; texturas nomeadas tipo util/noise nos outros slots).
+// Builds the UBO with annotation defaults + constants (material/scene) + builtins
+// (identity MVP, g_Time, g_TextureNResolution) and resolves textures (previous frame
+// in slot 0; named textures like util/noise in the other slots).
 //
-// Uso: cargo run -p rustpaper-engine --example render_scene_fx -- <pasta-do-wallpaper> [saida.png] [tempo]
+// Usage: cargo run -p rustpaper-engine --example render_scene_fx -- <wallpaper-dir> [out.png] [time]
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -25,7 +25,7 @@ fn align256(n: u32) -> u32 {
     (n + 255) & !255
 }
 
-// Lê um arquivo do pkg; se não achar, cai no diretório base dos assets.
+// Reads a file from the pkg; if not found, falls back to the assets base directory.
 fn resolve(pkg: &Pkg, path: &str) -> Option<Vec<u8>> {
     if let Some(b) = pkg.read(path) {
         return Some(b.to_vec());
@@ -33,7 +33,7 @@ fn resolve(pkg: &Pkg, path: &str) -> Option<Vec<u8>> {
     std::fs::read(PathBuf::from(BASE).join(path)).ok()
 }
 
-// Constante do material/cena -> componentes float. Número ou string "a b c".
+// Material/scene constant -> float components. A number or a string "a b c".
 fn value_to_floats(v: &serde_json::Value) -> Vec<f32> {
     match v {
         serde_json::Value::Number(n) => vec![n.as_f64().unwrap_or(0.0) as f32],
@@ -64,14 +64,16 @@ fn build_program(
     combos: &[(String, i64)],
     fmt: wgpu::TextureFormat,
 ) -> Program {
-    let vert_src =
-        String::from_utf8(resolve(pkg, &format!("shaders/{shader_name}.vert")).expect("ler .vert"))
-            .unwrap();
-    let frag_src =
-        String::from_utf8(resolve(pkg, &format!("shaders/{shader_name}.frag")).expect("ler .frag"))
-            .unwrap();
+    let vert_src = String::from_utf8(
+        resolve(pkg, &format!("shaders/{shader_name}.vert")).expect("read .vert"),
+    )
+    .unwrap();
+    let frag_src = String::from_utf8(
+        resolve(pkg, &format!("shaders/{shader_name}.frag")).expect("read .frag"),
+    )
+    .unwrap();
 
-    // combos efetivos: defaults das anotações // [COMBO], sobrescritos por material/cena.
+    // effective combos: defaults from the // [COMBO] annotations, overridden by material/scene.
     let mut eff_combos = shader::parse_combo_defaults(&vert_src);
     eff_combos.extend(shader::parse_combo_defaults(&frag_src));
     for (k, v) in combos {
@@ -98,7 +100,7 @@ fn build_program(
         source: wgpu::ShaderSource::SpirV(f_spv.into()),
     });
 
-    // layout do vertex buffer: casa pela dimensão (vec3 = a_Position@0, vec2 = a_TexCoord@12)
+    // vertex buffer layout: matches by dimension (vec3 = a_Position@0, vec2 = a_TexCoord@12)
     let mut attrs = Vec::new();
     for vi in &vinputs {
         let (offset, format) = match vi.components {
@@ -118,7 +120,7 @@ fn build_program(
         attributes: &attrs,
     };
 
-    // bind group layout: UBO@0 (vertex+fragment), e cada textura+sampler (fragment)
+    // bind group layout: UBO@0 (vertex+fragment), and each texture+sampler (fragment)
     let mut entries = vec![wgpu::BindGroupLayoutEntry {
         binding: 0,
         visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -198,7 +200,7 @@ fn build_program(
 }
 
 impl Program {
-    // Monta os bytes do UBO: builtins + params (default ou constant do material/cena).
+    // Builds the UBO bytes: builtins + params (default or material/scene constant).
     fn build_ubo(
         &self,
         w: u32,
@@ -234,7 +236,7 @@ impl Program {
                 write(&mut buf, o, &[w as f32, h as f32, w as f32, h as f32]);
             }
         }
-        // params: default, sobrescrito por constant (material/cena) via nome "material"
+        // params: default, overridden by constant (material/scene) via the "material" name
         for p in &self.params {
             let Some(&o) = self.offsets.get(&p.uniform) else {
                 continue;
@@ -253,7 +255,7 @@ impl Program {
     }
 }
 
-// carrega uma textura resolvida (name -> materials/<name>.tex), recortada ao conteúdo
+// loads a resolved texture (name -> materials/<name>.tex), cropped to the content
 fn load_named_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -334,7 +336,7 @@ fn target(device: &wgpu::Device, w: u32, h: u32) -> wgpu::Texture {
 fn main() {
     let dir = std::env::args()
         .nth(1)
-        .expect("uso: render_scene_fx <pasta> [saida.png] [tempo]");
+        .expect("usage: render_scene_fx <dir> [out.png] [time]");
     let out_png = std::env::args()
         .nth(2)
         .unwrap_or_else(|| "/tmp/render_scene_fx.png".into());
@@ -348,8 +350,8 @@ fn main() {
     let scene_json = std::str::from_utf8(pkg.read("scene.json").expect("scene.json"))
         .unwrap()
         .to_string();
-    let bg_mat = scene::background_material(&pkg).expect("material de fundo");
-    let bg_tex_path = scene::background_texture(&pkg).expect("textura de fundo");
+    let bg_mat = scene::background_material(&pkg).expect("background material");
+    let bg_tex_path = scene::background_texture(&pkg).expect("background texture");
     let bg_decoded = tex::parse(pkg.read(&bg_tex_path).expect("bg .tex")).expect("decode bg");
     let (cw, ch) = (bg_decoded.real_width, bg_decoded.real_height);
 
@@ -364,7 +366,7 @@ fn main() {
         pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
     let fmt = wgpu::TextureFormat::Rgba8Unorm;
 
-    // quad fullscreen: pos vec3 + texcoord vec2 (uv com flip Y). 4 verts + 6 índices.
+    // fullscreen quad: pos vec3 + texcoord vec2 (uv with Y flip). 4 verts + 6 indices.
     #[rustfmt::skip]
     let verts: [f32; 20] = [
         -1.0,-1.0,0.0,  0.0,1.0,
@@ -401,7 +403,7 @@ fn main() {
         ..Default::default()
     });
 
-    // input inicial = textura de fundo recortada
+    // initial input = cropped background texture
     let mut bg_content = vec![0u8; (cw * ch * 4) as usize];
     for y in 0..ch {
         let s = (y * bg_decoded.width * 4) as usize;
@@ -411,7 +413,7 @@ fn main() {
     }
     let mut current = upload(&device, &queue, &bg_content, cw, ch);
 
-    // ---- lista de passes: (shader_name, combos, constants, material_textures) ----
+    // ---- list of passes: (shader_name, combos, constants, material_textures) ----
     struct PassSpec {
         shader: String,
         combos: Vec<(String, i64)>,
@@ -420,7 +422,7 @@ fn main() {
     }
     let mut passes: Vec<PassSpec> = Vec::new();
 
-    // pass do fundo
+    // background pass
     let mut bg_consts = HashMap::new();
     for (k, v) in &bg_mat.constants {
         bg_consts.insert(k.clone(), value_to_floats(v));
@@ -432,7 +434,7 @@ fn main() {
         textures: bg_mat.textures.clone(),
     });
 
-    // passes dos efeitos simples
+    // simple effect passes
     for eff in effects::background_effects(&scene_json) {
         if !eff.visible {
             continue;
@@ -444,7 +446,7 @@ fn main() {
             continue;
         };
         if !effects::is_simple(&def) {
-            println!("(pulando efeito complexo: {})", eff.file);
+            println!("(skipping complex effect: {})", eff.file);
             continue;
         }
         let epass = &def.passes[0];
@@ -455,7 +457,7 @@ fn main() {
         let Some(info) = rustpaper_core::scene::material_info_str(&mat_json) else {
             continue;
         };
-        // combos: material + override do primeiro override da cena
+        // combos: material + the scene's first override
         let mut combos = info.combos.clone();
         let mut constants: HashMap<String, Vec<f32>> = info
             .constants
@@ -472,7 +474,7 @@ fn main() {
             }
         }
         println!(
-            "efeito {}: shader={} combos={:?}",
+            "effect {}: shader={} combos={:?}",
             eff.file, info.shader, combos
         );
         passes.push(PassSpec {
@@ -483,7 +485,7 @@ fn main() {
         });
     }
 
-    // ---- roda os passes ----
+    // ---- run the passes ----
     for (i, spec) in passes.iter().enumerate() {
         let prog = build_program(&device, &pkg, &shaders_dir, &spec.shader, &spec.combos, fmt);
         let ubo_bytes = prog.build_ubo(cw, ch, time, &spec.constants);
@@ -496,15 +498,15 @@ fn main() {
         queue.write_buffer(&ubo, 0, &ubo_bytes);
 
         let input_view = current.create_view(&Default::default());
-        // resolve texturas por slot; guarda as texturas vivas
+        // resolves textures per slot; keeps the live textures
         let mut extra_texs: Vec<wgpu::Texture> = Vec::new();
         let mut extra_views: HashMap<u32, wgpu::TextureView> = HashMap::new();
         for &b in &prog.tex_bindings {
             let n = (b - 1) / 2; // g_TextureN
             if n == 0 {
-                continue; // slot 0 = input (view próprio)
+                continue; // slot 0 = input (own view)
             }
-            // nome: material.textures[n] ou default do sampler
+            // name: material.textures[n] or the sampler default
             let name = spec
                 .textures
                 .get(n as usize)
@@ -523,7 +525,7 @@ fn main() {
                 extra_views.insert(b, v);
             }
         }
-        // dummy 1x1 branco pra slots não resolvidos
+        // 1x1 white dummy for unresolved slots
         let white = upload(&device, &queue, &[255, 255, 255, 255], 1, 1);
         let white_view = white.create_view(&Default::default());
 
@@ -631,7 +633,7 @@ fn main() {
     }
     image::save_buffer(&out_png, &pixels, cw, ch, image::ColorType::Rgba8).unwrap();
     println!(
-        "PNG salvo em {out_png} ({cw}x{ch}) — fundo + {} efeito(s)",
+        "PNG saved to {out_png} ({cw}x{ch}) — background + {} effect(s)",
         passes.len() - 1
     );
 }

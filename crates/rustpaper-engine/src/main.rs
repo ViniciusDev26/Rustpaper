@@ -1,16 +1,60 @@
-use rustpaper_engine::wallpaper;
+use rustpaper_core::project::{Project, WallpaperKind};
+use rustpaper_engine::{gl_wallpaper, wallpaper};
 use std::path::PathBuf;
 
 fn main() {
-    // Recebe a pasta do wallpaper (a de um item do Workshop, com project.json).
-    // Sem argumento: mostra o uso e sai.
-    let dir = match std::env::args().nth(1) {
-        Some(d) => PathBuf::from(d),
-        None => {
-            eprintln!("uso: rustpaper <pasta-do-wallpaper>");
-            eprintln!("ex.: rustpaper /home/vscode/wallpapers/2499404313");
-            std::process::exit(2);
+    // rustpaper <wallpaper folder> [--fps N] [--props properties.json] [--no-audio] [--mute] [--no-scripts] [--output NAME]
+    let mut args = std::env::args().skip(1);
+    let mut dir = None;
+    let mut fps = 30;
+    let mut props_file: Option<PathBuf> = None;
+    let mut audio = true;
+    let mut sound = true;
+    let mut scripts = true;
+    let mut output = None;
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--fps" => fps = args.next().and_then(|v| v.parse().ok()).unwrap_or(30),
+            "--props" => props_file = args.next().map(PathBuf::from),
+            "--no-audio" => audio = false,
+            "--mute" => sound = false,
+            "--no-scripts" => scripts = false,
+            "--output" => output = args.next(),
+            _ => dir = Some(PathBuf::from(a)),
         }
+    }
+    let Some(dir) = dir else {
+        eprintln!(
+            "usage: rustpaper <wallpaper folder> [--fps N] [--props properties.json] [--no-audio] [--mute] [--no-scripts] [--output NAME]"
+        );
+        std::process::exit(2);
     };
-    wallpaper::run(&dir);
+    let kind = Project::load(&dir).map(|p| p.kind).unwrap_or_else(|e| {
+        eprintln!("error: reading {}/project.json: {e}", dir.display());
+        std::process::exit(1);
+    });
+    // User property values chosen in the selector: { "name": value, ... }
+    let properties = props_file
+        .and_then(|f| std::fs::read_to_string(f).ok())
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+    // Scenes run on the OpenGL renderer (rustpaper-gl). The previous wgpu
+    // compositor stays reachable with RUSTPAPER_LEGACY_SCENE=1 for comparison;
+    // videos keep using the wgpu path.
+    if kind == WallpaperKind::Scene && std::env::var_os("RUSTPAPER_LEGACY_SCENE").is_none() {
+        gl_wallpaper::run(
+            &dir,
+            gl_wallpaper::Options {
+                fps,
+                properties,
+                audio,
+                sound,
+                scripts,
+                output,
+            },
+        );
+    } else {
+        wallpaper::run(&dir);
+    }
 }

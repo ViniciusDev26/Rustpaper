@@ -1,8 +1,8 @@
-// Compositor OFFSCREEN: renderiza a cena INTEIRA como pilha de camadas (não só o
-// fundo), cada uma pelo shader real do WE, com transform (ortho da cena), blend e
-// alpha — em espaço sRGB. É o que faz o personagem principal (Ashe, etc.) aparecer.
+// OFFSCREEN compositor: renders the WHOLE scene as a stack of layers (not just the
+// background), each through the real WE shader, with transform (scene ortho), blend and
+// alpha — in sRGB space. This is what makes the main character (Ashe, etc.) show up.
 //
-// Uso: cargo run -p rustpaper-engine --example render_composite -- <pasta> [saida.png] [tempo]
+// Usage: cargo run -p rustpaper-engine --example render_composite -- <dir> [out.png] [time]
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -33,7 +33,7 @@ fn value_to_floats(v: &serde_json::Value) -> Vec<f32> {
     }
 }
 
-// carrega uma textura .tex (recortada ao conteúdo) como Rgba8UnormSrgb
+// loads a .tex texture (cropped to its content) as Rgba8UnormSrgb
 fn load_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -82,10 +82,10 @@ fn load_texture(
     Some((t, cw, ch))
 }
 
-// quad da camada em espaço de cena (origin centro, ±size/2 com scale + rotação Z).
+// layer quad in scene space (origin at the center, ±size/2 with scale + Z rotation).
 fn layer_quad(l: &Layer) -> [f32; 20] {
     let (hx, hy) = (l.size[0] * 0.5 * l.scale[0], l.size[1] * 0.5 * l.scale[1]);
-    let a = l.angles[2]; // rotação em torno de Z (radianos)
+    let a = l.angles[2]; // rotation around Z (radians)
     let (c, s) = (a.cos(), a.sin());
     let corner = |lx: f32, ly: f32| -> (f32, f32) {
         (l.origin[0] + lx * c - ly * s, l.origin[1] + lx * s + ly * c)
@@ -107,7 +107,7 @@ fn layer_quad(l: &Layer) -> [f32; 20] {
 fn main() {
     let dir = std::env::args()
         .nth(1)
-        .expect("uso: render_composite <pasta> [saida.png] [tempo]");
+        .expect("usage: render_composite <dir> [out.png] [time]");
     let out_png = std::env::args()
         .nth(2)
         .unwrap_or_else(|| "/tmp/composite.png".into());
@@ -118,9 +118,9 @@ fn main() {
     let shaders_dir = PathBuf::from(BASE).join("shaders");
 
     let pkg = Pkg::open(Path::new(&dir).join("scene.pkg").as_path()).expect("scene.pkg");
-    let layout = layout::parse_layout(&pkg).expect("layout da cena");
+    let layout = layout::parse_layout(&pkg).expect("scene layout");
     let (w, h) = (layout.width as u32, layout.height as u32);
-    println!("cena {w}x{h}, {} camadas", layout.layers.len());
+    println!("scene {w}x{h}, {} layers", layout.layers.len());
 
     let instance = wgpu::Instance::default();
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -182,7 +182,7 @@ fn main() {
         t.create_view(&Default::default())
     };
 
-    // alvo de acumulação
+    // accumulation target
     let acc = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("acc"),
         size: wgpu::Extent3d {
@@ -202,7 +202,7 @@ fn main() {
     let acc_view = acc.create_view(&Default::default());
     let mvp = ortho(layout.width, layout.height);
 
-    // cache de programas por (shader, combos, blend)
+    // program cache keyed by (shader, combos, blend)
     let mut programs: HashMap<String, Program> = HashMap::new();
     let idx: [u16; 6] = [0, 1, 2, 0, 2, 3];
     let ibuf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -239,7 +239,7 @@ fn main() {
                 .and_then(|b| String::from_utf8(b).ok());
             let (Some(vsrc), Some(fsrc)) = (vsrc, fsrc) else {
                 println!(
-                    "  (pulando '{}': shader {} não encontrado)",
+                    "  (skipping '{}': shader {} not found)",
                     layer.name, layer.material.shader
                 );
                 continue;
@@ -258,7 +258,7 @@ fn main() {
                 }
                 Err(e) => {
                     println!(
-                        "  (pulando '{}': {})",
+                        "  (skipping '{}': {})",
                         layer.name,
                         e.lines().next().unwrap_or("")
                     );
@@ -268,7 +268,7 @@ fn main() {
         }
         let prog = &programs[&key];
 
-        // constants do material
+        // material constants
         let constants: HashMap<String, Vec<f32>> = layer
             .material
             .constants
@@ -293,7 +293,7 @@ fn main() {
         });
         queue.write_buffer(&ubo, 0, &ubo_bytes);
 
-        // vertex buffer do quad
+        // quad vertex buffer
         let verts = layer_quad(layer);
         let vbuf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("vb"),
@@ -303,7 +303,7 @@ fn main() {
         });
         queue.write_buffer(&vbuf, 0, bytemuck::cast_slice(&verts));
 
-        // texturas extras (slot 0 = a textura da camada)
+        // extra textures (slot 0 = the layer texture)
         let mut extra_texs: Vec<wgpu::Texture> = Vec::new();
         let mut extra_views: HashMap<u32, wgpu::TextureView> = HashMap::new();
         for &b in &prog.tex_bindings {
@@ -401,7 +401,7 @@ fn main() {
         first = false;
         drawn += 1;
     }
-    println!("{drawn} camadas desenhadas");
+    println!("{drawn} layers drawn");
 
     // readback
     let bpr = align256(4 * w);
@@ -445,5 +445,5 @@ fn main() {
         pixels[d..d + (w * 4) as usize].copy_from_slice(&data[s..s + (w * 4) as usize]);
     }
     image::save_buffer(&out_png, &pixels, w, h, image::ColorType::Rgba8).unwrap();
-    println!("PNG salvo em {out_png} ({w}x{h})");
+    println!("PNG saved to {out_png} ({w}x{h})");
 }

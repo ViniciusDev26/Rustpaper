@@ -1,41 +1,41 @@
 // `cargo run --example probe_gpu`
-// Passo a passo até "abrir" a GPU: Instance -> Adapter -> Device + Queue.
+// Step by step until the GPU is "opened": Instance -> Adapter -> Device + Queue.
 
 fn main() {
-    // A Instance é o ponto de entrada do wgpu: conhece os backends do sistema.
+    // The Instance is wgpu's entry point: it knows the system's backends.
     let instance = wgpu::Instance::default();
 
-    // 1) ESCOLHER uma GPU. Em vez de listar todas, pedimos ao wgpu que ESCOLHA a
-    //    melhor via request_adapter. HighPerformance faz ele preferir a GPU
-    //    dedicada (a RTX) em vez da de software (llvmpipe). Retorna um Future ->
-    //    block_on espera; e um Result -> unwrap() pega o Ok ou estoura.
+    // 1) PICK a GPU. Instead of listing them all, we ask wgpu to PICK the
+    //    best one via request_adapter. HighPerformance makes it prefer the
+    //    dedicated GPU (the RTX) over the software one (llvmpipe). It returns a
+    //    Future -> block_on waits; and a Result -> unwrap() takes the Ok or panics.
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
         force_fallback_adapter: false,
-        compatible_surface: None, // ainda não temos janela/surface
+        compatible_surface: None, // we do not have a window/surface yet
     }))
     .unwrap();
 
     let info = adapter.get_info();
     println!(
-        "Adapter escolhido: {}  [{:?}, {:?}]",
+        "Adapter chosen: {}  [{:?}, {:?}]",
         info.name, info.backend, info.device_type
     );
 
-    // 2) ABRIR o device + queue nessa GPU. É aqui que realmente "ligamos" a placa:
-    //    - Device: cria recursos (buffers, texturas, shaders, pipelines).
-    //    - Queue:  envia comandos/trabalho pra GPU executar.
-    //    O descriptor pede limites/recursos; default() = o mínimo garantido em
-    //    qualquer GPU (suficiente por enquanto).
+    // 2) OPEN the device + queue on that GPU. This is where we actually "switch on" the card:
+    //    - Device: creates resources (buffers, textures, shaders, pipelines).
+    //    - Queue:  sends commands/work for the GPU to execute.
+    //    The descriptor asks for limits/features; default() = the minimum guaranteed on
+    //    any GPU (enough for now).
     let (device, queue) =
         pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
 
-    println!("Device aberto com sucesso.");
-    // `_queue` com underscore: ainda não usamos a queue, e o underscore diz ao
-    // compilador "sei que não usei, não me avise". (Sem ele, warning de var não usada.)
+    println!("Device opened successfully.");
+    // `_queue` with an underscore: we do not use the queue yet, and the underscore tells
+    // the compiler "I know I did not use it, do not warn me". (Without it, unused-variable warning.)
     let _ = &queue;
 
-    // Espia um limite real da GPU só pra provar que o device conhece o hardware.
+    // Peek at a real GPU limit just to prove the device knows the hardware.
     let limits = device.limits();
     println!(
         "max_texture_dimension_2d = {}",

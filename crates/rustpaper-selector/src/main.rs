@@ -1,113 +1,207 @@
-// Selector: app desktop Tauri pra escolher wallpaper. O backend (Rust) varre o
-// catálogo do Workshop usando o rustpaper-core e expõe comandos pro frontend (web):
-//   list_wallpapers -> lista {id, título, tipo, preview}
-//   apply(id)       -> spawna o engine renderizando aquele wallpaper
+// Selector: Tauri desktop app to browse and apply wallpapers. The Rust backend
+// scans the Workshop folders with rustpaper-core and exposes commands to the
+// static web frontend in `ui/`:
+//   list_wallpapers      -> [{id, title, kind, preview, supported}]
+//   apply(id)            -> (re)starts the engine on that wallpaper
+//   get_properties(id)   -> the wallpaper's customizable properties + saved values
+//   save_properties(id, values) -> persists them and hot-swaps the running engine
+//   get_settings / set_autostart / set_scripts
 
 mod settings;
 
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use rustpaper_core::project::{Project, WallpaperKind};
 use serde::Serialize;
+use serde_json::{Map, Value};
+use tauri::Manager;
 
-// Pasta do Workshop montada no container. TODO: tornar configurável.
-const WORKSHOP_DIR: &str = "/home/vscode/wallpapers";
-
-// Guarda o processo do engine em execução, pra matá-lo ao trocar de wallpaper.
-struct EngineState(Mutex<Option<Child>>);
+/// The running engine and the wallpaper it shows (killed when switching).
+struct EngineState(Mutex<Option<(String, Child)>>);
 
 #[derive(Serialize)]
 struct WallpaperEntry {
-    id: String, // nome da pasta (id do Workshop)
+    id: String, // Workshop id (folder name)
     title: String,
     kind: String,            // "video" | "scene" | "web" | "unknown"
-    preview: Option<String>, // caminho absoluto da imagem de preview
-    supported: bool,         // o engine sabe tocar? (video/scene)
+    preview: Option<String>, // absolute path of the preview image
+    supported: bool,         // can the engine play it?
 }
 
-// Acha o arquivo de preview da pasta (estático primeiro, gif por último).
+/// Preview file of a wallpaper folder (static images first, gif last).
 fn find_preview(dir: &Path) -> Option<PathBuf> {
-    for name in ["preview.jpg", "preview.png", "preview.jpeg", "preview.gif"] {
-        let p = dir.join(name);
-        if p.exists() {
-            return Some(p);
-        }
+    ["preview.jpg", "preview.png", "preview.jpeg", "preview.gif"]
+        .iter()
+        .map(|n| dir.join(n))
+        .find(|p| p.exists())
+}
+
+fn wallpaper_dir(id: &str) -> Result<PathBuf, String> {
+    // ids are folder names: never let one escape the Workshop folders
+    if id.is_empty() || id.contains(['/', '\\']) || id.starts_with('.') {
+        return Err(format!("invalid wallpaper id {id:?}"));
     }
-    None
+    rustpaper_core::paths::find_wallpaper(id)
+        .filter(|d| d.join("project.json").exists())
+        .ok_or_else(|| format!("project.json not found for {id}"))
 }
 
 #[tauri::command]
 fn list_wallpapers() -> Vec<WallpaperEntry> {
-    let base = Path::new(WORKSHOP_DIR);
-    let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(base) else {
-        return out;
-    };
-    for e in entries.flatten() {
-        let dir = e.path();
-        if !dir.is_dir() {
+    let mut out: Vec<WallpaperEntry> = Vec::new();
+    for base in rustpaper_core::paths::wallpaper_dirs() {
+        let Ok(entries) = std::fs::read_dir(&base) else {
             continue;
+        };
+        for e in entries.flatten() {
+            let dir = e.path();
+            let id = e.file_name().to_string_lossy().into_owned();
+            if !dir.is_dir() || out.iter().any(|w| w.id == id) {
+                continue;
+            }
+            let Ok(project) = Project::load(&dir) else {
+                continue;
+            };
+            let (kind, supported) = match project.kind {
+                WallpaperKind::Video => ("video", true),
+                WallpaperKind::Scene => ("scene", true),
+                WallpaperKind::Web => ("web", false),
+                WallpaperKind::Unknown(_) => ("unknown", false),
+            };
+            out.push(WallpaperEntry {
+                id,
+                title: project.title,
+                kind: kind.to_string(),
+                preview: find_preview(&dir).map(|p| p.to_string_lossy().into_owned()),
+                supported,
+            });
         }
-        // Só entra quem tem project.json legível.
-        let Ok(project) = Project::load(&dir) else {
-            continue;
-        };
-        let (kind, supported) = match project.kind {
-            WallpaperKind::Video => ("video", true),
-            WallpaperKind::Scene => ("scene", true),
-            WallpaperKind::Web => ("web", false),
-            WallpaperKind::Unknown(_) => ("unknown", false),
-        };
-        out.push(WallpaperEntry {
-            id: e.file_name().to_string_lossy().into_owned(),
-            title: project.title,
-            kind: kind.to_string(),
-            preview: find_preview(&dir).map(|p| p.to_string_lossy().into_owned()),
-            supported,
-        });
     }
     out.sort_by_key(|a| a.title.to_lowercase());
     out
 }
 
-// Caminho do binário do engine (mesma pasta do selector: target/debug/).
-fn engine_path() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let candidate = exe.parent()?.join("rustpaper");
-    candidate.exists().then_some(candidate)
+/// Engine binary: next to the selector (target/{debug,release}/ or the
+/// install prefix), else `rustpaper` from PATH.
+fn engine_path() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.join("rustpaper")))
+        .filter(|p| p.exists())
+        .unwrap_or_else(|| PathBuf::from("rustpaper"))
+}
+
+/// Engine command line for a wallpaper, with its saved property values.
+fn engine_args(id: &str, dir: &Path) -> Vec<String> {
+    let mut args = vec![dir.to_string_lossy().into_owned()];
+    if let Some(p) = settings::properties_file(id).filter(|p| p.exists()) {
+        args.push("--props".into());
+        args.push(p.to_string_lossy().into_owned());
+    }
+    if settings::load().no_scripts {
+        args.push("--no-scripts".into());
+    }
+    args
+}
+
+/// Starts the engine on `id`. The previous engine is killed only after the
+/// new one had time to load and draw its first frame, so switching (or
+/// tweaking a property) never flashes the desktop background in between.
+fn start_engine(id: &str, state: &EngineState) -> Result<(), String> {
+    let dir = wallpaper_dir(id)?;
+    let child = std::process::Command::new(engine_path())
+        .args(engine_args(id, &dir))
+        .spawn()
+        .map_err(|e| format!("failed to start the engine: {e}"))?;
+    let previous = state.0.lock().unwrap().replace((id.to_string(), child));
+    if let Some((_, mut old)) = previous {
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(2500));
+            let _ = old.kill();
+            let _ = old.wait();
+        });
+    }
+    Ok(())
 }
 
 #[tauri::command]
 fn apply(id: String, state: tauri::State<EngineState>) -> Result<(), String> {
-    let dir = Path::new(WORKSHOP_DIR).join(&id);
-    if !dir.join("project.json").exists() {
-        return Err(format!("project.json não encontrado para {id}"));
-    }
-    let engine = engine_path().ok_or("binário do engine não encontrado")?;
-
-    let mut guard = state.0.lock().unwrap();
-    // Mata o wallpaper anterior antes de subir o novo.
-    if let Some(mut child) = guard.take() {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-    let child = std::process::Command::new(&engine)
-        .arg(&dir)
-        .spawn()
-        .map_err(|e| format!("falha ao iniciar o engine: {e}"))?;
-    *guard = Some(child);
-    drop(guard);
-
-    // Persiste o último wallpaper e, se o autostart estiver ligado, aponta o
-    // .desktop pra ele (pra voltar no próximo login).
+    start_engine(&id, &state)?;
+    // Remember the wallpaper; with autostart on, point the .desktop at it.
     let mut s = settings::load();
-    s.last_id = Some(id);
+    s.last_id = Some(id.clone());
     if s.autostart {
-        let _ = settings::write_autostart(&engine, &dir);
+        let _ = settings::write_autostart(&engine_path(), &engine_args(&id, &wallpaper_dir(&id)?));
     }
     settings::save(&s);
+    Ok(())
+}
+
+/// What the customization panel needs: the property definitions of
+/// project.json (`general.properties`, in WE's display order) and the values
+/// the user saved for this wallpaper.
+#[derive(Serialize)]
+struct PropertiesView {
+    properties: Vec<Value>,
+    saved: Map<String, Value>,
+    applied: bool,
+}
+
+#[tauri::command]
+fn get_properties(id: String, state: tauri::State<EngineState>) -> Result<PropertiesView, String> {
+    let dir = wallpaper_dir(&id)?;
+    let text = std::fs::read_to_string(dir.join("project.json")).map_err(|e| e.to_string())?;
+    let project: Value =
+        serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| e.to_string())?;
+    let mut properties: Vec<Value> = project
+        .pointer("/general/properties")
+        .and_then(|p| p.as_object())
+        .into_iter()
+        .flatten()
+        .map(|(name, p)| {
+            let mut p = p.clone();
+            if let Value::Object(m) = &mut p {
+                m.insert("name".into(), Value::String(name.clone()));
+            }
+            p
+        })
+        .collect();
+    properties.sort_by_key(|p| p.get("order").and_then(|o| o.as_i64()).unwrap_or(0));
+    let applied = state
+        .0
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|(cur, _)| *cur == id);
+    Ok(PropertiesView {
+        properties,
+        saved: settings::load_properties(&id),
+        applied,
+    })
+}
+
+/// Saves the user's values (an empty map = back to the defaults) and, when
+/// the wallpaper is on screen, restarts the engine with them.
+#[tauri::command]
+fn save_properties(
+    id: String,
+    values: Map<String, Value>,
+    state: tauri::State<EngineState>,
+) -> Result<(), String> {
+    wallpaper_dir(&id)?;
+    settings::save_properties(&id, &values).map_err(|e| e.to_string())?;
+    let running = state
+        .0
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|(cur, _)| *cur == id);
+    if running {
+        start_engine(&id, &state)?;
+    }
     Ok(())
 }
 
@@ -121,19 +215,34 @@ fn set_autostart(enabled: bool) -> Result<(), String> {
     let mut s = settings::load();
     s.autostart = enabled;
     settings::save(&s);
-
-    if enabled {
-        // Precisa de um wallpaper já aplicado pra saber o que restaurar.
-        let engine = engine_path().ok_or("binário do engine não encontrado")?;
-        match &s.last_id {
-            Some(id) => {
-                let dir = Path::new(WORKSHOP_DIR).join(id);
-                settings::write_autostart(&engine, &dir).map_err(|e| e.to_string())?;
-            }
-            None => return Err("aplique um wallpaper antes de ligar o autostart".into()),
-        }
-    } else {
+    if !enabled {
         settings::remove_autostart();
+        return Ok(());
+    }
+    // A wallpaper must have been applied to know what to restore.
+    let id = s
+        .last_id
+        .ok_or("apply a wallpaper before enabling autostart")?;
+    let args = engine_args(&id, &wallpaper_dir(&id)?);
+    settings::write_autostart(&engine_path(), &args).map_err(|e| e.to_string())
+}
+
+/// "Run scripts" checkbox: saves the preference, restarts the running
+/// wallpaper with it and refreshes the autostart entry.
+#[tauri::command]
+fn set_scripts(enabled: bool, state: tauri::State<EngineState>) -> Result<(), String> {
+    let mut s = settings::load();
+    s.no_scripts = !enabled;
+    settings::save(&s);
+    let running = state.0.lock().unwrap().as_ref().map(|(id, _)| id.clone());
+    if let Some(id) = running {
+        start_engine(&id, &state)?;
+    }
+    if s.autostart
+        && let Some(id) = &s.last_id
+    {
+        let args = engine_args(id, &wallpaper_dir(id)?);
+        settings::write_autostart(&engine_path(), &args).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -143,30 +252,35 @@ fn main() {
 
     tauri::Builder::default()
         .manage(EngineState(Mutex::new(None)))
+        .setup(|app| {
+            // Previews are served by the asset protocol: allow exactly the
+            // folders wallpapers come from (they vary per Steam library).
+            let scope = app.asset_protocol_scope();
+            for dir in rustpaper_core::paths::wallpaper_dirs() {
+                scope.allow_directory(&dir, true)?;
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             list_wallpapers,
             apply,
+            get_properties,
+            save_properties,
             get_settings,
-            set_autostart
+            set_autostart,
+            set_scripts
         ])
+        // Closing the selector leaves the wallpaper running (dropping a
+        // `Child` doesn't kill it).
         .run(tauri::generate_context!())
-        .expect("erro ao rodar o app Tauri");
+        .expect("failed to run the Tauri app");
 }
 
-// Acomodações pra rodar o webview (webkit2gtk) dentro do devcontainer:
-// - GDK_BACKEND=x11: o backend Wayland dá "Protocol error" pelo socket montado.
-// - WEBKIT_DISABLE_*: desliga compositing/DMABUF por GPU (falham no container).
-// NÃO mexemos em WAYLAND_DISPLAY: o engine (filho) precisa dele pro layer-shell.
-// TODO: rever ao empacotar pra distribuição.
+/// WebKitGTK workarounds. DMABUF rendering breaks on the NVIDIA driver
+/// (blank window), so it is off unless the user set the variable already.
 fn setup_linux_env() {
-    let defaults = [
-        ("GDK_BACKEND", "x11"),
-        ("WEBKIT_DISABLE_COMPOSITING_MODE", "1"),
-        ("WEBKIT_DISABLE_DMABUF_RENDERER", "1"),
-    ];
-    for (key, val) in defaults {
-        if std::env::var_os(key).is_none() {
-            unsafe { std::env::set_var(key, val) };
-        }
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        // SAFETY: called first thing in main, before any thread exists.
+        unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
     }
 }
