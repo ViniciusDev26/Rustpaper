@@ -20,6 +20,18 @@ permissions:
   packages: write
 
 jobs:
+  # Every commit of a PR must follow Conventional Commits (commitlint.config.mjs):
+  # release-please derives versions and the CHANGELOG from them.
+  commits:
+    name: Conventional Commits
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: wagoid/commitlint-github-action@v6
+
   # Builds/publishes the CI image (docker/ci/Dockerfile: Ubuntu 24.04 + Rust
   # toolchain + the workspace's system deps) BEFORE the other jobs, so the tag
   # used below always matches this commit's Dockerfile. When the Dockerfile
