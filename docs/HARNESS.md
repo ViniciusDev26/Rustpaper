@@ -360,8 +360,9 @@ ignore SIGINT: the recorder is stopped with SIGTERM.
 ## Exclusions (`harness/excluded.tsv`)
 
 Scenes that cannot be compared are listed with the reason and skipped by
-`batch.sh`: WE crashes or shows a black window for them, or they are built
-entirely by SceneScript (which Rustpaper does not run yet).
+`batch.sh`: WE crashes (or shows its crash dialog over the scene) or shows a
+black window for them, or they are built entirely by SceneScript and WE
+itself shows nothing for them in the capture.
 
 ## Calibration scenes (`harness/calibration/`)
 

@@ -5,6 +5,8 @@
 #   $PREFIX/bin/rustpaper            live wallpaper engine
 #   $PREFIX/bin/rustpaper-selector   gallery + customization panel
 #   $PREFIX/bin/rustpaper-render     offline renderer (debugging, harness)
+#   $PREFIX/bin/rustpaper-script-worker  sandboxed SceneScript runner
+#                                    (found next to the other binaries)
 #   $PREFIX/share/applications/rustpaper.desktop   launcher entry
 #   $PREFIX/share/icons/hicolor/128x128/apps/rustpaper.png
 # PREFIX defaults to ~/.local. DESTDIR is prepended to every path (packaging).
@@ -15,7 +17,7 @@ set -euo pipefail
 PREFIX=${PREFIX:-$HOME/.local}
 DEST="${DESTDIR:-}$PREFIX"
 REPO=$(cd "$(dirname "$0")/.." && pwd)
-BINS=(rustpaper rustpaper-selector rustpaper-render)
+BINS=(rustpaper rustpaper-selector rustpaper-render rustpaper-script-worker)
 
 if [ "${1:-}" = "--uninstall" ]; then
     for b in "${BINS[@]}"; do rm -f "$DEST/bin/$b"; done
@@ -25,7 +27,7 @@ if [ "${1:-}" = "--uninstall" ]; then
     exit 0
 fi
 
-(cd "$REPO" && cargo build --release -p rustpaper-engine -p rustpaper-selector -p rustpaper-gl --bins)
+(cd "$REPO" && cargo build --release -p rustpaper-engine -p rustpaper-selector -p rustpaper-gl -p rustpaper-script --bins)
 
 install -d "$DEST/bin" "$DEST/share/applications" "$DEST/share/icons/hicolor/128x128/apps"
 for b in "${BINS[@]}"; do install -m 755 "$REPO/target/release/$b" "$DEST/bin/$b"; done

@@ -34,6 +34,8 @@ use crate::value;
 /// A scene `sound` object: audio files the wallpaper plays.
 #[derive(Clone, Debug)]
 pub struct SceneSound {
+    /// Scene object id (SceneScripts address it).
+    pub id: i64,
     pub name: String,
     /// (path inside the wallpaper, bytes), in playlist order.
     pub files: Vec<(String, Vec<u8>)>,
@@ -93,10 +95,16 @@ struct Pass {
 struct EffectPass {
     pass: Pass,
     target: Option<String>,
+    /// Index of this pass in the effect's `passes` (scene overrides and
+    /// SceneScripts address passes by it).
+    json_pass: usize,
 }
 
 struct Effect {
     file: String,
+    /// Index of the effect in the object's `effects` (SceneScripts address
+    /// effects by it).
+    json_index: usize,
     passes: Vec<EffectPass>,
     /// `"command": "copy"` passes: (run before material pass n, source,
     /// target); n == passes.len() runs after the last one.
@@ -144,6 +152,8 @@ struct Layer {
     /// Composite pass with the object's colorBlendMode (layers with a target).
     composite: Option<Pass>,
     effects: Vec<Effect>,
+    /// Hidden effects a SceneScript can show (`effects[n].visible`).
+    parked: Vec<Effect>,
 }
 
 /// Scene objects in draw order (WE draws objects in scene.json order).
@@ -198,7 +208,7 @@ struct Bloom {
 struct TextRt {
     id: i64,
     source: text::TextSource,
-    font: ab_glyph::FontVec,
+    font: text::FontSet,
     style: text::TextStyle,
     shown: Option<String>,
     tex: Option<Tex>,
@@ -247,6 +257,12 @@ pub struct SceneRenderer {
     textures: HashMap<String, Tex>,
     /// Sound objects, for the live engine to play.
     pub sounds: Vec<SceneSound>,
+    /// Volume changes SceneScripts made, for the live engine to apply
+    /// (it drains them): (sound object id, volume 0..1).
+    pub sound_volumes: Vec<(i64, f32)>,
+    /// play() / stop() SceneScripts called on sound objects, for the live
+    /// engine (it drains them): (sound object id, playing).
+    pub sound_playing: Vec<(i64, bool)>,
     /// Padded uploads for image material passes (None: no padding).
     padded_textures: HashMap<String, Option<Tex>>,
     white: Tex,
@@ -282,6 +298,16 @@ pub struct SceneRenderer {
     /// Debug: when set, only objects with these ids are drawn
     /// (`rustpaper-render --only`).
     pub only: Option<HashSet<i64>>,
+    /// The scene's objects and user properties, kept until the caller
+    /// decides whether to run its SceneScripts (`enable_scripts`).
+    script_src: Option<(Vec<Value>, serde_json::Map<String, Value>, Value)>,
+    /// Running SceneScripts (in their sandboxed worker).
+    scripts: Option<crate::scripting::Scripts>,
+    /// Layer-clone templates (`object_visible` hides them while scripts
+    /// don't run; once they do, the scripts decide).
+    script_templates: HashSet<i64>,
+    /// Scene objects by id, while scripts run (templates of created layers).
+    script_objects: HashMap<i64, Value>,
 }
 
 const MAX_TARGET: u32 = 8192;
@@ -391,6 +417,8 @@ impl SceneRenderer {
             programs: HashMap::new(),
             textures: HashMap::new(),
             sounds: Vec::new(),
+            sound_volumes: Vec::new(),
+            sound_playing: Vec::new(),
             padded_textures: HashMap::new(),
             white: solid_texture(gl, [255, 255, 255, 255]),
             quad: QuadMesh::new(gl),
@@ -415,6 +443,10 @@ impl SceneRenderer {
             parallax: Parallax::from_general(&general),
             dump_dir: None,
             only: None,
+            script_src: None,
+            scripts: None,
+            script_templates: HashSet::new(),
+            script_objects: HashMap::new(),
             assets,
         };
 
@@ -461,6 +493,7 @@ impl SceneRenderer {
                     .collect();
                 if !files.is_empty() {
                     r.sounds.push(SceneSound {
+                        id: obj.get("id").and_then(|i| i.as_i64()).unwrap_or(-1),
                         name: obj
                             .get("name")
                             .and_then(|n| n.as_str())
@@ -539,7 +572,278 @@ impl SceneRenderer {
             p.visible &= !hidden.contains(&p.id);
         }
         r.attach_order = attach_order(&r.layers);
+        r.script_templates = objects
+            .iter()
+            .filter(|o| value::get_bool(o, "visible", true) && !object_visible(o))
+            .filter_map(|o| o.get("id").and_then(|i| i.as_i64()))
+            .collect();
+        r.script_src = Some((objects.clone(), props, general.clone()));
         Ok(r)
+    }
+
+    /// Starts the scene's SceneScripts in their sandboxed worker
+    /// (`rustpaper-script`). Without this call scripted properties keep
+    /// their static values. Returns how many scripts run (0: none).
+    pub fn enable_scripts(&mut self, screen: [f32; 2]) -> usize {
+        let Some((objects, props, general)) = self.script_src.take() else {
+            return 0;
+        };
+        let canvas = [self.width as f32, self.height as f32];
+        match crate::scripting::Scripts::load(&objects, &general, &props, canvas, screen) {
+            Ok(Some(s)) => {
+                let n = s.count();
+                self.scripts = Some(s);
+                // the scripts now run: templates show unless they hide them
+                let hidden = hidden_by_ancestor(&objects);
+                for id in self.script_templates.drain() {
+                    if let Some(l) = self.layers.iter_mut().find(|l| l.id == id) {
+                        l.visible = !hidden.contains(&id);
+                    }
+                }
+                self.script_objects = objects
+                    .into_iter()
+                    .filter_map(|o| Some((o.get("id")?.as_i64()?, o)))
+                    .collect();
+                n
+            }
+            Ok(None) => 0,
+            Err(e) => {
+                self.warn(format!("SceneScripts disabled: {e}"));
+                0
+            }
+        }
+    }
+
+    /// Loads a layer a script created (`thisScene.createLayer`): a copy of
+    /// the creating script's layer (visualizer bars clone themselves) with
+    /// the configuration's image and properties on top.
+    fn create_layer(
+        &mut self,
+        gl: &glow::Context,
+        c: &rustpaper_script::protocol::Created,
+        workshop: Option<&str>,
+    ) {
+        let cfg = match &c.config {
+            Value::Object(m) => m.clone(),
+            Value::String(s) => [("image".to_string(), Value::from(s.clone()))]
+                .into_iter()
+                .collect(),
+            _ => Default::default(),
+        };
+        let template = self.script_objects.get(&c.template).cloned();
+        let is_text = cfg.contains_key("text");
+        let mut obj = match (&template, is_text) {
+            (Some(t), false) if t.get("image").is_some_and(|i| i.is_string()) => t.clone(),
+            (Some(t), true) if t.get("text").is_some_and(|i| !i.is_null()) => t.clone(),
+            _ => Value::Object(Default::default()),
+        };
+        let Some(m) = obj.as_object_mut() else { return };
+        // the clone's own scripts never run: keep the values
+        for v in m.values_mut() {
+            if v.get("script").is_some() {
+                *v = value::plain(v).clone();
+            }
+        }
+        m.remove("parent");
+        m.remove("attachment");
+        m.insert("id".into(), Value::from(c.id));
+        m.insert("visible".into(), Value::Bool(true));
+        if let Some(path) = cfg.get("image").and_then(|i| i.as_str()) {
+            let found = crate::scripting::asset_candidates(path, workshop)
+                .into_iter()
+                .find(|p| self.assets.read_json(p).is_some());
+            let same = found.as_deref() == m.get("image").and_then(|i| i.as_str());
+            match found {
+                Some(p) if !same => {
+                    m.insert("image".into(), Value::from(p));
+                    m.remove("size");
+                    m.remove("effects");
+                }
+                Some(_) => {}
+                // unresolved: the template's own image (when there is one)
+                None if m.contains_key("image") => {}
+                None => {
+                    self.warn(format!("createLayer: {path} not found"));
+                    return;
+                }
+            }
+        }
+        for (k, v) in cfg {
+            if k == "image" {
+                continue;
+            }
+            let v = match (k.as_str(), v) {
+                ("text", Value::String(s)) => serde_json::json!({ "value": s }),
+                (_, v) => v,
+            };
+            m.insert(k, v);
+        }
+        if is_text {
+            match self.load_text(&obj) {
+                Ok(t) => self.texts.push(t),
+                Err(e) => {
+                    self.warn(format!("createLayer (text): {e}"));
+                    return;
+                }
+            }
+        }
+        if obj.get("image").and_then(|i| i.as_str()).is_none() && !is_text {
+            return;
+        }
+        let layer = match self.load_layer(gl, &obj) {
+            Ok(l) => l,
+            Err(e) => {
+                self.warn(format!("createLayer: {e}"));
+                return;
+            }
+        };
+        let k = self.layers.len();
+        self.layers.push(layer);
+        let at = c.before.and_then(|b| {
+            self.order.iter().position(|o| match *o {
+                ObjRef::Layer(i) => self.layers[i].id == b,
+                ObjRef::Particles(i) => self.particle_objs[i].id == b,
+            })
+        });
+        match at {
+            Some(at) => self.order.insert(at, ObjRef::Layer(k)),
+            None => self.order.push(ObjRef::Layer(k)),
+        }
+    }
+
+    /// Runs the scripts for this frame and applies what they changed.
+    fn run_scripts(&mut self, gl: &glow::Context, frame: &FrameInput) {
+        let Some(s) = &self.scripts else { return };
+        // objects under the cursor (cursorEnter / cursorLeave)
+        let c = s.cursor_in_scene(frame.pointer);
+        let hover: Vec<i64> = self
+            .layers
+            .iter()
+            .filter(|l| l.visible)
+            .filter(|l| {
+                let inv = math::invert(&l.world);
+                let lx = inv[0] * c[0] + inv[4] * c[1] + inv[12];
+                let ly = inv[1] * c[0] + inv[5] * c[1] + inv[13];
+                lx.abs() <= l.size[0] / 2.0 && ly.abs() <= l.size[1] / 2.0
+            })
+            .map(|l| l.id)
+            .collect();
+        let Some(s) = &mut self.scripts else { return };
+        let ch = match s.frame(frame, &hover) {
+            Ok(ch) => ch,
+            Err(e) => {
+                self.scripts = None;
+                self.warn(format!("SceneScripts stopped: {e}"));
+                return;
+            }
+        };
+        for (c, ws) in &ch.created {
+            self.create_layer(gl, c, ws.as_deref());
+        }
+        for (id, w) in ch.worlds {
+            self.worlds.insert(id, w);
+            if let Some(t) = self.texts.iter_mut().find(|t| t.id == id) {
+                // update_texts re-applies the alignment shift from world0
+                t.world0 = Some(w);
+                t.shown = None;
+            } else if let Some(l) = self.layers.iter_mut().find(|l| l.id == id) {
+                l.world = w;
+            }
+            if let Some(o) = self.particle_objs.iter_mut().find(|o| o.id == id) {
+                o.world = w;
+            }
+        }
+        for (id, v) in ch.visible {
+            if self.script_templates.contains(&id) {
+                continue;
+            }
+            if let Some(l) = self.layers.iter_mut().find(|l| l.id == id) {
+                l.visible = v;
+            }
+            if let Some(o) = self.particle_objs.iter_mut().find(|o| o.id == id) {
+                o.visible = v;
+            }
+        }
+        for l in &mut self.layers {
+            if let Some(c) = ch.color.get(&l.id) {
+                l.color = *c;
+            }
+            if let Some(a) = ch.alpha.get(&l.id) {
+                l.alpha = *a;
+            }
+            if let Some(b) = ch.brightness.get(&l.id) {
+                l.brightness = *b;
+                l.own_brightness = true;
+            }
+        }
+        for (id, s) in ch.text {
+            if let Some(t) = self.texts.iter_mut().find(|t| t.id == id) {
+                t.source = text::TextSource::Static(s);
+            }
+        }
+        for c in ch.constants {
+            let Some(l) = self.layers.iter_mut().find(|l| l.id == c.layer) else {
+                continue;
+            };
+            let passes = l
+                .effects
+                .iter_mut()
+                .chain(l.parked.iter_mut())
+                .filter(|e| e.json_index == c.effect)
+                .flat_map(|e| e.passes.iter_mut())
+                .filter(|p| p.json_pass == c.pass);
+            for p in passes {
+                p.pass.constants.insert(c.key.clone(), c.value.clone());
+            }
+        }
+        self.sound_volumes.extend(ch.sound_volumes);
+        self.sound_playing.extend(ch.sound_playing);
+        for (key, v) in ch.general {
+            if let Some(b) = &mut self.bloom {
+                b.constants.insert(key, v);
+            }
+        }
+        for (id, index, shown) in ch.anim_visible {
+            if let Some((rt, _)) = self
+                .layers
+                .iter_mut()
+                .find(|l| l.id == id)
+                .and_then(|l| l.puppet.as_mut())
+            {
+                rt.set_visible(index, shown);
+            }
+        }
+        for (id, index, rate) in ch.anim_rates {
+            if let Some((rt, _)) = self
+                .layers
+                .iter_mut()
+                .find(|l| l.id == id)
+                .and_then(|l| l.puppet.as_mut())
+            {
+                rt.set_rate(index, rate);
+            }
+        }
+        for (id, key, v) in ch.overrides {
+            if let Some(o) = self.particle_objs.iter_mut().find(|o| o.id == id) {
+                for s in &mut o.systems {
+                    s.sim.ov.set(&key, &v);
+                }
+            }
+        }
+        for (id, effect, shown) in ch.effect_visible {
+            let Some(l) = self.layers.iter_mut().find(|l| l.id == id) else {
+                continue;
+            };
+            let (from, to) = if shown {
+                (&mut l.parked, &mut l.effects)
+            } else {
+                (&mut l.effects, &mut l.parked)
+            };
+            if let Some(k) = from.iter().position(|e| e.json_index == effect) {
+                to.push(from.remove(k));
+                to.sort_by_key(|e| e.json_index);
+            }
+        }
     }
 
     fn warn(&mut self, msg: String) {
@@ -624,17 +928,29 @@ impl SceneRenderer {
         };
 
         let mut effects = Vec::new();
-        for fx in obj
+        let mut parked = Vec::new();
+        for (k, fx) in obj
             .get("effects")
             .and_then(|e| e.as_array())
             .into_iter()
             .flatten()
+            .enumerate()
         {
-            if !value::get_bool(fx, "visible", true) {
+            // a hidden effect a script may show is loaded, but parked
+            let scripted = fx.get("visible").is_some_and(|v| v.get("script").is_some());
+            let shown = value::get_bool(fx, "visible", true);
+            if !shown && !scripted {
                 continue;
             }
             match self.load_effect(gl, fx) {
-                Ok(e) => effects.push(e),
+                Ok(mut e) => {
+                    e.json_index = k;
+                    if shown {
+                        effects.push(e);
+                    } else {
+                        parked.push(e);
+                    }
+                }
                 Err(e) => self.warn(format!(
                     "effect {} skipped: {e}",
                     fx.get("file").and_then(|f| f.as_str()).unwrap_or("?")
@@ -719,6 +1035,7 @@ impl SceneRenderer {
             puppet,
             composite,
             effects,
+            parked,
         })
     }
 
@@ -785,6 +1102,7 @@ impl SceneRenderer {
             passes.push(EffectPass {
                 pass,
                 target: p.get("target").and_then(|t| t.as_str()).map(String::from),
+                json_pass: i,
             });
         }
         let fbos = def
@@ -805,6 +1123,7 @@ impl SceneRenderer {
             .collect();
         Ok(Effect {
             file: file.to_string(),
+            json_index: 0,
             passes,
             copies,
             fbos,
@@ -1082,6 +1401,7 @@ impl SceneRenderer {
             gl.disable(glow::DEPTH_TEST);
             gl.disable(glow::CULL_FACE);
         }
+        self.run_scripts(gl, &frame);
         self.update_texts(gl);
         self.frame_dt = (frame.time - self.time).clamp(0.0, 0.5);
         self.time = frame.time;
@@ -2265,7 +2585,7 @@ impl SceneRenderer {
         Ok(TextRt {
             id,
             source: text::TextSource::from_json(&obj["text"]),
-            font,
+            font: text::FontSet::new(font),
             style: text::TextStyle {
                 em: value::get_f32(obj, "pointsize", 32.0) * text::UNITS_PER_POINT,
                 halign: obj
@@ -2301,6 +2621,7 @@ impl SceneRenderer {
                 continue;
             }
             let mut style = t.style.clone();
+            t.font.cover(&now);
             style.size = text::canvas_size(&t.font, &now, &t.style);
             let px = text::rasterize(&t.font, &now, &style);
             let (w, h) = style.size;

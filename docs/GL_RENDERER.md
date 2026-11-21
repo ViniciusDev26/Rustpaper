@@ -327,8 +327,9 @@ If the runtime fills uniforms/textures/combos like WE, every effect works.
   applied by an extra composite pass when the layer's result is drawn onto the
   scene, not inside the layer's own FBO (that blended the layer with nothing
   and produced a mini-scene).
-- **`createLayer` templates** (objects only referenced by SceneScript) are
-  hidden: SceneScript is not executed yet (it will only run in a sandbox).
+- **`createLayer` templates** (objects whose `visible` script clones them)
+  are hidden only while scripts don't run (`--no-scripts`); with scripts the
+  script decides (some use the template as bar 0). See SCENESCRIPT.md.
 - **TEXB0004:** the extra per-mipmap header only exists for mp4 textures.
 
 ## Particles (`particles.rs`)
@@ -796,12 +797,29 @@ customization panel (`docs/SELECTOR.md`).
 - Turbulentvelocityrandom defaults other than speed 100..250: Akame
   1215952856 passes only with 100..250.
 
+## Puppet format notes (MDLV0023 / MDLA0006)
+
+- Vertex flag `0x10000` adds 4 bytes right after the position (0 in
+  Chainsaw Man 3577990983's `sl_puppet.mdl`: 84-byte vertices = position |
+  4 bytes | normal (0,0,1) | tangent (1,0,0,1) | bones | weights | uv).
+- MDLA0006 puts a large block after each animation's tracks (~43 KB in that
+  file): the next header is searched up to the MDLA block's end offset (it
+  was 4 KB). Jinx 3078285611 0.649 -> 0.701, Chainsaw Man 0.593 -> 0.611.
+- Still open: after the indices MDLV0023 stores `u8 1, u32 1, u32 size`
+  and one vec3 per vertex (3741 x 12 bytes; values unlike the positions),
+  a morph target. Each MDLA0006 animation then carries `u32 0, u32 1,
+  name "", u32 244` and frames + 1 floats (61 x 1.0 here): the morph
+  weight per frame. Chainsaw Man's face exists only in the morph shape
+  (our render shows hair strands, no head). Tried (2026-11-21, not
+  adopted): morph values as absolute positions -> the face appears but
+  the parts scatter; as deltas (pos + m) -> worse. They are likely in
+  another space (bone-local?) or applied after skinning: still to measure.
+
 ## Known gaps
 
-- **Not supported yet:** SceneScript (JavaScript) and `web` wallpapers.
-  Executing Workshop code is a security risk, so they will only run inside a
-  sandbox (planned, after the no-script renderer reaches its target). Until
-  then, properties driven only by a script keep their static value.
+- **SceneScript** runs sandboxed (`docs/SCENESCRIPT.md`); results on
+  particle overrides, animation layers and sound volume are not applied
+  yet. **`web` wallpapers** are not supported.
 - Scene lights (`LIGHTING=1` materials use ambient only).
 - Particles: **the prewarm (`starttime`) runs in real time**: it ignores
   `instanceoverride.rate`. In `make_particles.py pre_rate001` (rate 0.01,

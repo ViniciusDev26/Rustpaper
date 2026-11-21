@@ -54,6 +54,8 @@ pub struct Options {
     pub audio: bool,
     /// Play the scene's own sound objects (music); `--mute` turns it off.
     pub sound: bool,
+    /// Run the scene's SceneScripts (sandboxed); `--no-scripts` turns it off.
+    pub scripts: bool,
 }
 
 /// How often (in frames) fullscreen state is re-read from the compositor.
@@ -82,6 +84,8 @@ struct GlWallpaper {
     scene: SceneRenderer,
     screens: Vec<Screen>,
     vsync_off: bool,
+    /// SceneScripts start with the first frame (they need the screen size).
+    scripts_pending: bool,
     /// Animation clock: advances with real time except while every output is
     /// covered by a fullscreen window (then the wallpaper is fully paused).
     clock: f32,
@@ -135,6 +139,7 @@ pub fn run(dir: &Path, opts: Options) {
         scene,
         screens: Vec::new(),
         vsync_off: false,
+        scripts_pending: opts.scripts,
         clock: 0.0,
         last_tick: Instant::now(),
         frame: 0,
@@ -214,15 +219,34 @@ impl GlWallpaper {
             .max_by_key(|&(w, h)| w as u64 * h as u64)
             .unwrap_or((1920, 1080));
         self.scene.set_output_size(&self.gl.gl, ow, oh);
+        if std::mem::take(&mut self.scripts_pending) {
+            let n = self.scene.enable_scripts([ow as f32, oh as f32]);
+            if n > 0 {
+                println!("{n} SceneScript(s), sandboxed");
+            }
+            for w in &self.scene.warnings {
+                eprintln!("warning: {w}");
+            }
+        }
 
         self.update_pointer();
         let frame = FrameInput {
             time: self.clock,
             pointer: self.pointer,
             audio: self.audio.as_ref().map(|a| a.frame()).unwrap_or_default(),
-            ..Default::default()
+            daytime: rustpaper_gl::text::daytime(),
         };
         self.scene.render(&self.gl.gl, frame);
+        for (id, v) in self.scene.sound_volumes.drain(..) {
+            if let Some(s) = &self.sound {
+                s.set_volume(id, v);
+            }
+        }
+        for (id, playing) in self.scene.sound_playing.drain(..) {
+            if let Some(s) = &self.sound {
+                s.set_playing(id, playing);
+            }
+        }
 
         for (surface, (w, h), _) in ready {
             if self.gl.make_current(Some(surface)).is_err() {

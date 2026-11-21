@@ -926,6 +926,26 @@ impl Overrides {
         }
     }
 
+    /// One `instanceoverride` field changed at run time (a SceneScript).
+    pub fn set(&mut self, key: &str, v: &Value) {
+        let x = value::floats(v);
+        let one = x.first().copied();
+        match (key, one) {
+            ("alpha", Some(a)) => self.alpha = a,
+            ("size", Some(a)) => self.size = a,
+            ("lifetime", Some(a)) => self.lifetime = a,
+            ("rate", Some(a)) => self.rate = a,
+            ("speed", Some(a)) => self.speed = a,
+            ("count", Some(a)) => self.count = a,
+            ("brightness", Some(a)) => self.brightness = a,
+            ("colorn", _) if x.len() >= 3 => self.color = Some([x[0], x[1], x[2]]),
+            ("color", _) if x.len() >= 3 => {
+                self.color = Some([x[0] / 255.0, x[1] / 255.0, x[2] / 255.0])
+            }
+            _ => {}
+        }
+    }
+
     pub const NONE: Overrides = Overrides {
         alpha: 1.0,
         size: 1.0,
@@ -978,7 +998,8 @@ pub struct Event {
 
 pub struct ParticleSim {
     pub def: ParticleDef,
-    ov: Overrides,
+    /// `instanceoverride` (SceneScripts may change it while running).
+    pub ov: Overrides,
     particles: Vec<Particle>,
     rng: Rng,
     seed: u64,
