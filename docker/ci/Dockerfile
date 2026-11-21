@@ -16,7 +16,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
     CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:$PATH
 
+# build-essential: the linker (`cc`) and a C compiler (rquickjs builds
+# QuickJS from C for rustpaper-script). --no-install-recommends no longer
+# pulls them in through the -dev packages.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
         ca-certificates \
         curl \
         pkg-config \
