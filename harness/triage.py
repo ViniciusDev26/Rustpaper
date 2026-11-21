@@ -7,8 +7,8 @@ checked in this order:
   noise      the WE-vs-WE noise floor (we-floor.sh -> harness-out/floor.tsv)
              fails the same criterion: two runs of the real WE already
              disagree, so the metric cannot tell Rustpaper apart there
-  script     the scene uses SceneScript (not executed yet)
-  missing    the renderer reported something unsupported (rp_warnings.txt)
+  missing    the renderer reported something unsupported, or a SceneScript
+             failed (rp_warnings.txt)
   calibrate  everything is implemented and WE agrees with itself: the model
              of some feature is off
 
@@ -142,10 +142,16 @@ def failed(r):
 
 
 def warnings(i):
+    """Renderer warnings and SceneScript errors (console output is not one)."""
     p = os.path.join(OUT, i, "rp_warnings.txt")
     if not os.path.exists(p):
         return []
-    ws = {re.sub(r"\d+", "N", l.strip()[9:90]) for l in open(p, errors="replace") if l.startswith("warning")}
+    ws = set()
+    for l in open(p, errors="replace"):
+        if l.startswith("warning"):
+            ws.add(re.sub(r"\d+", "N", l.strip()[9:90]))
+        elif l.startswith("[script]") and re.search(r"Error|aborted|failed|stopped", l):
+            ws.add(re.sub(r"\d+", "N", l.strip()[9:90]))
     return sorted(ws)
 
 
@@ -169,14 +175,14 @@ def main():
         if fl and miss <= failed(fl):
             cause = "noise"
             why = f"floor SSIM {float(fl['mean_ssim']):.3f}, ratio {fl['energy_ratio']}"
-        elif scripts(i):
-            cause, why = "script", "; ".join([f"{scripts(i)} scripts"] + warnings(i))[:200]
         elif warnings(i):
             cause, why = "missing", "; ".join(warnings(i))[:200]
         else:
             cause = "calibrate"
             if fl:
                 why = f"floor SSIM {float(fl['mean_ssim']):.3f}, ratio {fl['energy_ratio']}"
+        if scripts(i):
+            why = f"{scripts(i)} scripts" + (f"; {why}" if why else "")
         by_cause[cause].append((r, miss, why))
 
     total = len(rows)
@@ -184,9 +190,9 @@ def main():
     lines = [f"# Failure triage\n", f"{npass}/{total} PASS; floor measured for "
              f"{sum(r['id'] in floor for r in rows)} scenes.\n"]
     lines.append("| cause | scenes |\n|---|---|")
-    for c in ("noise", "script", "missing", "calibrate"):
+    for c in ("noise", "missing", "calibrate"):
         lines.append(f"| {c} | {len(by_cause[c])} |")
-    for c in ("noise", "script", "missing", "calibrate"):
+    for c in ("noise", "missing", "calibrate"):
         if not by_cause[c]:
             continue
         lines.append(f"\n## {c}\n\n| id | title | mean SSIM | energy | fails | detail |\n|---|---|---|---|---|---|")
@@ -194,7 +200,7 @@ def main():
             lines.append(f"| {r['id']} | {r['title'][:40]} | {r['mean_ssim'][:5]} | {r['energy_ratio']} | "
                          f"{'+'.join(sorted(miss))} | {why} |")
 
-    # feature table: among scenes that are not noise / script failures
+    # feature table: among the calibrate failures
     cal = {r["id"] for r, _, _ in by_cause["calibrate"]}
     passed = {r["id"] for r in rows if r["verdict"] == "PASS"}
     cnt_cal, cnt_pass = Counter(), Counter()
@@ -213,7 +219,7 @@ def main():
             lines.append(f"| {t} | {cnt_cal[t]} | {cnt_pass[t]} | {share:.0%} |")
     report = "\n".join(lines) + "\n"
     open(os.path.join(OUT, "triage.md"), "w").write(report)
-    for c in ("noise", "script", "missing", "calibrate"):
+    for c in ("noise", "missing", "calibrate"):
         print(f"{c:10} {len(by_cause[c]):3}")
     print(f"-> {os.path.join(OUT, 'triage.md')}")
 

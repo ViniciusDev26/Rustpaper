@@ -56,6 +56,8 @@ pub struct Options {
     pub sound: bool,
     /// Run the scene's SceneScripts (sandboxed); `--no-scripts` turns it off.
     pub scripts: bool,
+    /// Draw only on this output (`--output DP-1`); None: every output.
+    pub output: Option<String>,
 }
 
 /// How often (in frames) fullscreen state is re-read from the compositor.
@@ -95,6 +97,11 @@ struct GlWallpaper {
     pointer: [f32; 2],
     audio: Option<crate::audio_capture::AudioCapture>,
     sound: Option<crate::sound::SoundPlayer>,
+    /// `--output`: the only output to draw on.
+    only_output: Option<String>,
+    /// Scene warnings already printed (new ones appear at run time too:
+    /// a SceneScript worker that died or was cut off).
+    warned: usize,
 }
 
 pub fn run(dir: &Path, opts: Options) {
@@ -128,6 +135,7 @@ pub fn run(dir: &Path, opts: Options) {
     for w in &scene.warnings {
         eprintln!("warning: {w}");
     }
+    let warned = scene.warnings.len();
 
     let mut state = GlWallpaper {
         registry_state: RegistryState::new(&globals),
@@ -140,6 +148,8 @@ pub fn run(dir: &Path, opts: Options) {
         screens: Vec::new(),
         vsync_off: false,
         scripts_pending: opts.scripts,
+        only_output: opts.output.clone(),
+        warned,
         clock: 0.0,
         last_tick: Instant::now(),
         frame: 0,
@@ -224,9 +234,6 @@ impl GlWallpaper {
             if n > 0 {
                 println!("{n} SceneScript(s), sandboxed");
             }
-            for w in &self.scene.warnings {
-                eprintln!("warning: {w}");
-            }
         }
 
         self.update_pointer();
@@ -237,6 +244,10 @@ impl GlWallpaper {
             daytime: rustpaper_gl::text::daytime(),
         };
         self.scene.render(&self.gl.gl, frame);
+        for w in &self.scene.warnings[self.warned.min(self.scene.warnings.len())..] {
+            eprintln!("warning: {w}");
+        }
+        self.warned = self.scene.warnings.len();
         for (id, v) in self.scene.sound_volumes.drain(..) {
             if let Some(s) = &self.sound {
                 s.set_volume(id, v);
@@ -318,6 +329,12 @@ impl OutputHandler for GlWallpaper {
     }
 
     fn new_output(&mut self, _: &Connection, qh: &QueueHandle<Self>, output: wl_output::WlOutput) {
+        if let Some(only) = &self.only_output {
+            let name = self.output_state.info(&output).and_then(|i| i.name);
+            if name.as_deref() != Some(only.as_str()) {
+                return;
+            }
+        }
         let surface = self.compositor.create_surface(qh);
         let viewport = self
             .viewporter

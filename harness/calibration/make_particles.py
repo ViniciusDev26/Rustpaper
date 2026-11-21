@@ -48,6 +48,11 @@ Experiments (name -> what varies):
   sprite_s2    the same on an object scaled "2 2 2" (uniform)
   (object-scale experiments: does WE squash / scale the quads with the
   object's scale, or only move the particles?)
+  seqcp / seqcp_v   mapsequencearoundcontrolpoint (count 4, speed "0 100 0")
+               with control point 0 at (400, 200), emitter at the center:
+               does the particle START at the control point or only take the
+               rotated velocity? (Frieren 3195212886's petals: cp 0 follows
+               the cursor). seqcp_v: speed 0, still dots (positions only)
   ov_base      reference for the ov_* runs: velocity 200 right, lifetime 1,
                rate 10, maxcount 20 (uncapped: about 10 alive)
   ov_rate      ov_base with instanceoverride rate 0.25: does it slow the whole
@@ -332,6 +337,13 @@ elif exp in ("lowrate", "lowrate_ov", "lowrate_big", "lowrate_shaft"):
              {"name": "sizerandom", "id": 3, "min": 600 if exp in ("lowrate_big", "lowrate_shaft") else 40,
               "max": 600 if exp in ("lowrate_big", "lowrate_shaft") else 40},
              {"name": "colorrandom", "id": 4, "min": "255 255 255", "max": "255 255 255"}]
+elif exp in ("seqcp", "seqcp_v"):
+    emitter = {"name": "sphererandom", "id": 1, "distancemax": 0, "distancemin": 0, "rate": 20}
+    sp = "0 0 0" if exp == "seqcp_v" else "0 100 0"
+    inits = [{"name": "lifetimerandom", "id": 2, "min": 3, "max": 3},
+             {"name": "sizerandom", "id": 3, "min": 30, "max": 30},
+             {"name": "colorrandom", "id": 4, "min": "255 255 255", "max": "255 255 255"},
+             {"name": "mapsequencearoundcontrolpoint", "id": 5, "count": 4, "speedmin": sp, "speedmax": sp}]
 else:
     sys.exit(f"unknown experiment {exp}")
 overrides = {"pre_rate001": {"rate": 0.01}, "ov_colorn05": {"colorn": "0.5 0.5 0.5"}, "ov_alpha05": {"alpha": 0.5},
@@ -354,6 +366,8 @@ system = {"maxcount": 300 if exp.startswith("srot") else 40 if exp.startswith("p
           "renderer": [renderer], "material": "materials/calibdot.json"}
 if exp == "persp":
     system["flags"] = 4
+if exp.startswith("seqcp"):
+    system["controlpoint"] = [{"id": 0, "flags": 0, "offset": "400 200 0"}]
 if exp in ("ws", "ws_grav", "ws_turb"):
     system["flags"] = 1
 

@@ -123,6 +123,26 @@ const BAND_SMOOTH: f32 = 0.3;
 const ATTACK: f32 = 0.05;
 const RELEASE: f32 = 0.9995;
 const REF_MIN: f32 = 0.01;
+/// Bands from LOW_BANDS up are divided by THEIR OWN adaptive reference (same
+/// attack/release), taken as the max over the band and its neighbour on each
+/// side, never below BAND_REF_FLOOR x the global reference nor BAND_REF_MIN.
+/// The lowest bands keep the global reference: per band, CITRUS 2719898311's
+/// band-0 ring flickered (energy 1.19 -> 3.24, FAIL). Measured
+/// with make_audio.py's cells under real music (harness-out/calib/
+/// audio_citrus, audio_music; the 8-14 s recordings replayed three times so
+/// the references carry history, as WE's did): with one global reference
+/// the high bands read ~0.02 where WE shows 0.12-0.3 (music is much quieter
+/// up there), and the bands moved 4-7x less than WE's. Per band: mean band
+/// error 0.169 -> 0.074 (CITRUS) and 0.173 -> 0.094 (music), motion 0.004
+/// -> 0.017 (WE 0.029). Harness: 2983846453's visualizer FAIL -> PASS
+/// (energy 0.40 -> 0.72); Lonely Cat 3299228616 (already FAIL, its HDR bloom
+/// is too bright) 0.868 -> 0.860, its audio pulse now reaching that bloom. Tones are unchanged: a sweep after silence still
+/// peaks ~1.0 on the same bands (now all equal to WE's, the neighbour max
+/// keeps a tone's spread bands at their 0.3 / 0.4 instead of normalizing
+/// them to 1), and the 1 kHz level steps are identical.
+const BAND_REF_SPREAD: usize = 1;
+const BAND_REF_FLOOR: f32 = 0.005;
+const BAND_REF_MIN: f32 = 1e-5;
 
 /// Center frequency of band `k`: log-linear between the anchors.
 fn band_center(k: usize) -> f32 {
@@ -143,6 +163,8 @@ pub struct Analyzer {
     /// FFT bin range of each band, plus its center as a fractional bin.
     bins: Vec<(usize, usize, f32)>,
     reference: f32,
+    /// Per-band references (see BAND_REF_SPREAD).
+    band_ref: [f32; BANDS],
     pub frame: AudioFrame,
 }
 
@@ -180,6 +202,7 @@ impl Analyzer {
             window,
             bins,
             reference: REF_MIN,
+            band_ref: [BAND_REF_MIN; BANDS],
             frame: AudioFrame::default(),
         }
     }
@@ -230,12 +253,31 @@ impl Analyzer {
         } else {
             (self.reference * RELEASE).max(REF_MIN)
         };
+        for (r, (l, rt)) in self.band_ref.iter_mut().zip(raw[0].iter().zip(&raw[1])) {
+            let p = l.max(*rt);
+            *r = if p > *r {
+                *r + (p - *r) * ATTACK
+            } else {
+                (*r * RELEASE).max(BAND_REF_MIN)
+            };
+        }
+        let floor = self.reference * BAND_REF_FLOOR;
+        let refs: [f32; BANDS] = std::array::from_fn(|k| {
+            if k < LOW_BANDS {
+                return self.reference;
+            }
+            let (lo, hi) = (
+                k.saturating_sub(BAND_REF_SPREAD),
+                (k + BAND_REF_SPREAD + 1).min(BANDS),
+            );
+            self.band_ref[lo..hi].iter().copied().fold(floor, f32::max)
+        });
         for (dst, src) in [&mut self.frame.left, &mut self.frame.right]
             .into_iter()
             .zip(raw)
         {
-            for (d, v) in dst.iter_mut().zip(src) {
-                let x = (v / self.reference).min(1.0);
+            for ((d, v), r) in dst.iter_mut().zip(src).zip(refs) {
+                let x = (v / r).min(1.0);
                 *d += (x - *d) * BAND_SMOOTH;
             }
         }
@@ -432,6 +474,26 @@ mod tests {
         }
         assert!(silent.left.iter().all(|&v| v < 0.01));
         assert_eq!(silent.bands(false, 16).len(), 16);
+    }
+
+    #[test]
+    fn quiet_highs_are_normalized_by_their_own_level() {
+        // music: loud bass, highs ~25x quieter. One global reference showed
+        // the highs at ~0.04; WE shows them about as lit as the bass.
+        let mut a = Analyzer::new(48_000.0);
+        let mix: Vec<f32> = sine(250.0, 0.5, WINDOW)
+            .iter()
+            .zip(sine(4000.0, 0.02, WINDOW))
+            .map(|(x, y)| x + y)
+            .collect();
+        let mut f = a.analyze(&mix);
+        for _ in 0..240 {
+            f = a.analyze(&mix);
+        }
+        assert!(f.left[47] > 0.8, "4 kHz band {}", f.left[47]);
+        assert!(f.left[8] > 0.8, "250 Hz band {}", f.left[8]);
+        // a band far from both tones stays dark
+        assert!(f.left[25] < 0.2, "band 25 {}", f.left[25]);
     }
 
     #[test]

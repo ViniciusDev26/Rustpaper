@@ -21,13 +21,16 @@ pub fn plain(v: &Value) -> &Value {
     }
 }
 
-/// Number / bool / "1 2 3" string -> floats.
+/// Number / bool / "1 2 3" string -> floats. Commas separate too: workshop
+/// effects store "0.0, 1.0" (3195212886's audio bars, `u_BarBounds`); read
+/// as just [1.0] the bars stood at full height in silence.
 pub fn floats(v: &Value) -> Vec<f32> {
     match plain(v) {
         Value::Number(n) => vec![n.as_f64().unwrap_or(0.0) as f32],
         Value::Bool(b) => vec![if *b { 1.0 } else { 0.0 }],
         Value::String(s) => s
-            .split_whitespace()
+            .split(|c: char| c.is_whitespace() || c == ',')
+            .filter(|t| !t.is_empty())
             .filter_map(|t| t.parse().ok())
             .collect(),
         _ => Vec::new(),
@@ -115,6 +118,12 @@ pub fn apply_user_properties(v: &mut Value, props: &serde_json::Map<String, Valu
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn commas_separate_components() {
+        assert_eq!(floats(&json!("0.0, 1.0")), vec![0.0, 1.0]);
+        assert_eq!(floats(&json!("1 2,3")), vec![1.0, 2.0, 3.0]);
+    }
 
     #[test]
     fn a_scalar_fills_a_vector() {

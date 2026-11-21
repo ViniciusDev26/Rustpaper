@@ -48,7 +48,31 @@ image with effects:     material shader --> layer target A  (object size)
                         result --(object MVP, blending)--> scene
 compose/fullscreen:     like above, but the first pass reads _rt_FullFrameBuffer
                         (snapshot of what is already drawn behind the layer)
+compose with children:  the children are drawn into the group's own target
+                        (transparent with copybackground: false, else a copy
+                        of the scene so far), which the compose shader reads
+                        as _rt_FullFrameBuffer; its effects then apply to the
+                        whole group
 ```
+
+**Compose layers group their children.** WE's "Adjustable Composition Layer"
+composes its children: Lofi Cafe 2370927443's chalkboard (photo, date, title
+are children of compose 3479, `copybackground: false`, whose perspective
+effect squeezes the group into the board). Drawn as plain layers they were
+~4x too large and off the board. Gate 2026-11-21: Lofi Cafe FAIL -> PASS
+(0.928 -> 0.981), Jinx 3078285611 and Subaru 3448290956 +0.01, no
+regression. The group is resolved once at load (nearest compose ancestor);
+groups nest.
+
+**`instance` overrides.** Instanced models (`solidlayer_instance_4`) take
+the object's `instance.textures` / `combos` over the shared material, like an
+effect pass's scene overrides. Chainsaw Man 3577990983's dock icons drew as
+white squares (the material's `util/white`).
+
+**Vector strings may use commas.** Workshop effects store `"0.0, 1.0"`
+(material constants and shader annotation defaults). Read on whitespace only
+it was `[1.0]`: 3195212886's audio bars (`u_BarBounds`) stood at full height
+in silence.
 
 Nothing is effect-specific: an effect is effect.json + materials + WE shaders.
 If the runtime fills uniforms/textures/combos like WE, every effect works.
@@ -664,12 +688,19 @@ drawn by a synthetic image layer (so effects and blend modes apply).
   band is smoothed by 0.3 per 60 Hz step. Band 0 is then 0.36 / step 0.084.
   The tone sweep keeps its peak bands and values, and the level response
   slightly improves (1 kHz at 0.125: 0.380 = WE). Gate (2026-11-21):
-  CITRUS FAIL -> PASS (energy 1.68 -> 1.19), no regression. Still open:
-  music highs (bands 40-63: WE ~0.18 vs ~0.02).
-- Known gap, music vs tones: with real music WE's bands all average ~0.22,
-  the high ones included (band 48: 0.25). The model, fitted on isolated
-  tones, gives band 32 0.05 and band 48 0.02. This suggests per-band (or
-  tilted) normalization that the single-tone sweep cannot show.
+  CITRUS FAIL -> PASS (energy 1.68 -> 1.19), no regression.
+  **FIXED (audio.rs `BAND_REF_*`): music highs.** Bands from 8 up are
+  normalized by their own adaptive reference (max with one neighbour each
+  side), see the comment there. Fitted offline on the two music captures,
+  their 8-14 s recordings replayed three times so the references carry
+  history: mean band error 0.169 -> 0.074 / 0.173 -> 0.094. A spectral
+  tilt (x f^a, a = 0.5..1) did NOT help: the single reference rescales it
+  away (0.161 -> 0.147 at best, bass ruined). The bands below 8 keep the
+  global reference (per band, CITRUS's ring flickered: energy 3.2).
+- Music vs tones: with real music WE's bands all average ~0.22, the high
+  ones included (band 48: 0.25); the single-reference model gave band 48
+  0.02. Per-band references (above) were the missing piece; the tone sweep
+  cannot show them because a new tone always becomes its band's peak.
 - Harness caveat: `we_audio.wav` only covers the capture, but WE had been
   hearing the scene's music during the warmup, so its adaptive reference
   carries that history. Giving the replay 8 s of prior music lowered
@@ -720,6 +751,16 @@ unchanged WE material shader draws it.
 - MDLV0023 has extra blocks between the indices and MDLS (the parser looks
   for the magic), and MDLS0004's animation offset points at the MDAT block
   that precedes MDLA.
+- **A puppet is drawn into its layer target with the material's blending**,
+  not copied opaque like a quad: its triangles overlap and their hulls are
+  mostly transparent texels of a parts atlas, so a hair strand drawn after
+  the face erased it. Chainsaw Man 3577990983's head was missing (only the
+  last-drawn strands showed); Jinx 3078285611's hair was pink holes. Gate
+  2026-11-21: Jinx 0.714 -> 0.944, Chainsaw Man 0.613 -> 0.653.
+- **`cullmode: normal`** culls back faces. Our targets keep row 0 at the top
+  (y flipped), so WE's back faces are GL front faces: culling GL BACK
+  removed Chainsaw Man's whole puppet, FRONT leaves WE's image (stray hair
+  pieces behind the head disappear).
 
 ## GIF scenes (animated images)
 
@@ -805,21 +846,25 @@ customization panel (`docs/SELECTOR.md`).
 - MDLA0006 puts a large block after each animation's tracks (~43 KB in that
   file): the next header is searched up to the MDLA block's end offset (it
   was 4 KB). Jinx 3078285611 0.649 -> 0.701, Chainsaw Man 0.593 -> 0.611.
-- Still open: after the indices MDLV0023 stores `u8 1, u32 1, u32 size`
-  and one vec3 per vertex (3741 x 12 bytes; values unlike the positions),
-  a morph target. Each MDLA0006 animation then carries `u32 0, u32 1,
-  name "", u32 244` and frames + 1 floats (61 x 1.0 here): the morph
-  weight per frame. Chainsaw Man's face exists only in the morph shape
-  (our render shows hair strands, no head). Tried (2026-11-21, not
-  adopted): morph values as absolute positions -> the face appears but
-  the parts scatter; as deltas (pos + m) -> worse. They are likely in
-  another space (bone-local?) or applied after skinning: still to measure.
+- After the indices MDLV0023 stores `u8 1, u32 1, u32 size` and one vec3
+  per vertex (3741 x 12 bytes), and each MDLA0006 animation carries
+  `u32 0, u32 1, name "", u32 244` and frames + 1 floats (61 x 1.0). The
+  vec3s are each vertex's place IN THE TEXTURE, in pixels from its center:
+  (u x 3840 - 1920, (0.5 - v) x 2867) = (119, 1117.5) for vertex 0, exactly
+  its UV. The positions are the assembled pose (the bones' bind matrices sit
+  on the position centroids, not on these). So it is the editor's
+  "original image" shape with weight 1.0 everywhere: the same as drawing
+  with the UVs, nothing to apply. The missing head was the blending above.
+- Vertex flag `0x10000`'s 4 bytes are 0 except on 19 vertices that hold
+  1.0, 2.0, 3.0... (as floats): unknown, ignored.
 
 ## Known gaps
 
-- **SceneScript** runs sandboxed (`docs/SCENESCRIPT.md`); results on
-  particle overrides, animation layers and sound volume are not applied
-  yet. **`web` wallpapers** are not supported.
+- **SceneScript** runs sandboxed (`docs/SCENESCRIPT.md`). **`web`
+  wallpapers** are not supported.
+- Lonely Cat 3299228616: the HDR bloom of its water reflection is much
+  brighter than WE's (the layer's own passes match; `general.bloom` with
+  `hdr: true`). Not calibrated yet.
 - Scene lights (`LIGHTING=1` materials use ambient only).
 - Particles: **the prewarm (`starttime`) runs in real time**: it ignores
   `instanceoverride.rate`. In `make_particles.py pre_rate001` (rate 0.01,
@@ -863,9 +908,13 @@ customization panel (`docs/SELECTOR.md`).
   was used (std 65; 0.43 changes/s at lifetime 6). Gate (2026-11-21): no
   regression. Other outputs are still unsupported; for `speed` see the
   screen-mode notes. `mapsequencearoundcontrolpoint` (N even directions,
-  velocity rotated per particle) and `mapsequencebetweencontrolpoints`
-  (evenly spaced between control points 0 and 1) are implemented but not
-  calibrated (only heavily scripted scenes use them). Sprite
+  velocity rotated per particle) STARTS the particle at its control point:
+  `make_particles.py seqcp_v` (control point 0 at (400, 200), emitter at the
+  center) puts WE's still dots at (394, 227), ours were at the center
+  (now identical; seqcp with velocity too). Frieren 3195212886's cursor
+  petals were a spinning star on her face (energy 1.79 -> 1.45).
+  `mapsequencebetweencontrolpoints` (evenly spaced between control points 0
+  and 1) is implemented but not calibrated. Sprite
   `orientation` modes coincide for the front-facing ortho camera (WE passes
   world camera axes; compensating object rotation broke White Angel).
 - Particle geometry on scaled + rotated objects is VERIFIED

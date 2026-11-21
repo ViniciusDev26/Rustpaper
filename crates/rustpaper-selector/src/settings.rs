@@ -11,6 +11,10 @@ use serde_json::{Map, Value};
 pub struct Settings {
     pub last_id: Option<String>,
     pub autostart: bool,
+    /// Don't run SceneScripts (`rustpaper --no-scripts`). They run sandboxed
+    /// by default; this is for users who want no Workshop code at all.
+    #[serde(default)]
+    pub no_scripts: bool,
 }
 
 fn config_home() -> PathBuf {
@@ -127,6 +131,12 @@ mod tests {
         assert!(properties_file("2068329709").is_some());
         assert!(properties_file("../etc").is_none());
         assert!(properties_file("").is_none());
+    }
+
+    #[test]
+    fn old_state_files_keep_scripts_on() {
+        let s: Settings = serde_json::from_str(r#"{"last_id":"1","autostart":true}"#).unwrap();
+        assert!(!s.no_scripts);
     }
 
     #[test]

@@ -54,15 +54,19 @@ Built from `general.properties` of project.json, in WE's `order`:
 
 ## Persistence
 
-- `~/.config/rustpaper/state.json`: last applied wallpaper and the autostart
-  flag; the panel reopens the last wallpaper at startup.
+- `~/.config/rustpaper/state.json`: last applied wallpaper, the autostart
+  flag and `no_scripts`; the panel reopens the last wallpaper at startup.
 - Autostart: `~/.config/autostart/rustpaper.desktop` runs the engine with the
   last wallpaper and its `--props` file (arguments quoted per the Desktop Entry
   spec).
+- **Run scripts** (header checkbox, on by default): off adds `--no-scripts`
+  to every engine start; toggling restarts the wallpaper on screen and
+  rewrites the autostart entry. State files from before the option keep
+  scripts on (`no_scripts` defaults to false).
 
 ## Commands (Rust -> UI)
 
 `list_wallpapers`, `apply(id)`, `get_properties(id)` (definitions + saved
 values), `save_properties(id, values)`, `get_settings`,
-`set_autostart(enabled)`. Ids are validated as plain folder names before any
+`set_autostart(enabled)`, `set_scripts(enabled)`. Ids are validated as plain folder names before any
 path is built.

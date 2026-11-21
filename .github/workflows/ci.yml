@@ -10,7 +10,7 @@ env:
   CARGO_TERM_COLOR: always
   IMAGE: ghcr.io/viniciusdev26/rustpaper-ci
 
-# Cancela runs antigos da mesma branch/PR quando um push novo chega.
+# Cancel older runs of the same branch/PR when a new push arrives.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -20,14 +20,14 @@ permissions:
   packages: write
 
 jobs:
-  # Builda/publica a imagem de CI (docker/ci/Dockerfile: Ubuntu 24.04 + toolchain
-  # Rust + deps de sistema do workspace) ANTES dos outros jobs, pra garantir que a
-  # tag usada abaixo sempre reflete o Dockerfile deste commit. Se o Dockerfile não
-  # mudou, o cache (type=gha) faz isso ser praticamente instantâneo.
+  # Builds/publishes the CI image (docker/ci/Dockerfile: Ubuntu 24.04 + Rust
+  # toolchain + the workspace's system deps) BEFORE the other jobs, so the tag
+  # used below always matches this commit's Dockerfile. When the Dockerfile
+  # did not change, the cache (type=gha) makes this nearly instant.
   #
-  # Tag por evento: push na main publica `:latest` (o que os outros runs de main
-  # esperam encontrar); PR publica numa tag isolada `:pr-<número>`, pra rodar a
-  # suíte da PR sem sobrescrever o `:latest` que a main usa.
+  # Tag per event: a push to main publishes `:latest` (what other main runs
+  # expect); a PR publishes an isolated `:pr-<number>` tag, so the PR's suite
+  # runs without overwriting the `:latest` that main uses.
   image:
     name: Build CI image
     runs-on: ubuntu-latest
@@ -73,9 +73,9 @@ jobs:
     container: ${{ needs.image.outputs.image }}
     steps:
       - uses: actions/checkout@v4
-      # shared-key fixo: sem isso, o rust-cache usa o nome do job na chave e
-      # clippy/build/test cada um recompila as deps (wgpu, webkit2gtk-sys, gtk...)
-      # do zero, mesmo rodando logo em seguida um do outro na mesma imagem.
+      # Fixed shared-key: otherwise rust-cache keys on the job name and
+      # clippy/build/test each rebuild the deps (wgpu, webkit2gtk-sys, gtk...)
+      # from scratch, even though they run one after another on the same image.
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: rustpaper-ci
@@ -88,9 +88,9 @@ jobs:
     container: ${{ needs.image.outputs.image }}
     steps:
       - uses: actions/checkout@v4
-      # shared-key fixo: sem isso, o rust-cache usa o nome do job na chave e
-      # clippy/build/test cada um recompila as deps (wgpu, webkit2gtk-sys, gtk...)
-      # do zero, mesmo rodando logo em seguida um do outro na mesma imagem.
+      # Fixed shared-key: otherwise rust-cache keys on the job name and
+      # clippy/build/test each rebuild the deps (wgpu, webkit2gtk-sys, gtk...)
+      # from scratch, even though they run one after another on the same image.
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: rustpaper-ci
@@ -103,9 +103,9 @@ jobs:
     container: ${{ needs.image.outputs.image }}
     steps:
       - uses: actions/checkout@v4
-      # shared-key fixo: sem isso, o rust-cache usa o nome do job na chave e
-      # clippy/build/test cada um recompila as deps (wgpu, webkit2gtk-sys, gtk...)
-      # do zero, mesmo rodando logo em seguida um do outro na mesma imagem.
+      # Fixed shared-key: otherwise rust-cache keys on the job name and
+      # clippy/build/test each rebuild the deps (wgpu, webkit2gtk-sys, gtk...)
+      # from scratch, even though they run one after another on the same image.
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: rustpaper-ci

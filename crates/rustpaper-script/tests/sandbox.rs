@@ -49,6 +49,7 @@ fn init(scripts: Vec<ScriptDef>) -> Init {
         user_properties: Map::new(),
         canvas: [1920.0, 1080.0],
         screen: [1920.0, 1080.0],
+        zoom: 1.0,
     }
 }
 
@@ -174,4 +175,24 @@ fn scripts_see_angles_in_degrees() {
     let r = host.frame(&frame(0.0)).unwrap();
     let z = r.layers[0].angles.unwrap()[2];
     assert!((z - std::f32::consts::PI).abs() < 1e-5, "{z}");
+}
+
+#[test]
+fn camera_zoom_reaches_the_host() {
+    // Persona 3 3151551777: applyUserProperties zooms the camera in
+    let s = script(
+        0,
+        "zoom",
+        ValueKind::Float,
+        json!(1.0),
+        "export function applyUserProperties() { const c = thisScene.getCameraTransforms(); c.zoom = c.zoom * 1.01; thisScene.setCameraTransforms(c); }",
+    );
+    let mut i = init(vec![s]);
+    i.zoom = 2.0;
+    let (mut host, _) = ScriptHost::spawn_worker(Path::new(WORKER), &i, 0).unwrap();
+    let r = host.frame(&frame(0.0)).unwrap();
+    assert!(r.logs.is_empty(), "{:?}", r.logs);
+    assert_eq!(r.zoom, Some(2.02));
+    let r = host.frame(&frame(0.1)).unwrap();
+    assert_eq!(r.zoom, None, "unchanged zoom is not resent");
 }

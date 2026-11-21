@@ -904,11 +904,12 @@ fn type_components(ty: &str) -> Option<usize> {
 }
 
 // Reads a default from the annotation: number -> [n]; string "1 0 0" -> [1,0,0].
+// Workshop shaders also write "0.0, 1.0" (commas).
 fn parse_default(v: &serde_json::Value, components: usize) -> Vec<f32> {
     let mut out = match v {
         serde_json::Value::Number(n) => vec![n.as_f64().unwrap_or(0.0) as f32],
         serde_json::Value::String(s) => s
-            .split_whitespace()
+            .split(|c: char| c.is_whitespace() || c == ',')
             .filter_map(|t| t.parse::<f32>().ok())
             .collect(),
         _ => Vec::new(),
@@ -1085,6 +1086,12 @@ fn parse_include(line: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn defaults_accept_commas() {
+        let v = serde_json::json!("0.0, 1.0");
+        assert_eq!(parse_default(&v, 2), vec![0.0, 1.0]);
+    }
 
     #[test]
     fn parse_include_extrai_nome() {

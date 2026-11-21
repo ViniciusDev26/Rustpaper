@@ -81,6 +81,8 @@ pub struct Changes {
     pub overrides: Vec<(i64, String, Value)>,
     /// Layers scripts created, with the creating script's `__workshopId`.
     pub created: Vec<(Created, Option<String>)>,
+    /// Camera zoom (`setCameraTransforms`, or a `general.zoom` script).
+    pub zoom: Option<f32>,
 }
 
 pub struct ConstantChange {
@@ -212,6 +214,7 @@ impl Scripts {
             user_properties: props,
             canvas,
             screen,
+            zoom: crate::value::get_f32(general, "zoom", 1.0),
         };
         let offset_min = chrono::Local::now().offset().local_minus_utc() / 60;
         let (host, reply) = ScriptHost::spawn(&init, offset_min)?;
@@ -298,6 +301,9 @@ impl Scripts {
         }
         let mut moved = false;
         let mut shown = false;
+        if r.zoom.is_some() {
+            ch.zoom = r.zoom;
+        }
         for c in r.created {
             self.objs.insert(
                 c.id,
@@ -401,6 +407,9 @@ impl Scripts {
                     ch.anim_visible
                         .retain(|a| !(a.0 == *layer && a.1 == *index));
                     ch.anim_visible.push((*layer, *index, shown));
+                }
+                Some(Target::General { key }) if key == "zoom" => {
+                    ch.zoom = v.as_f64().map(|z| z as f32);
                 }
                 Some(Target::General { key }) => {
                     ch.general.retain(|g| &g.0 != key);
