@@ -1,7 +1,9 @@
 [package]
 name = "rustpaper-script"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 # SceneScript (WE's JavaScript) support. Workshop scripts are untrusted code:
 # they only ever run inside `rustpaper-script-worker`, a separate process that

@@ -1,7 +1,9 @@
 [package]
 name = "rustpaper-gl"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 # OpenGL scene renderer. WE shaders are written for (a dialect of) GL, so running
 # them on GL avoids the whole Vulkan/SPIR-V translation layer of rustpaper-engine.
