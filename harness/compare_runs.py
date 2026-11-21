@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""compare_runs.py [old.tsv [new.tsv]]: what changed between two harness runs.
+"""compare_runs.py [--gate] [old.tsv [new.tsv]]: what changed between two harness runs.
 
 Without arguments: the two most recent files in harness-out/runs/ (batch.sh
 saves one per run). With one: that run against the most recent. Prints the
@@ -22,6 +22,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("runs", nargs="*")
     ap.add_argument("--min", type=float, default=0.005, help="smallest mean SSIM change to list")
+    ap.add_argument("--gate", action="store_true",
+                    help="exit 1 on a regression: a PASS -> FAIL flip or a mean SSIM drop >= --drop")
+    ap.add_argument("--drop", type=float, default=0.01, help="mean SSIM drop that fails --gate")
     a = ap.parse_args()
     saved = sorted(glob.glob(os.path.join(OUT, "runs", "*.tsv")))
     if len(a.runs) == 2:
@@ -64,6 +67,13 @@ def main():
             print(f"\n{label}: {' '.join(sorted(ids))}")
     if not (flips or moves):
         print("\nno verdict changes and no mean SSIM change above the threshold")
+    if a.gate:
+        bad = [i for i in flips if n[i]["verdict"] != "PASS"]
+        bad += [i for d, i, _, _ in moves if d <= -a.drop and i not in bad]
+        if bad:
+            print(f"\nGATE FAILED: {len(bad)} regression(s): {' '.join(bad)}")
+            sys.exit(1)
+        print("\ngate: no regression")
 
 
 if __name__ == "__main__":

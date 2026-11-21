@@ -105,6 +105,17 @@ const ANCHORS: [(f32, f32); 16] = [
 /// How much of a band shows in the 1st / 2nd band below and above it.
 const SPREAD_BELOW: [f32; 2] = [0.3, 0.1];
 const SPREAD_ABOVE: [f32; 2] = [0.4, 0.15];
+/// The lowest bands take 3x more of the bands above them, and every band is
+/// smoothed per analysis step. Measured with make_audio.py's cells while
+/// CITRUS 2719898311's own music played (harness-out/calib/audio_citrus):
+/// WE's band 0 averaged 0.36 and moved in small steps (0.075, 90 of 225
+/// frames) while ours averaged 0.19 and jumped (0.169, 28 frames). With these
+/// it is 0.36 / 0.084 / 34 frames; the tone sweep and level response do not
+/// regress (1 kHz at 0.125: 0.380 = WE). Gate 2026-11-21: CITRUS FAIL ->
+/// PASS (energy 1.68 -> 1.19), no regression.
+const LOW_BANDS: usize = 8;
+const LOW_SPREAD: f32 = 3.0;
+const BAND_SMOOTH: f32 = 0.3;
 /// Adaptive reference, per analysis step (60 Hz): rises toward the loudest
 /// band by ATTACK, otherwise decays by RELEASE (~33 s time constant; the fit
 /// barely distinguishes it from no decay, but a live wallpaper must recover
@@ -201,7 +212,8 @@ impl Analyzer {
                 let mut v = bands[k];
                 for (d, w) in SPREAD_BELOW.iter().enumerate() {
                     if let Some(&above) = bands.get(k + d + 1) {
-                        v = v.max(above * w);
+                        let w = if k < LOW_BANDS { w * LOW_SPREAD } else { *w };
+                        v = v.max(above * w.min(1.0));
                     }
                 }
                 for (d, w) in SPREAD_ABOVE.iter().enumerate() {
@@ -223,7 +235,8 @@ impl Analyzer {
             .zip(raw)
         {
             for (d, v) in dst.iter_mut().zip(src) {
-                *d = (v / self.reference).min(1.0);
+                let x = (v / self.reference).min(1.0);
+                *d += (x - *d) * BAND_SMOOTH;
             }
         }
         self.frame
@@ -384,7 +397,7 @@ mod tests {
     }
 
     #[test]
-    fn tones_land_on_we_bands_with_neighbours_and_no_smoothing() {
+    fn tones_land_on_we_bands_with_neighbours_and_smoothing() {
         let mut a = Analyzer::new(48_000.0);
         // WE: 1 kHz -> band 32, 4 kHz -> 47, 250 Hz -> 8 (calibration sweep)
         // (tolerance: bass bands are narrower than an FFT bin, the known gap)
@@ -400,14 +413,23 @@ mod tests {
             assert!(p.abs_diff(band) <= tol, "{hz} Hz -> band {p}, WE {band}");
             assert!(f.left[p] > 0.9, "{hz} Hz peak {}", f.left[p]);
         }
-        let f = a.analyze(&sine(1000.0, 0.5, WINDOW));
+        // BAND_SMOOTH: a new sound settles within ~20 analysis steps
+        let tone = sine(1000.0, 0.5, WINDOW);
+        let mut f = a.analyze(&tone);
+        for _ in 0..30 {
+            f = a.analyze(&tone);
+        }
         let p = peak(&f.left);
         assert!(
             f.left[p + 1] > 0.2 && f.left[p + 5] < 0.05,
             "spread to neighbours only"
         );
-        // no smoothing: silence is dark at once
-        let silent = a.analyze(&vec![0.0; WINDOW * 2]);
+        // ...and silence fades out (0.7 per step), dark after ~1/3 s
+        let mut silent = a.analyze(&vec![0.0; WINDOW * 2]);
+        assert!(silent.left[p] > 0.1, "not dark at once");
+        for _ in 0..20 {
+            silent = a.analyze(&vec![0.0; WINDOW * 2]);
+        }
         assert!(silent.left.iter().all(|&v| v < 0.01));
         assert_eq!(silent.bands(false, 16).len(), 16);
     }
@@ -419,7 +441,11 @@ mod tests {
         for _ in 0..120 {
             a.analyze(&loud); // 2 s: the reference settles on the loud tone
         }
-        let half = a.analyze(&sine(1000.0, 0.5, WINDOW));
+        let quiet = sine(1000.0, 0.5, WINDOW);
+        let mut half = a.analyze(&quiet);
+        for _ in 0..30 {
+            half = a.analyze(&quiet); // let BAND_SMOOTH settle
+        }
         let v = half.left[peak(&half.left)];
         // WE: 0.47 for half the amplitude after a full-scale tone
         assert!((0.4..0.6).contains(&v), "{v}");

@@ -126,3 +126,11 @@ Take `genericimage2.vert/.frag`, resolve includes, no combos, modernize the
 minimum, compile via `ShaderSource::Glsl`, and draw the background layer of a
 simple image scene with IT (instead of our fixed shader). If a textured quad
 shows up through the WE shader translated by naga, the path is proven.
+
+## `clamp` argument order (GL renderer)
+
+Some Workshop shaders call `clamp(x, lo, hi)` with lo > hi, e.g. bokeh
+2798319181's `clamp(0, 0.15, depth)`. HLSL defines that as
+`min(max(x, lo), hi)`, while GLSL leaves it undefined (NVIDIA returns lo). The
+GL prelude maps `clamp` to the HLSL form (こきん 3146507587 FAIL -> PASS, see
+GL_RENDERER.md).

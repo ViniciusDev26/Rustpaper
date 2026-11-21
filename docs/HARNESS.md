@@ -7,7 +7,9 @@ Fidelity is measured against the real WE (running under Proton), not by eye.
 ./harness/we-capture.sh <id> <out dir> [secs]  # real WE -> we.png + we.mp4
 ./harness/compare.sh rp.mp4 we.mp4 <out dir>   # metrics + sheet + side-by-side
 ./harness/batch.sh [--recapture] [--update] [id...]  # every scene -> results.tsv + report.md
-./harness/compare_runs.py                            # what changed since the previous run
+./harness/compare_runs.py [--gate]                   # what changed since the previous run
+./harness/we-floor.sh [id...]                        # WE vs WE noise floor -> floor.tsv
+./harness/triage.py                                  # why each FAIL fails -> triage.md
 ./harness/download-testset.sh                  # the 100-wallpaper test corpus
 ```
 
@@ -189,6 +191,45 @@ uncommitted changes, so the renderer may differ from that commit. Compare versio
 runs): score per SceneScript group, verdict flips, mean SSIM moves
 (`--min 0.005`), scenes only in one run. `score.py run.tsv` scores an old run.
 
+### Regression gate (`compare_runs.py --gate`)
+
+Every renderer change is accepted only with a full batch run and
+`compare_runs.py --gate <run before> <run after>`: it exits 1 on any
+PASS -> FAIL flip or any mean SSIM drop of 0.01 or more (`--drop`). A change
+that helps the scene it was made for but breaks another one means the model is
+still wrong (the parallax follow and the particle rotation compensation both
+went that way). For an experiment behind an environment flag, run the batch
+with and without the flag and gate the two runs against each other.
+
+## Noise floor (`harness/we-floor.sh`)
+
+`we-floor.sh [--recapture] [id...]` captures the real WE a SECOND time into
+`harness-out/<id>/floor/` and runs `compare.sh` between the two WE captures.
+The output goes to `harness-out/floor.tsv`, which has the same columns as
+`results.tsv`. The WE-vs-WE score is the best Rustpaper can reach on that
+scene: particle RNG, frame-capture jitter, audio and the scene clock all differ
+between two runs of WE itself. A scene whose floor already fails a criterion
+cannot be judged on it. Run it alone, without renders in parallel: they take
+GPU time from WE and change its motion.
+
+## Failure triage (`harness/triage.py`)
+
+`triage.py [run.tsv]` puts each FAIL in exactly one cause, checked in this
+order:
+
+1. `noise`: the floor fails the same criterion.
+2. `script`: the scene uses SceneScript.
+3. `missing`: the renderer reported a warning.
+4. `calibrate`: none of the above, so the model of some feature is off.
+
+It also counts how many `calibrate` failures and passes use each scene
+feature: particle operators, effects, puppets, audio, parallax and so on. The
+output is `harness-out/triage.md`. A feature that is common among the failures
+and rare among the passes is the one to isolate next, with
+`calibration/isolate.sh` or `make_particles.py`. Calibrate in isolated or
+synthetic scenes, never by fitting a real scene directly. Then gate the change
+with a full batch.
+
 ## Test corpus (`harness/testset.tsv`)
 
 100 Workshop items (75 scene, 15 video, 10 web; "Everyone" rating, ~5.8 GB),
@@ -225,6 +266,70 @@ override's link to `sizechange` was found.
 Calibration captures record WE's frame-rate limit (`we_fps.txt`);
 `run_particles.sh` and `isolate.sh` recapture when it does not match
 `WE_FPS` (captures at 15 fps had fitted a wrong turbulence model).
+
+## Motion blur calibration (`harness/calibration/run_motionblur.sh`)
+
+`make_motionblur.py <dir> <experiment>` builds a black scene with one white
+bar, scrolled by the `scroll` effect and then blurred by `motionblur`. Like
+the editor, it copies the effects' materials and shaders into the scene;
+without them WE shows a black window and Rustpaper skips the effects. The
+experiments are `mb_none`, `mbr_<rate>` (constant named `rate`, the base
+shader's name) and `mb_<rate>` (named by its label, which both WE and
+Rustpaper ignore). `measure_trail.py --rate R` prints the bar speed and the
+accumulations per second fitted from the decay of the trail.
+
+## Effect ablation (`harness/calibration/isolate_effects.sh`)
+
+`isolate_effects.sh <workshop id> <object id> [variant...]` copies a real
+scene once per effect of one layer. Each copy keeps ONLY that effect visible,
+and `none` keeps no effect at all. Each copy is captured in WE, rendered by
+Rustpaper and compared with `compare.sh`. The table lists mean SSIM and the
+energy ratio per effect, so it shows which effect of a busy layer causes a
+failure.
+
+Example: Anime girl v40 3835806837 has 9 effects and an energy ratio of
+0.687. Alone, `filmgrain` scored 0.233 and `shimmer` 0.692. The grain is a
+resolution problem on scenes larger than the screen: see "Film grain" in
+GL_RENDERER.md.
+
+## Film grain calibration (`harness/calibration/run_grain.sh`)
+
+`make_grain.py` builds a flat grey layer with `filmgrain`. The experiments
+are `g_default`, `g_s<scale>` and `g_a<strength>`. `measure_grain.py`
+prints the grain's level, its spatial std, the frame-to-frame |diff| (what
+the motion energy sees) and how often WE repeats a frame.
+
+## Minification calibration (`harness/calibration/run_minify.sh`)
+
+`make_minify.py` builds a 3840x2160 scene (shown at 1920x1080) with one
+layer textured by a 1 px checkerboard. The experiments are `m_1mip` and
+`m_mips` (with the full mip chain in the .tex); the `_fx` variants add a
+neutral effect. `measure_grain.py` reads the level and std of the result:
+std ~0 means the checkerboard was filtered, a high std means it aliased.
+
+## Shimmer calibration (`harness/calibration/run_shimmer.sh`)
+
+`make_shimmer.py` builds a flat grey layer with `shimmer`. The experiments
+are named `sh_v<speed>_d<delay>[_b<blendmode>]`. `measure_sweep.py` prints
+the brightening, the lit share and the times at which the centre strip
+peaks; comparing those peaks against Rustpaper's measures WE's clock
+offset (`WE_CLOCK_DELAY` in lib.sh).
+
+## Camera shake calibration (`harness/calibration/run_shake.sh`)
+
+`run_shake.sh [s<amplitude>_v<speed>_r<roughness>...]` runs `make_scene.py`'s
+coordinate scene with `general.camerashake` on. `measure_shake.py` reads each
+frame's camera offset from the encoded colors. It prints:
+- std, half peak-to-peak and speed of the path;
+- with `--fit <scene time>`, the time scale that best aligns the path with
+  the model;
+- the correlation between the WE and Rustpaper paths at the same scene time.
+
+Two caveats:
+- An 8 s capture holds less than one period at speed < 1, so frequencies
+  are only trustworthy at speed >= 1.
+- Fitting the time scale with absolute phases also absorbs any error in the
+  start time. Fit the frequency with a free phase first.
 
 ## Audio calibration (`harness/calibration/run_audio.sh`)
 

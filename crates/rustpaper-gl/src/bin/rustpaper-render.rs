@@ -193,6 +193,10 @@ fn main() -> ExitCode {
         }
     };
     let load_ms = t0.elapsed().as_millis();
+    // like the live wallpaper: the scene drawn at screen resolution
+    if let Some((w, h)) = args.screen {
+        scene.set_output_size(gl, w, h);
+    }
     if args.describe {
         println!("GL: {}", ctx.describe());
         println!(

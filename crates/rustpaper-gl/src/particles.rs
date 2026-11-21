@@ -993,6 +993,9 @@ pub struct ParticleSim {
     /// scene every frame. Spawns go through it; the simulation then runs in
     /// scene units (see ParticleDef::world_space).
     pub world_xform: Option<[f32; 16]>,
+    /// Set while the prewarm (`starttime`) runs: it ignores
+    /// `instanceoverride.rate` (see scene.rs).
+    pub prewarming: bool,
 }
 
 /// Per-emitter emission state (WE-RE-003 1.2).
@@ -1038,6 +1041,7 @@ impl ParticleSim {
             events: Vec::new(),
             audio: crate::audio::AudioFrame::default(),
             world_xform: None,
+            prewarming: false,
         }
     }
 
@@ -1236,9 +1240,15 @@ impl ParticleSim {
         // The instance color REPLACES the initializer's (two scenes agree:
         // wind v7 2884352976 draws its orange `Light shafts` lavender with
         // colorn 0.435 0.424 0.525; rain 1444077782's gray smoke is white with
-        // colorn 1 1 1, matching WE's brightness only when replaced).
+        // colorn 1 1 1, matching WE's brightness only when replaced) and is
+        // applied a second time on top, i.e. colorn^2. Calibrated in
+        // isolation with make_particles.py `ov_colorn05`: white dots with
+        // colorn 0.5 give 0.25x the light in WE (0.020 vs 0.080), while
+        // `ov_alpha05` gives 0.5x, so alpha applies once. Mai Sakurajima
+        // 1982790211's Light shafts (colorn 0.10 0.27 0.39) dim by 0.166x in
+        // WE (colorn^2 predicts 0.163, replacing alone 0.6).
         if let Some(c) = self.ov.color {
-            p.color = c;
+            p.color = [c[0] * c[0], c[1] * c[1], c[2] * c[2]];
         }
         p.color = scale(p.color, self.ov.brightness);
         p.frame_phase = rng.f();
@@ -1290,7 +1300,11 @@ impl ParticleSim {
         // `self.time` is the scene clock (the caller steps until it reaches
         // the frame time), so it advances by the UNSCALED dt below.
         let frame_dt = dt;
-        let dt = dt * self.ov.rate.max(0.01);
+        let dt = if self.prewarming {
+            dt
+        } else {
+            dt * self.ov.rate.max(0.01)
+        };
         // WE-RE-002 1.3: age and remove expired particles BEFORE emitting, so
         // new particles meet their first operator pass at age 0.
         let mut deaths = Vec::new();
@@ -1557,11 +1571,22 @@ impl ParticleSim {
                         max,
                         input_scale,
                     } => {
-                        // input = life fraction, decorrelated per particle
-                        let x = life * input_scale + hash01(p.seed, slot) * 97.0;
+                        // Calibrated with make_particles.py `rv_*` (one dot,
+                        // x range -200..200, simplexnoise):
+                        // - the noise input is the particle's AGE IN SECONDS
+                        //   x inputscale, not its life fraction: WE's sign
+                        //   changes/s stay ~2 when the lifetime goes 3 -> 6 s
+                        //   (2.36 -> 1.89) and halve with inputscale 10 -> 5
+                        //   (1.18). With this noise, age x scale / 2.4 matches
+                        //   the rate (fitted over the three runs);
+                        // - WE sweeps almost the whole range (velocity std 130
+                        //   of +-200), wider than this noise: x2.3, clamped.
+                        // A constant range just sets the velocity (100 vs 104).
+                        let x = p.age * input_scale / 2.4 + hash01(p.seed, slot) * 97.0;
                         let n = noise_vec([x, 0.5, 0.5]);
                         for c in 0..3 {
-                            p.vel[c] = lerp(min[c], max[c], (n[c] * 0.5 + 0.5).clamp(0.0, 1.0));
+                            let t = (n[c] * 2.3).clamp(-1.0, 1.0) * 0.5 + 0.5;
+                            p.vel[c] = lerp(min[c], max[c], t);
                         }
                     }
                 }

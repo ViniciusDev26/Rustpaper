@@ -51,6 +51,23 @@ pub fn upload_texture_padded(gl: &glow::Context, tex: &rustpaper_core::tex::Deco
     upload(gl, tex, true)
 }
 
+/// R8 / RG88 back to their GL layout (see `upload`).
+fn gl_layout(content: &mut [u8], format: u32) {
+    match format {
+        8 => content.as_chunks_mut::<4>().0.iter_mut().for_each(|px| {
+            px[1] = px[3];
+            px[2] = 0;
+            px[3] = 255;
+        }),
+        9 => content.as_chunks_mut::<4>().0.iter_mut().for_each(|px| {
+            px[1] = 0;
+            px[2] = 0;
+            px[3] = 255;
+        }),
+        _ => {}
+    }
+}
+
 fn upload(gl: &glow::Context, tex: &rustpaper_core::tex::DecodedTexture, padded: bool) -> Tex {
     let (cw, ch) = (tex.real_width.max(1), tex.real_height.max(1));
     let (w, h) = if padded {
@@ -72,19 +89,7 @@ fn upload(gl: &glow::Context, tex: &rustpaper_core::tex::DecodedTexture, padded:
     // sample as (r, 0, 0, 1) and (r, g, 0, 1), and shaders that care undo that
     // with TEXnFORMAT (e.g. ConvertTexture0Format: RG88 -> .rrrg). Restore the
     // GL layout, or that conversion would read luminance as alpha.
-    match tex.format {
-        8 => content.as_chunks_mut::<4>().0.iter_mut().for_each(|px| {
-            px[1] = px[3];
-            px[2] = 0;
-            px[3] = 255;
-        }),
-        9 => content.as_chunks_mut::<4>().0.iter_mut().for_each(|px| {
-            px[1] = 0;
-            px[2] = 0;
-            px[3] = 255;
-        }),
-        _ => {}
-    }
+    gl_layout(&mut content, tex.format);
     let nearest = tex.flags & 1 != 0;
     let clamp = tex.flags & 2 != 0;
     unsafe {
@@ -104,10 +109,49 @@ fn upload(gl: &glow::Context, tex: &rustpaper_core::tex::DecodedTexture, padded:
         );
         // Mipmap only textures that ship mipmaps: WE samples single-level ones
         // (noise, flow maps...) at full detail even when minified; mipmapping
-        // them averages e.g. film grain into flat gray.
+        // them averages e.g. film grain into flat gray. And WE samples the
+        // file's OWN levels (red mips draw red: make_minify.py
+        // `m_redmips_2130`), which can be sharper than a box-filtered chain:
+        // upload them, cropped like level 0, and only generate a chain when
+        // they can't be used.
         let mipmapped = tex.mip_count > 1;
         if mipmapped {
-            gl.generate_mipmap(glow::TEXTURE_2D);
+            let mut levels = 0;
+            for (k, (mw, mh, rgba)) in tex.mips.iter().enumerate() {
+                let level = k as u32 + 1;
+                let (lw, lh) = ((w >> level).max(1), (h >> level).max(1));
+                let mut px = vec![0u8; (lw * lh * 4) as usize];
+                for y in 0..lh.min(*mh) {
+                    let src = (y * mw * 4) as usize;
+                    let row = (lw.min(*mw) * 4) as usize;
+                    let dst = (y * lw * 4) as usize;
+                    if src + row <= rgba.len() {
+                        px[dst..dst + row].copy_from_slice(&rgba[src..src + row]);
+                    }
+                }
+                gl_layout(&mut px, tex.format);
+                gl.tex_image_2d(
+                    glow::TEXTURE_2D,
+                    level as i32,
+                    glow::RGBA8 as i32,
+                    lw as i32,
+                    lh as i32,
+                    0,
+                    glow::RGBA,
+                    glow::UNSIGNED_BYTE,
+                    glow::PixelUnpackData::Slice(Some(&px)),
+                );
+                levels = level;
+                if lw == 1 && lh == 1 {
+                    break;
+                }
+            }
+            if levels == 0 {
+                gl.generate_mipmap(glow::TEXTURE_2D);
+            } else {
+                // the chain stops where the file's does
+                gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAX_LEVEL, levels as i32);
+            }
         }
         let (min, mag) = if nearest {
             (glow::NEAREST, glow::NEAREST)

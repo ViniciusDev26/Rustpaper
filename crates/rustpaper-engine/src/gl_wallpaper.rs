@@ -206,6 +206,15 @@ impl GlWallpaper {
             self.vsync_off = true;
         }
 
+        // The scene drawn at screen resolution, like WE (the largest visible
+        // output; a no-op while it doesn't change).
+        let (ow, oh) = ready
+            .iter()
+            .map(|r| r.1)
+            .max_by_key(|&(w, h)| w as u64 * h as u64)
+            .unwrap_or((1920, 1080));
+        self.scene.set_output_size(&self.gl.gl, ow, oh);
+
         self.update_pointer();
         let frame = FrameInput {
             time: self.clock,
