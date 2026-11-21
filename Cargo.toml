@@ -1,8 +1,17 @@
-# Workspace raiz do Rustpaper. Os sub-projetos ("crates") ficam em crates/*.
-#   rustpaper-core     : lógica dos formatos do Wallpaper Engine (compartilhada)
-#   rustpaper-engine   : o renderer (usa rustpaper-core), binário `rustpaper`
-#   rustpaper-selector : app desktop pra escolher wallpaper (usa rustpaper-core)
-#   rustpaper-gl       : OpenGL scene renderer (offscreen, EGL) + `rustpaper-render` CLI
+# Rustpaper workspace. The crates live in crates/*:
+#   rustpaper-core     : Wallpaper Engine formats (shared, no graphics)
+#   rustpaper-engine   : the live wallpaper, binary `rustpaper`
+#   rustpaper-selector : desktop app to browse and apply wallpapers
+#   rustpaper-gl       : OpenGL scene renderer (EGL) + `rustpaper-render` CLI
+#   rustpaper-script   : sandboxed SceneScript worker
 [workspace]
 resolver = "3"
 members = ["crates/rustpaper-core", "crates/rustpaper-engine", "crates/rustpaper-gl", "crates/rustpaper-script", "crates/rustpaper-selector"]
+
+# One version for every crate (and the selector's tauri.conf.json), bumped by
+# release-please from Conventional Commits (docs/RELEASING.md).
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/ViniciusDev26/Rustpaper"

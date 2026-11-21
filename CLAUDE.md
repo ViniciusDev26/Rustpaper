@@ -19,6 +19,9 @@ comments, with the measurement that justified it.
   still use static values or native, data-driven reimplementations.
 - **Everything in the repo is in English**: code, comments, logs, docs,
   commit messages.
+- **Commit messages follow Conventional Commits** (`feat(gl): ...`,
+  `fix(script): ...`; CI checks every commit, release-please derives versions
+  from them): see `docs/RELEASING.md`.
 - **Validate rendering changes with the harness**, not by eye:
   `harness/batch.sh` -> `harness-out/report.md`. PASS = mean SSIM >= 0.95
   and motion energy ratio 0.7..1.4 against the real WE.
@@ -33,6 +36,8 @@ comments, with the measurement that justified it.
 - `docs/HARNESS.md` — capturing the real WE under Proton and comparing.
 - `docs/SELECTOR.md` — gallery, customization panel, persistence.
 - `docs/SCENESCRIPT.md` — the SceneScript sandbox, its API, where results go.
+- `docs/RELEASING.md` — Conventional Commits, release-please, release
+  tarball and AUR packaging (`packaging/`).
 - `docs/SHADER_TRANSLATION.md` — WE shader dialect (older wgpu path, still
   relevant to `rustpaper_core::shader`).
 

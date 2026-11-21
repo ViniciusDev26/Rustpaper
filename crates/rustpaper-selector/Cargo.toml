@@ -1,7 +1,9 @@
 [package]
 name = "rustpaper-selector"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [[bin]]
 name = "rustpaper-selector"
@@ -14,5 +16,5 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["protocol-asset"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# Compartilha a lógica de formatos do WE com o engine.
+# Shares the WE format logic with the engine.
 rustpaper-core = { path = "../rustpaper-core" }

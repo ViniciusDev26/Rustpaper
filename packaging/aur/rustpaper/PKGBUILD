@@ -1,0 +1,46 @@
+# Maintainer: Carlos Vinicius <https://github.com/ViniciusDev26>
+#
+# Built from the release tag's source. pkgver and sha256sums are updated by CI
+# (.github/workflows/release.yml).
+pkgname=rustpaper
+pkgver=0.1.0 # x-release-please-version
+pkgrel=1
+pkgdesc="Wallpaper Engine scene and video wallpapers on Wayland (live engine + selector)"
+arch=('x86_64')
+url="https://github.com/ViniciusDev26/Rustpaper"
+license=('MIT')
+depends=('gcc-libs' 'glibc' 'gtk3' 'libglvnd' 'libxkbcommon' 'wayland' 'webkit2gtk-4.1'
+         'ffmpeg' 'vulkan-icd-loader')
+makedepends=('cargo' 'pkgconf')
+optdepends=('pipewire: audio-reactive wallpapers (pw-record)'
+            'hyprland: pause while a window is fullscreen, cursor effects'
+            'steam: Wallpaper Engine (its assets and Workshop wallpapers are required)')
+conflicts=('rustpaper-bin')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/ViniciusDev26/Rustpaper/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+options=('!lto')
+
+prepare() {
+    cd "Rustpaper-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+    cd "Rustpaper-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo build --frozen --release \
+        -p rustpaper-engine -p rustpaper-selector -p rustpaper-gl -p rustpaper-script --bins
+}
+
+package() {
+    cd "Rustpaper-$pkgver"
+    for b in rustpaper rustpaper-selector rustpaper-render rustpaper-script-worker; do
+        install -Dm755 "target/release/$b" "$pkgdir/usr/bin/$b"
+    done
+    install -Dm644 packaging/rustpaper.desktop "$pkgdir/usr/share/applications/rustpaper.desktop"
+    install -Dm644 crates/rustpaper-selector/icons/128x128.png \
+        "$pkgdir/usr/share/icons/hicolor/128x128/apps/rustpaper.png"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
