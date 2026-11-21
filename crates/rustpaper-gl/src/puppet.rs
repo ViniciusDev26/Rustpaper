@@ -17,7 +17,14 @@ use crate::value;
 #[derive(Clone, Debug)]
 struct AnimLayer {
     anim: usize,
+    /// Index in the object's `animationlayers` (SceneScripts address it).
+    json_index: usize,
     rate: f32,
+    /// Animation time: accumulates `dt * rate`, so a rate a script changes
+    /// while playing doesn't make the animation jump.
+    phase: f32,
+    /// `visible` (hidden layers are kept: a SceneScript may show them).
+    visible: bool,
     blend: f32,
     additive: bool,
 }
@@ -32,6 +39,8 @@ pub struct PuppetRt {
     /// bind pose when nothing animates. Attachments hang from these.
     pub bone_world: Vec<Mat4>,
     bind_world: Vec<Mat4>,
+    /// Scene time of the last `update`.
+    last_time: Option<f32>,
 }
 
 /// Multiplier from an animation's stored rate to frames per second. The
@@ -60,12 +69,15 @@ impl PuppetRt {
             .and_then(|l| l.as_array())
             .into_iter()
             .flatten()
-            .filter(|l| value::get_bool(l, "visible", true))
-            .filter_map(|l| {
+            .enumerate()
+            .filter_map(|(json_index, l)| {
                 let id = l.get("animation")?.as_u64()? as u32;
                 Some(AnimLayer {
                     anim: puppet.animations.iter().position(|a| a.id == id)?,
+                    json_index,
                     rate: value::get_f32(l, "rate", 1.0),
+                    phase: 0.0,
+                    visible: value::get_bool(l, "visible", true),
                     blend: value::get_f32(l, "blend", 1.0),
                     additive: value::get_bool(l, "additive", false),
                 })
@@ -78,24 +90,61 @@ impl PuppetRt {
             vertices: Vec::new(),
             bone_world,
             bind_world,
+            last_time: None,
         };
         rt.update(0.0);
         rt
     }
 
+    /// `animationlayers[json_index].visible`, changed by a SceneScript.
+    pub fn set_visible(&mut self, json_index: usize, shown: bool) {
+        for l in self
+            .layers
+            .iter_mut()
+            .filter(|l| l.json_index == json_index)
+        {
+            l.visible = shown;
+        }
+    }
+
+    /// `animationlayers[json_index].rate`, changed by a SceneScript.
+    pub fn set_rate(&mut self, json_index: usize, rate: f32) {
+        for l in self
+            .layers
+            .iter_mut()
+            .filter(|l| l.json_index == json_index)
+        {
+            l.rate = rate;
+        }
+    }
+
     /// Poses the skeleton at `time` seconds and skins the mesh.
     pub fn update(&mut self, time: f32) {
+        // a jump (first frame, seeking back) restarts the phase from time
+        match self.last_time {
+            Some(t0) if time >= t0 && time - t0 < 1.0 => {
+                for l in &mut self.layers {
+                    l.phase += (time - t0) * l.rate;
+                }
+            }
+            _ => {
+                for l in &mut self.layers {
+                    l.phase = time * l.rate;
+                }
+            }
+        }
+        self.last_time = Some(time);
         let p = &self.puppet;
-        let poses = if p.bones.is_empty() || self.layers.is_empty() {
+        let poses = if p.bones.is_empty() || !self.layers.iter().any(|l| l.visible) {
             None
         } else {
             // local transform per bone: bind pose, replaced by the animation
             // key of the first non-additive layer, additive layers on top
             let mut keys: Vec<Option<Key>> = vec![None; p.bones.len()];
-            for l in &self.layers {
+            for l in self.layers.iter().filter(|l| l.visible) {
                 let a = &p.animations[l.anim];
                 for (b, slot) in keys.iter_mut().enumerate() {
-                    let Some(k) = sample(a, b, time * l.rate) else {
+                    let Some(k) = sample(a, b, l.phase) else {
                         continue;
                     };
                     *slot = Some(match (*slot, l.additive) {

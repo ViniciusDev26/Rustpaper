@@ -8,3 +8,6 @@
 3444535389	scenescript	built by SceneScript (placeholders); both sides black
 3509243656	scenescript	built by SceneScript (render targets created by script); both sides black
 3288381550	we-crash	WE shows its crash dialog (access violation) for this scene
+3832902426	we-crash	WE shows its crash dialog over the scene in every capture (2026-11-15, recaptured 2026-11-21)
+3835519862	we-crash	WE shows its crash dialog over the scene in every capture (2026-11-15, recaptured 2026-11-21)
+3025975631	we-crash	WE shows its crash dialog over the scene in every capture (2026-11-15)

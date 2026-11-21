@@ -11,12 +11,18 @@
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
 
 use rustpaper_gl::scene::SceneSound;
 
 pub struct SoundPlayer {
+    /// Volume (f32 bits) of each playing sound object, by object id: a
+    /// SceneScript can change it; the next file played uses it.
+    volumes: Vec<(i64, Arc<AtomicU32>)>,
+    /// Held (not playing) per sound object: `startsilent`, or a SceneScript
+    /// called stop() on it.
+    held: Vec<(i64, Arc<AtomicBool>)>,
     paused: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     dir: PathBuf,
@@ -27,7 +33,9 @@ impl SoundPlayer {
     pub fn start(sounds: &[SceneSound]) -> Option<SoundPlayer> {
         let playable: Vec<&SceneSound> = sounds
             .iter()
-            .filter(|s| !s.start_silent && s.volume > 0.0 && !s.files.is_empty())
+            // `startsilent` sounds are loaded too, held until a SceneScript
+            // calls play() on them
+            .filter(|s| s.volume > 0.0 && !s.files.is_empty())
             .collect();
         if playable.is_empty() {
             return None;
@@ -40,6 +48,8 @@ impl SoundPlayer {
         std::fs::create_dir_all(&dir).ok()?;
         let paused = Arc::new(AtomicBool::new(false));
         let stop = Arc::new(AtomicBool::new(false));
+        let mut volumes = Vec::new();
+        let mut held = Vec::new();
         for (i, s) in playable.into_iter().enumerate() {
             let files: Vec<PathBuf> = s
                 .files
@@ -54,16 +64,40 @@ impl SoundPlayer {
             let (mode, volume) = (s.mode.clone(), s.volume);
             let (min_t, max_t) = (s.min_time, s.max_time.max(s.min_time));
             let (paused, stop) = (paused.clone(), stop.clone());
+            let vol = Arc::new(AtomicU32::new(volume.to_bits()));
+            volumes.push((s.id, vol.clone()));
+            let hold = Arc::new(AtomicBool::new(s.start_silent));
+            held.push((s.id, hold.clone()));
             println!(
                 "sound {:?}: {} file(s), {mode}, volume {volume:.2}",
                 s.name,
                 files.len()
             );
             std::thread::spawn(move || {
-                play_loop(&files, &mode, volume, (min_t, max_t), &paused, &stop)
+                play_loop(&files, &mode, &vol, (min_t, max_t), &paused, &hold, &stop)
             });
         }
-        Some(SoundPlayer { paused, stop, dir })
+        Some(SoundPlayer {
+            volumes,
+            held,
+            paused,
+            stop,
+            dir,
+        })
+    }
+
+    /// A SceneScript called play() (true) or stop() (false) on a sound.
+    pub fn set_playing(&self, id: i64, playing: bool) {
+        for (_, h) in self.held.iter().filter(|(i, _)| *i == id) {
+            h.store(!playing, Ordering::Relaxed);
+        }
+    }
+
+    /// A sound object's volume (0..1) changed (SceneScript `volume`).
+    pub fn set_volume(&self, id: i64, volume: f32) {
+        for (_, v) in self.volumes.iter().filter(|(i, _)| *i == id) {
+            v.store(volume.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+        }
     }
 
     pub fn set_paused(&self, paused: bool) {
@@ -83,9 +117,10 @@ impl Drop for SoundPlayer {
 fn play_loop(
     files: &[PathBuf],
     mode: &str,
-    volume: f32,
+    volume: &AtomicU32,
     gap: (f32, f32),
     paused: &AtomicBool,
+    held: &AtomicBool,
     stop: &AtomicBool,
 ) {
     let mut seed = std::process::id() as u64 ^ 0x9E37_79B9_7F4A_7C15;
@@ -102,7 +137,8 @@ fn play_loop(
             _ => &files[next % files.len()],
         };
         next += 1;
-        if !play(file, volume, paused, stop) {
+        let volume = f32::from_bits(volume.load(Ordering::Relaxed));
+        if !play(file, volume, paused, held, stop) {
             return; // stopping
         }
         match mode {
@@ -120,9 +156,16 @@ fn play_loop(
 
 /// Plays one file to the end; false when asked to stop. A pause kills the
 /// player and the file starts again once resumed.
-fn play(file: &PathBuf, volume: f32, paused: &AtomicBool, stop: &AtomicBool) -> bool {
+fn play(
+    file: &PathBuf,
+    volume: f32,
+    paused: &AtomicBool,
+    held: &AtomicBool,
+    stop: &AtomicBool,
+) -> bool {
+    let waiting = || paused.load(Ordering::Relaxed) || held.load(Ordering::Relaxed);
     loop {
-        while paused.load(Ordering::Relaxed) {
+        while waiting() {
             if !sleep_unless_stopped(0.1, stop) {
                 return false;
             }
@@ -136,7 +179,7 @@ fn play(file: &PathBuf, volume: f32, paused: &AtomicBool, stop: &AtomicBool) -> 
                 kill(&mut child);
                 return false;
             }
-            if paused.load(Ordering::Relaxed) {
+            if waiting() {
                 kill(&mut child);
                 break; // replay once resumed
             }

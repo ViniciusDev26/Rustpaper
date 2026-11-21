@@ -5,4 +5,4 @@
 #   rustpaper-gl       : OpenGL scene renderer (offscreen, EGL) + `rustpaper-render` CLI
 [workspace]
 resolver = "3"
-members = ["crates/rustpaper-core", "crates/rustpaper-engine", "crates/rustpaper-gl", "crates/rustpaper-selector"]
+members = ["crates/rustpaper-core", "crates/rustpaper-engine", "crates/rustpaper-gl", "crates/rustpaper-script", "crates/rustpaper-selector"]

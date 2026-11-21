@@ -33,6 +33,8 @@ struct Args {
     /// Recorded audio replayed as the system audio; its t = 0 is scene
     /// time `--start` (the harness records it alongside the WE capture).
     audio: Option<PathBuf>,
+    /// `--no-scripts`: keep scripted properties at their static values.
+    no_scripts: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -51,6 +53,7 @@ fn parse_args() -> Result<Args, String> {
     let mut only = None;
     let mut screen = None;
     let mut audio = None;
+    let mut no_scripts = false;
     let floats = |s: String| -> Result<Vec<f32>, String> {
         s.split(',')
             .map(|t| t.trim().parse::<f32>().map_err(|e| format!("{t:?}: {e}")))
@@ -65,6 +68,7 @@ fn parse_args() -> Result<Args, String> {
                 pointer = [p[0], *p.get(1).unwrap_or(&p[0])];
             }
             "--describe" => describe = true,
+            "--no-scripts" => no_scripts = true,
             "--video" => video = Some(PathBuf::from(it.next().ok_or("--video needs a file")?)),
             "--duration" => duration = floats(it.next().ok_or("--duration needs seconds")?)?[0],
             "--fps" => fps = floats(it.next().ok_or("--fps needs a value")?)?[0] as u32,
@@ -124,6 +128,7 @@ fn parse_args() -> Result<Args, String> {
         only,
         screen,
         audio,
+        no_scripts,
     })
 }
 
@@ -167,7 +172,7 @@ fn main() -> ExitCode {
                 eprintln!("error: {e}");
             }
             eprintln!(
-                "usage: rustpaper-render <workshop id | folder> [--time 0,1.5] [--out x.png] [--pointer x,y] [--describe] [--dump-passes dir] [--only id,id]\n       [--video out.mp4 --duration 10 --fps 30 --start 0] [--width 1920] [--screen 1920x1080] [--audio file.wav]"
+                "usage: rustpaper-render <workshop id | folder> [--time 0,1.5] [--out x.png] [--pointer x,y] [--describe] [--dump-passes dir] [--only id,id]\n       [--video out.mp4 --duration 10 --fps 30 --start 0] [--width 1920] [--screen 1920x1080] [--audio file.wav] [--no-scripts]"
             );
             return ExitCode::from(2);
         }
@@ -197,6 +202,13 @@ fn main() -> ExitCode {
     if let Some((w, h)) = args.screen {
         scene.set_output_size(gl, w, h);
     }
+    // SceneScripts run in their sandboxed worker (rustpaper-script)
+    let scripts = if args.no_scripts {
+        0
+    } else {
+        let (w, h) = args.screen.unwrap_or((scene.width, scene.height));
+        scene.enable_scripts([w as f32, h as f32])
+    };
     if args.describe {
         println!("GL: {}", ctx.describe());
         println!(
@@ -205,6 +217,9 @@ fn main() -> ExitCode {
         );
         for l in scene.describe() {
             println!("  {l}");
+        }
+        if scripts > 0 {
+            println!("  {scripts} SceneScript(s), sandboxed");
         }
         for s in &scene.sounds {
             println!(
@@ -261,7 +276,7 @@ fn main() -> ExitCode {
                 time,
                 pointer: args.pointer,
                 audio: audio_at(&mut audio, time - args.start),
-                ..Default::default()
+                daytime: rustpaper_gl::text::daytime(),
             },
         );
         let out = match (&args.out, args.describe) {
@@ -341,7 +356,7 @@ fn record_video(
                 time: args.start + n as f32 / args.fps as f32,
                 pointer: args.pointer,
                 audio: audio_at(audio, n as f32 / args.fps as f32),
-                ..Default::default()
+                daytime: rustpaper_gl::text::daytime(),
             },
         );
         let (px, _, _) = frame_pixels(gl, scene, &screen);

@@ -11,10 +11,12 @@ comments, with the measurement that justified it.
 ## Rules
 
 - **Never execute Workshop JavaScript outside a sandbox** (SceneScript, `web`
-  wallpapers, property `condition`s): it is untrusted code. SceneScript and
-  web support will come later, inside a sandbox, after the no-script renderer
-  reaches its fidelity target. Until then, use static values or native,
-  data-driven reimplementations (text presets, condition parser).
+  wallpapers, property `condition`s): it is untrusted code. SceneScript runs
+  only in `rustpaper-script-worker` (seccomp + rlimits applied before it
+  reads any script; see `docs/SCENESCRIPT.md`) — never add host
+  capabilities (files, network, processes) to it, and keep the worker's
+  syscall allowlist minimal. `web` wallpapers and property `condition`s
+  still use static values or native, data-driven reimplementations.
 - **Everything in the repo is in English**: code, comments, logs, docs,
   commit messages.
 - **Validate rendering changes with the harness**, not by eye:
@@ -30,6 +32,7 @@ comments, with the measurement that justified it.
   it had to match (each with its measurement), known gaps.
 - `docs/HARNESS.md` — capturing the real WE under Proton and comparing.
 - `docs/SELECTOR.md` — gallery, customization panel, persistence.
+- `docs/SCENESCRIPT.md` — the SceneScript sandbox, its API, where results go.
 - `docs/SHADER_TRANSLATION.md` — WE shader dialect (older wgpu path, still
   relevant to `rustpaper_core::shader`).
 
@@ -43,6 +46,10 @@ comments, with the measurement that justified it.
   particles, text, audio spectrum, puppets, bloom, parallax. Binary
   **`rustpaper-render`** (offline: PNG/MP4, `--describe`, `--dump-passes`,
   `--only`, `--screen WxH`).
+- **`rustpaper-script`** — SceneScript: `ScriptHost` (spawns the worker,
+  JSON over pipes) and binary **`rustpaper-script-worker`** (seccomp jail +
+  QuickJS + `prelude.js`, the WE script API). Renderer side:
+  `rustpaper-gl/src/scripting.rs`.
 - **`rustpaper-engine`** — binary **`rustpaper`**: the live wallpaper.
   Scenes go through rustpaper-gl (`gl_wallpaper.rs`, one EGL surface per
   output, layer `Bottom`); videos use the older wgpu path (`wallpaper.rs`,
@@ -57,7 +64,7 @@ comments, with the measurement that justified it.
 ```sh
 cargo build --release                       # toolchain pinned by mise.toml
 ./target/release/rustpaper-selector         # gallery; applies via the engine
-./target/release/rustpaper <wallpaper dir> [--props file.json] [--fps N] [--no-audio] [--mute]
+./target/release/rustpaper <wallpaper dir> [--props file.json] [--fps N] [--no-audio] [--mute] [--no-scripts]
 ./target/release/rustpaper-render <workshop id> --describe
 ./scripts/install.sh                        # ~/.local/bin + launcher entry
 ```

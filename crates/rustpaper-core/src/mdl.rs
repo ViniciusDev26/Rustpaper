@@ -7,7 +7,8 @@
 //               padding: 4 bytes (v13, v16) / 28 bytes (v17+)
 //               u32 vertex flags (v16+; v13: fixed 0x1800009), u32 vertex byte size, vertices,
 //               u32 index byte size, u16 triangle indices
-//     vertex = position f32x3 [+ normal f32x3 if 0x2] [+ tangent f32x4 if 0x4]
+//     vertex = position f32x3 [+ 4 bytes if 0x10000] [+ normal f32x3 if 0x2]
+//              [+ tangent f32x4 if 0x4]
 //              [+ bone indices u32x4 if 0x800000] [+ weights f32x4 if 0x1000000]
 //              [+ uv f32x2 if 0x8]
 //   MDLS0002\0  u32 absolute offset of MDLA, u32 bone count, per bone:
@@ -148,6 +149,7 @@ impl Puppet {
         let vbytes = c.u32()? as usize;
         let mut stride = 12;
         for (bit, size) in [
+            (0x1_0000, 4),
             (0x2, 12),
             (0x4, 16),
             (0x80_0000, 16),
@@ -166,6 +168,12 @@ impl Puppet {
         let mut mesh = Mesh::default();
         for _ in 0..vbytes / stride {
             mesh.positions.push(c.f32s::<3>()?);
+            // MDLV0023 flag 0x10000: 4 bytes after the position (0 in
+            // Chainsaw Man 3577990983's sl_puppet.mdl: 84-byte vertices,
+            // position | 0 | normal (0,0,1) | tangent (1,0,0,1) | bones...)
+            if vflags & 0x1_0000 != 0 {
+                c.take(4)?;
+            }
             if vflags & 0x2 != 0 {
                 c.take(12)?;
             }
@@ -259,15 +267,19 @@ impl Puppet {
             };
             if let Some(v) = mdla.strip_prefix("MDLA") {
                 let mdla_version: u32 = v.parse().unwrap_or(3);
-                c.u32()?;
+                // absolute end of the block: bounds the header search
+                let mdla_end = (c.u32()? as usize).clamp(c.p, d.len());
                 let count = c.u32()?;
                 for n in 0..count {
                     // Animations can be followed by extra bytes (9 zero
                     // bytes seen between animations: likely an empty event
-                    // list); find the next header instead of trusting the
-                    // previous one ended where its tracks did.
+                    // list; MDLA0006 adds a large per-animation block, ~43 KB
+                    // in Chainsaw Man 3577990983's sl_puppet.mdl); find the
+                    // next header instead of trusting the previous one ended
+                    // where its tracks did.
                     if n > 0 {
-                        c.p = next_animation(d, c.p).ok_or("animation header not found")?;
+                        let limit = if mdla_end > c.p { mdla_end } else { d.len() };
+                        c.p = next_animation(d, c.p, limit).ok_or("animation header not found")?;
                     }
                     let id = c.u32()?;
                     c.u32()?;
@@ -341,9 +353,9 @@ fn skip_events(d: &[u8], p: &mut usize) {
     *p = c.p;
 }
 
-/// Offset of the next MDLA animation header at or after `from` (within a
-/// few bytes): `u32 id, u32, name\0, mode\0` with a known play mode.
-fn next_animation(d: &[u8], from: usize) -> Option<usize> {
+/// Offset of the next MDLA animation header at or after `from` (before
+/// `limit`): `u32 id, u32, name\0, mode\0` with a known play mode.
+fn next_animation(d: &[u8], from: usize, limit: usize) -> Option<usize> {
     let is_header = |at: usize| {
         let rest = d.get(at + 8..)?;
         let name_end = rest.iter().take(256).position(|&b| b == 0)?;
@@ -351,7 +363,7 @@ fn next_animation(d: &[u8], from: usize) -> Option<usize> {
         let mode_end = mode.iter().take(16).position(|&b| b == 0)?;
         matches!(&mode[..mode_end], b"loop" | b"mirror" | b"single").then_some(())
     };
-    (from..(from + 4096).min(d.len())).find(|&at| is_header(at).is_some())
+    (from..limit.min(d.len())).find(|&at| is_header(at).is_some())
 }
 
 #[cfg(test)]

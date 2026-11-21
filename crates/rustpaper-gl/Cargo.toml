@@ -9,6 +9,8 @@ edition = "2024"
 # pixels go (PNG for the reference harness, the desktop for the live engine).
 [dependencies]
 rustpaper-core = { path = "../rustpaper-core" }
+# SceneScripts, run in a sandboxed worker process
+rustpaper-script = { path = "../rustpaper-script" }
 glow = "0.18.0"
 khronos-egl = { version = "6.0.0", features = ["static", "1_5"] }
 serde_json = "1.0.150"

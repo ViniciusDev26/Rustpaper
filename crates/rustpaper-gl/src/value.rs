@@ -38,9 +38,14 @@ pub fn get_floats(obj: &Value, key: &str) -> Option<Vec<f32>> {
     obj.get(key).map(floats).filter(|f| !f.is_empty())
 }
 
+/// A vector property. A single number fills every component: a scalar user
+/// property (slider) bound to a vector, e.g. 3514942235's clock `scale`
+/// bound to the slider `size` = 0.278 — WE draws it at 0.278 on every axis
+/// (we fell back to scale 1 and drew the clock 3.6x too big).
 pub fn get_vec3(obj: &Value, key: &str, default: [f32; 3]) -> [f32; 3] {
     match get_floats(obj, key) {
         Some(f) if f.len() >= 3 => [f[0], f[1], f[2]],
+        Some(f) if f.len() == 1 => [f[0]; 3],
         _ => default,
     }
 }
@@ -48,6 +53,7 @@ pub fn get_vec3(obj: &Value, key: &str, default: [f32; 3]) -> [f32; 3] {
 pub fn get_vec2(obj: &Value, key: &str, default: [f32; 2]) -> [f32; 2] {
     match get_floats(obj, key) {
         Some(f) if f.len() >= 2 => [f[0], f[1]],
+        Some(f) if f.len() == 1 => [f[0]; 2],
         _ => default,
     }
 }
@@ -109,6 +115,13 @@ pub fn apply_user_properties(v: &mut Value, props: &serde_json::Map<String, Valu
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_scalar_fills_a_vector() {
+        let o = serde_json::json!({ "scale": { "user": "size", "value": 0.278 }, "size": "2" });
+        assert_eq!(get_vec3(&o, "scale", [1.0; 3]), [0.278; 3]);
+        assert_eq!(get_vec2(&o, "size", [0.0; 2]), [2.0; 2]);
+    }
 
     #[test]
     fn unwraps_user_and_script_wrappers() {

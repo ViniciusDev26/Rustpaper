@@ -226,7 +226,7 @@ impl TextSource {
 /// Wall clock for clock/date text. `RUSTPAPER_CLOCK` (RFC 3339, e.g.
 /// `2026-11-08T21:22:05-03:00`) pins the clock's start: the harness sets it
 /// to the moment the WE capture started, so both show the same time.
-fn clock_now() -> chrono::DateTime<Local> {
+pub fn clock_now() -> chrono::DateTime<Local> {
     use std::sync::OnceLock;
     static OFFSET: OnceLock<chrono::TimeDelta> = OnceLock::new();
     let offset = OFFSET.get_or_init(|| {
@@ -237,6 +237,16 @@ fn clock_now() -> chrono::DateTime<Local> {
             .unwrap_or_default()
     });
     Local::now() + *offset
+}
+
+/// Fraction of the local day in [0,1) on that clock (`g_Daytime`,
+/// `engine.timeOfDay`). The harness pins it to the capture's start: WE
+/// captured Persona 3 3151551777's day/night cycle at 17:08 (0.71), and we
+/// rendered it at a fixed noon (0.5): a blue sky instead of WE's evening.
+pub fn daytime() -> f32 {
+    let t = clock_now();
+    let secs = t.num_seconds_from_midnight() as f32 + t.nanosecond() as f32 * 1e-9;
+    (secs / 86_400.0).clamp(0.0, 0.999_999)
 }
 
 fn format_tokens(format: &str, twelve: bool, week: &str, now: &chrono::DateTime<Local>) -> String {
@@ -313,27 +323,102 @@ pub struct TextStyle {
     pub background: Option<[f32; 3]>,
 }
 
+/// A text object's font plus fallbacks for characters it lacks (CJK in a
+/// Latin font: WE, through Windows font linking, draws them; we drew boxes
+/// for 3832902426's "星期日").
+pub struct FontSet {
+    fonts: Vec<FontVec>,
+    paths: Vec<std::path::PathBuf>,
+    /// Characters no system font has (don't ask fontconfig again).
+    missing: std::collections::HashSet<char>,
+}
+
+impl FontSet {
+    pub fn new(primary: FontVec) -> FontSet {
+        FontSet {
+            fonts: vec![primary],
+            paths: Vec::new(),
+            missing: Default::default(),
+        }
+    }
+
+    /// Index of the first font with a glyph for `c` (0 when none has it).
+    fn pick(&self, c: char) -> usize {
+        self.fonts
+            .iter()
+            .position(|f| f.glyph_id(c).0 != 0)
+            .unwrap_or(0)
+    }
+
+    /// Loads fallback fonts (fontconfig `:charset=`) for the characters of
+    /// `text` that no loaded font covers.
+    pub fn cover(&mut self, text: &str) {
+        for c in text.chars() {
+            if c.is_control()
+                || c.is_whitespace()
+                || self.missing.contains(&c)
+                || self.fonts.iter().any(|f| f.glyph_id(c).0 != 0)
+            {
+                continue;
+            }
+            let found = std::process::Command::new("fc-match")
+                .args(["-f", "%{file}", &format!(":charset={:x}", c as u32)])
+                .output()
+                .ok()
+                .map(|o| std::path::PathBuf::from(String::from_utf8_lossy(&o.stdout).trim()))
+                .filter(|p| p.is_file() && !self.paths.contains(p));
+            let font = found.as_ref().and_then(|p| {
+                let bytes = std::fs::read(p).ok()?;
+                FontVec::try_from_vec(bytes).ok()
+            });
+            match (found, font) {
+                (Some(p), Some(f)) if f.glyph_id(c).0 != 0 => {
+                    self.paths.push(p);
+                    self.fonts.push(f);
+                }
+                _ => {
+                    self.missing.insert(c);
+                }
+            }
+        }
+    }
+
+    fn scale(&self, k: usize, em: f32) -> PxScale {
+        let f = &self.fonts[k];
+        let upem = f.units_per_em().unwrap_or(1000.0);
+        PxScale::from(em * f.height_unscaled() / upem)
+    }
+
+    /// Glyphs of one line: (font, glyph, x) and the line's width.
+    fn layout(&self, line: &str, em: f32) -> (Vec<(usize, ab_glyph::GlyphId, f32)>, f32) {
+        let mut out = Vec::new();
+        let mut x = 0.0;
+        let mut prev: Option<(usize, ab_glyph::GlyphId)> = None;
+        for c in line.chars() {
+            let k = self.pick(c);
+            let sf = self.fonts[k].as_scaled(self.scale(k, em));
+            let g = sf.glyph_id(c);
+            if let Some((pk, pg)) = prev
+                && pk == k
+            {
+                x += sf.kern(pg, g);
+            }
+            out.push((k, g, x));
+            x += sf.h_advance(g);
+            prev = Some((k, g));
+        }
+        (out, x)
+    }
+}
+
 /// Canvas needed for `text`: the object's box, grown to fit the text (WE
 /// lets text overflow its box; the box only anchors the alignment).
-pub fn canvas_size(font: &FontVec, text: &str, style: &TextStyle) -> (u32, u32) {
-    let upem = font.units_per_em().unwrap_or(1000.0);
-    let sf = font.as_scaled(PxScale::from(style.em * font.height_unscaled() / upem));
+pub fn canvas_size(fonts: &FontSet, text: &str, style: &TextStyle) -> (u32, u32) {
+    let sf = fonts.fonts[0].as_scaled(fonts.scale(0, style.em));
     let lines: Vec<&str> = text.split('\n').collect();
     let w = lines
         .iter()
-        .map(|l| {
-            let mut x = 0.0;
-            let mut prev = None;
-            for c in l.chars() {
-                let g = sf.glyph_id(c);
-                if let Some(p) = prev {
-                    x += sf.kern(p, g);
-                }
-                x += sf.h_advance(g);
-                prev = Some(g);
-            }
-            x
-        })
+        .map(|l| fonts.layout(l, style.em).1)
         .fold(0.0f32, f32::max);
     let h = (sf.height() + sf.line_gap()) * lines.len() as f32 - sf.line_gap();
     let pad = 2.0 * style.padding;
@@ -345,7 +430,7 @@ pub fn canvas_size(font: &FontVec, text: &str, style: &TextStyle) -> (u32, u32) 
 
 /// Rasterizes `text` into an RGBA buffer of `style.size`: white glyphs with
 /// coverage as alpha (the layer's color tints them), over the background.
-pub fn rasterize(font: &FontVec, text: &str, style: &TextStyle) -> Vec<u8> {
+pub fn rasterize(fonts: &FontSet, text: &str, style: &TextStyle) -> Vec<u8> {
     let (w, h) = style.size;
     let mut px = vec![0u8; (w * h * 4) as usize];
     if let Some(bg) = style.background {
@@ -358,25 +443,10 @@ pub fn rasterize(font: &FontVec, text: &str, style: &TextStyle) -> Vec<u8> {
             ]);
         }
     }
-    // em -> ab_glyph's PxScale (which sizes ascent - descent)
-    let upem = font.units_per_em().unwrap_or(1000.0);
-    let scale = PxScale::from(style.em * font.height_unscaled() / upem);
-    let sf = font.as_scaled(scale);
+    // line metrics come from the object's own font
+    let sf = fonts.fonts[0].as_scaled(fonts.scale(0, style.em));
     let lines: Vec<&str> = text.split('\n').collect();
     let line_h = sf.height() + sf.line_gap();
-    let width_of = |line: &str| {
-        let mut x = 0.0;
-        let mut prev = None;
-        for c in line.chars() {
-            let g = sf.glyph_id(c);
-            if let Some(p) = prev {
-                x += sf.kern(p, g);
-            }
-            x += sf.h_advance(g);
-            prev = Some(g);
-        }
-        x
-    };
     let total_h = line_h * lines.len() as f32 - sf.line_gap();
     let pad = style.padding;
     let (bw, bh) = (w as f32 - 2.0 * pad, h as f32 - 2.0 * pad);
@@ -387,24 +457,18 @@ pub fn rasterize(font: &FontVec, text: &str, style: &TextStyle) -> Vec<u8> {
             _ => (bh - total_h) / 2.0,
         };
     for (li, line) in lines.iter().enumerate() {
-        let lw = width_of(line);
-        let mut x = pad
+        let (glyphs, lw) = fonts.layout(line, style.em);
+        let x0 = pad
             + match style.halign.as_str() {
                 "left" => 0.0,
                 "right" => bw - lw,
                 _ => (bw - lw) / 2.0,
             };
         let baseline = top + li as f32 * line_h + sf.ascent();
-        let mut prev = None;
-        for c in line.chars() {
-            let gid = sf.glyph_id(c);
-            if let Some(p) = prev {
-                x += sf.kern(p, gid);
-            }
-            let glyph = gid.with_scale_and_position(scale, point(x, baseline));
-            x += sf.h_advance(gid);
-            prev = Some(gid);
-            let Some(outline) = font.outline_glyph(glyph) else {
+        for (k, gid, gx) in glyphs {
+            let glyph =
+                gid.with_scale_and_position(fonts.scale(k, style.em), point(x0 + gx, baseline));
+            let Some(outline) = fonts.fonts[k].outline_glyph(glyph) else {
                 continue;
             };
             let bb = outline.px_bounds();

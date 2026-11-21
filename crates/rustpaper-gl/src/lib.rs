@@ -11,6 +11,7 @@
 //   program  a WE shader compiled for one set of combos; uniforms by name
 //   puppet   puppet warp: skeletal animation + CPU skinning of .mdl meshes
 //   scene    the render graph: layers, effect chains, compositing
+//   scripting SceneScripts: runs them in the sandboxed worker, applies results
 //   text     text objects: native clock/date presets, glyph rasterization
 pub mod assets;
 pub mod audio;
@@ -22,5 +23,6 @@ pub mod particles;
 pub mod program;
 pub mod puppet;
 pub mod scene;
+pub mod scripting;
 pub mod text;
 pub mod value;
