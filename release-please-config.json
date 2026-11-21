@@ -1,0 +1,19 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bootstrap-sha": "1f22e17f7b2f09139ac2c8f8cd12fadf4fe55cb9",
+  "packages": {
+    ".": {
+      "release-type": "simple",
+      "package-name": "rustpaper",
+      "include-component-in-tag": false,
+      "bump-minor-pre-major": true,
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        { "type": "toml", "path": "Cargo.toml", "jsonpath": "$.workspace.package.version" },
+        { "type": "json", "path": "crates/rustpaper-selector/tauri.conf.json", "jsonpath": "$.version" },
+        { "type": "generic", "path": "packaging/aur/rustpaper-bin/PKGBUILD" },
+        { "type": "generic", "path": "packaging/aur/rustpaper/PKGBUILD" }
+      ]
+    }
+  }
+}
