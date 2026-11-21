@@ -64,6 +64,7 @@
       <span class="count" id="count"></span>
       <span class="spacer"></span>
       <input type="search" id="search" placeholder="Search" />
+      <label class="check" title="SceneScripts run in a sandbox (no files, network or processes)"><input type="checkbox" id="scripts" /> Run scripts</label>
       <label class="check"><input type="checkbox" id="autostart" /> Start on login</label>
     </header>
     <main>
@@ -210,10 +211,21 @@
         }
       });
 
+      $("scripts").addEventListener("change", async (ev) => {
+        try {
+          await invoke("set_scripts", { enabled: ev.target.checked });
+          showToast(ev.target.checked ? "Scripts on" : "Scripts off");
+        } catch (e) {
+          ev.target.checked = !ev.target.checked;
+          showToast(`${e}`);
+        }
+      });
+
       (async () => {
         try {
           const settings = await invoke("get_settings");
           $("autostart").checked = settings.autostart;
+          $("scripts").checked = !settings.no_scripts;
           wallpapers = await invoke("list_wallpapers");
           $("status").style.display = "none";
           renderGrid();

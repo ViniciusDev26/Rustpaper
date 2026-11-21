@@ -71,6 +71,10 @@ Everything a script can reach is defined in `prelude.js`:
   `alpha`, `brightness`, `visible`, `text` read and write the layer state
   the renderer applies; `getParent`, `getChildren`, animation stubs, sound
   stubs (`play`/`stop`).
+- `thisScene.getCameraTransforms()` / `setCameraTransforms({zoom})`: the
+  camera zoom (`general.zoom`) reaches the renderer; eye / center / up are
+  read-only placeholders. Persona 3 3151551777 zooms from a user property
+  (it threw "not a function" before).
 - `thisScene.createLayer(path | config)` + `sortLayer(layer, index)`.
 - `Date` and `engine.timeOfDay`: the renderer's clock (`text::clock_now`,
   pinned by `RUSTPAPER_CLOCK` in the harness to the capture's start), so
@@ -111,9 +115,27 @@ fps (WE has been running them since the wallpaper started).
 - Sound `volume`: the live engine applies it from the next file it plays
   (ffplay takes the volume at start).
 - Scene settings `general.<key>` (the corpus has `bloomstrength`): the
-  bloom constants.
+  bloom constants; `general.zoom` the camera zoom.
 - Sound layers' `play()` / `stop()`: the live engine starts or holds that
   sound (`startsilent` sounds are loaded, held until a script plays them).
+
+## Live engine
+
+`rustpaper` starts the worker with the first frame (scripts need the screen
+size). Measured on the headless output (`rustpaper <dir> --output RPREF`,
+2026-11-21, RTX 4060 Ti, 30 fps):
+
+| scene | scripts | engine CPU | worker CPU | worker RSS |
+|---|---|---|---|---|
+| Persona 3 3151551777 | 162 | 8.9% | 4.1% | 6 MB |
+| 3027298897 | 455 | 5.6% | 11.6% | 10 MB |
+
+(% of one core, steady state over 10 s.) Killing the worker (`kill -9`)
+mid-session: the engine keeps drawing, prints `warning: SceneScripts
+stopped: script worker: Broken pipe`, and the scene keeps its last values.
+It does not restart the worker: a script that crashed or exhausted it would
+just do it again. The selector's **Run scripts** checkbox turns them off
+(`--no-scripts`).
 
 ## Input
 
@@ -144,6 +166,23 @@ Text falls back per character to a system font that has the glyph
 (`text::FontSet`, fontconfig `:charset=`): CJK weekdays in Latin clock fonts
 (3832902426's "星期六") drew boxes before.
 
-Remaining script-related gaps: visualizer bars follow our audio spectrum,
-whose high bands are weaker than WE's (2983846453's right half); clicks and
-media integration events are never fired.
+## Triage of the scripted failures (2026-11-21)
+
+The corpus' scripts call almost nothing the prelude lacks: a survey of every
+`thisScene.` / `thisLayer.` / `engine.` / `input.` use found only
+`setCameraTransforms` (Persona 3, added), `getTransformMatrix` (1 scene),
+`getVideoTexture` (2) and text-layer fields (`font`, `pointsize`,
+`alignment`, 1-3 scenes). Looking at each of the 15 scripted failures, the
+causes were renderer gaps the scripts merely exposed:
+
+- compose layers grouping their children (Lofi Cafe: PASS);
+- puppet blending and culling (Jinx 0.714 -> 0.944, Chainsaw Man);
+- `"0.0, 1.0"` vector strings (Frieren's audio bars);
+- `mapsequencearoundcontrolpoint` starting at its control point (Frieren);
+- `instance` texture overrides (Chainsaw Man's dock);
+- music high bands of the audio spectrum (2983846453's visualizer: PASS).
+
+Still open: 2938612768's WE capture shows WE's crash dialog (recapture or
+exclude), Lonely Cat's HDR bloom, Frieren's parallax with the cursor in a
+corner, Subaru's and Camellya's puppet poses. Clicks and media integration
+events are never fired.

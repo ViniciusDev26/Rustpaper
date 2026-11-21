@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """score.py [run.tsv]: fidelity score from harness-out/results.tsv (or a saved
 run from harness-out/runs/), grouped by how much SceneScript a scene uses
-(scripts are not executed yet, so heavily scripted scenes cannot match).
+(scripts run in the sandboxed worker, see docs/SCENESCRIPT.md).
 Excluded scenes (harness/excluded.tsv) and captures waiting for a redo
 (harness-out/recapture_after_unlock.txt) are left out."""
 import csv, os, sys

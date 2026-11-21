@@ -18,11 +18,11 @@ Output in `harness-out/<id>/` (git-ignored): `sheet.png`, `side_by_side.mp4`,
 
 ## Fidelity target
 
-The goal is more than 95% of scenes passing. It is measured only on **scene
-wallpapers that use no SceneScript**. Web wallpapers and scenes that rely on
-SceneScript are out of scope for now. They will come later, once JS can run
-in a sandbox (Rustpaper does not execute wallpaper JS today). `score.py` reports
-this subset separately from the full corpus.
+The goal is more than 95% of scenes passing, first on **scene wallpapers that
+use no SceneScript**. SceneScripts now run in the sandboxed worker
+(`docs/SCENESCRIPT.md`), so scripted scenes are measured the same way;
+`score.py` still reports the groups (none / 1-9 / 10+ scripts) separately.
+Web wallpapers are out of scope.
 
 ## Requirements
 
@@ -218,9 +218,12 @@ GPU time from WE and change its motion.
 order:
 
 1. `noise`: the floor fails the same criterion.
-2. `script`: the scene uses SceneScript.
-3. `missing`: the renderer reported a warning.
-4. `calibrate`: none of the above, so the model of some feature is off.
+2. `missing`: the renderer reported a warning, or a SceneScript failed
+   (`[script]` errors in `rp_warnings.txt`; console output is not one).
+3. `calibrate`: none of the above, so the model of some feature is off.
+
+The detail column shows the script count of scripted scenes (they used to be
+a cause of their own, before scripts ran).
 
 It also counts how many `calibrate` failures and passes use each scene
 feature: particle operators, effects, puppets, audio, parallax and so on. The

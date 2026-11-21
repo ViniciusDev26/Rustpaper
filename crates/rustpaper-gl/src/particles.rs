@@ -370,11 +370,16 @@ enum Init {
         forward: V3,
         right: V3,
     },
-    /// mapsequencearoundcontrolpoint: the n-th particle gets the velocity
-    /// rotated by 2*pi * (n % count) / count around z (N even directions).
+    /// mapsequencearoundcontrolpoint: the n-th particle starts AT the
+    /// control point and gets the velocity rotated by 2*pi * (n % count) /
+    /// count around z (N even directions). Measured
+    /// (`make_particles.py seqcp_v`, control point 0 at (400, 200), emitter
+    /// at the center): WE's still dots sit at (394, 227), ours were at the
+    /// center. Frieren 3195212886's petals follow the cursor this way.
     SequenceAround {
         count: u32,
         speed: (V3, V3),
+        cp: usize,
     },
     /// mapsequencebetweencontrolpoints: the n-th particle is placed at
     /// (n % count) / (count - 1) of the way from control point 0 to 1.
@@ -696,6 +701,7 @@ impl ParticleDef {
                             v3(i, "speedmin", [0.0; 3]),
                             v3(i, "speedmax", v3(i, "speedmin", [0.0; 3])),
                         ),
+                        cp: (f(i, "controlpoint", 0.0).max(0.0) as usize).min(7),
                     },
                     "mapsequencebetweencontrolpoints" => Init::SequenceBetween {
                         count: f(i, "count", 2.0).max(1.0) as u32,
@@ -1214,7 +1220,8 @@ impl ParticleSim {
                         p.ang_vel[k] += lerp(a[k], b[k], biased(rng, e));
                     }
                 }
-                Init::SequenceAround { count, speed } => {
+                Init::SequenceAround { count, speed, cp } => {
+                    p.pos = add(p.pos, cps[cp]);
                     let k = (p.seed.wrapping_sub(1) % count) as f32;
                     let a = std::f32::consts::TAU * k / count as f32;
                     let v = lerp3(speed.0, speed.1, rng.f());

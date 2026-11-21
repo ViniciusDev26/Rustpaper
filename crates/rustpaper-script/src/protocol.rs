@@ -81,6 +81,13 @@ pub struct Init {
     pub canvas: [f32; 2],
     /// Output resolution.
     pub screen: [f32; 2],
+    /// Camera zoom (`general.zoom`): what `getCameraTransforms().zoom` starts at.
+    #[serde(default = "one")]
+    pub zoom: f32,
+}
+
+fn one() -> f32 {
+    1.0
 }
 
 /// Host -> worker, every frame.
@@ -156,6 +163,9 @@ pub struct Reply {
     /// Changed `Binding::Value` results: (script id, value).
     #[serde(default)]
     pub values: Vec<(u32, Value)>,
+    /// `thisScene.setCameraTransforms({zoom})`: the new camera zoom.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zoom: Option<f32>,
     /// `console.*` output and script errors, already capped by the worker.
     #[serde(default)]
     pub logs: Vec<String>,

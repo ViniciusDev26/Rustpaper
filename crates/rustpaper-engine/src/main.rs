@@ -3,7 +3,7 @@ use rustpaper_engine::{gl_wallpaper, wallpaper};
 use std::path::PathBuf;
 
 fn main() {
-    // rustpaper <wallpaper folder> [--fps N] [--props properties.json] [--no-audio] [--mute] [--no-scripts]
+    // rustpaper <wallpaper folder> [--fps N] [--props properties.json] [--no-audio] [--mute] [--no-scripts] [--output NAME]
     let mut args = std::env::args().skip(1);
     let mut dir = None;
     let mut fps = 30;
@@ -11,6 +11,7 @@ fn main() {
     let mut audio = true;
     let mut sound = true;
     let mut scripts = true;
+    let mut output = None;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--fps" => fps = args.next().and_then(|v| v.parse().ok()).unwrap_or(30),
@@ -18,12 +19,13 @@ fn main() {
             "--no-audio" => audio = false,
             "--mute" => sound = false,
             "--no-scripts" => scripts = false,
+            "--output" => output = args.next(),
             _ => dir = Some(PathBuf::from(a)),
         }
     }
     let Some(dir) = dir else {
         eprintln!(
-            "usage: rustpaper <wallpaper folder> [--fps N] [--props properties.json] [--no-audio] [--mute] [--no-scripts]"
+            "usage: rustpaper <wallpaper folder> [--fps N] [--props properties.json] [--no-audio] [--mute] [--no-scripts] [--output NAME]"
         );
         std::process::exit(2);
     };
@@ -49,6 +51,7 @@ fn main() {
                 audio,
                 sound,
                 scripts,
+                output,
             },
         );
     } else {

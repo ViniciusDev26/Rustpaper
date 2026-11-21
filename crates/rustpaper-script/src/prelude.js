@@ -174,6 +174,7 @@ const __rp = (() => {
     const MAX_CREATED = 4096;
     const created = [];         // already reported to the host
     const pendingCreated = [];
+    const camera = { zoom: 1, sent: 1 };  // thisScene camera transforms
     let nextId = 0;             // set above every scene id in init()
     function currentLayer() {
         const s = scripts.find((x) => x.def.id === running);
@@ -324,7 +325,14 @@ const __rp = (() => {
             const pc = pendingCreated.find((c) => c.id === l._s.id);
             if (pc) pc.before = to + 1 < layers.length ? layers[to + 1].id : null;
         },
-        getCameraTransforms() { return { eye: new Vec3(0, 0, 0), center: new Vec3(0, 0, -1), up: new Vec3(0, 1, 0) }; },
+        // only the zoom reaches the renderer (Persona 3 3151551777 sets it
+        // from a user property); eye/center/up are read-only placeholders
+        getCameraTransforms() {
+            return { eye: new Vec3(0, 0, 0), center: new Vec3(0, 0, -1), up: new Vec3(0, 1, 0), zoom: camera.zoom };
+        },
+        setCameraTransforms(t) {
+            if (t && typeof t.zoom === 'number' && isFinite(t.zoom)) camera.zoom = t.zoom;
+        },
         getInitialLayerConfig() { return null; },
     };
 
@@ -471,6 +479,8 @@ const __rp = (() => {
 
     function collect() {
         const ups = [];
+        let zoom;
+        if (camera.zoom !== camera.sent) { camera.sent = camera.zoom; zoom = camera.zoom; }
         for (const st of layers) {
             let prev = sent.get(st.id);
             if (!prev) { prev = {}; sent.set(st.id, prev); }
@@ -493,7 +503,7 @@ const __rp = (() => {
         }
         const fresh = pendingCreated.splice(0);
         created.push(...fresh);
-        const out = { created: fresh, layers: ups, values, logs: logs.splice(0) };
+        const out = { created: fresh, layers: ups, values, zoom, logs: logs.splice(0) };
         return JSON.stringify(out);
     }
 
@@ -555,6 +565,7 @@ const __rp = (() => {
             for (const st of init.layers) addLayer(st);
             nextId = Math.max(0, ...init.layers.map((l) => l.id)) + 1000000;
             engine.canvasSize = new Vec2(init.canvas[0], init.canvas[1]);
+            camera.zoom = camera.sent = num(init.zoom, 1);
             engine.screenResolution = new Vec2(init.screen[0], init.screen[1]);
             engine.userProperties = init.user_properties || {};
             for (const def of init.scripts) {

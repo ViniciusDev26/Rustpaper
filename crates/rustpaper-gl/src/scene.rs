@@ -149,6 +149,8 @@ struct Layer {
     material: Pass,
     /// Puppet warp: skeletal animation + its mesh (replaces the quad).
     puppet: Option<(crate::puppet::PuppetRt, crate::gpu::MeshGpu)>,
+    /// Material `cullmode: normal`: back-facing puppet triangles are culled.
+    cull_back: bool,
     /// Composite pass with the object's colorBlendMode (layers with a target).
     composite: Option<Pass>,
     effects: Vec<Effect>,
@@ -284,6 +286,14 @@ pub struct SceneRenderer {
 
     /// Every object's world matrix by id (parent chains resolved).
     worlds: HashMap<i64, Mat4>,
+    /// Compose layers that have children (id -> `copybackground`): their
+    /// children are drawn into their own target, which the compose layer
+    /// then reads as `_rt_FullFrameBuffer` (see `composite_group`).
+    groups: HashMap<i64, bool>,
+    /// Object id -> the nearest compose-layer ancestor it is drawn into.
+    group_of: HashMap<i64, i64>,
+    /// Each group's target, kept across frames.
+    group_targets: HashMap<i64, Target>,
     /// `general.cameraparallax*` and the smoothed pointer offset it follows.
     parallax: Option<Parallax>,
 
@@ -440,6 +450,9 @@ impl SceneRenderer {
             warnings: Vec::new(),
             pixelated: false,
             worlds: HashMap::new(),
+            groups: HashMap::new(),
+            group_of: HashMap::new(),
+            group_targets: HashMap::new(),
             parallax: Parallax::from_general(&general),
             dump_dir: None,
             only: None,
@@ -572,6 +585,13 @@ impl SceneRenderer {
             p.visible &= !hidden.contains(&p.id);
         }
         r.attach_order = attach_order(&r.layers);
+        let compose: HashSet<i64> = r
+            .layers
+            .iter()
+            .filter(|l| matches!(l.kind, LayerKind::Passthrough { fullscreen: false }))
+            .map(|l| l.id)
+            .collect();
+        (r.groups, r.group_of) = compose_groups(objects, &compose);
         r.script_templates = objects
             .iter()
             .filter(|o| value::get_bool(o, "visible", true) && !object_visible(o))
@@ -798,6 +818,9 @@ impl SceneRenderer {
         }
         self.sound_volumes.extend(ch.sound_volumes);
         self.sound_playing.extend(ch.sound_playing);
+        if let Some(z) = ch.zoom {
+            self.zoom = z.max(0.01);
+        }
         for (key, v) in ch.general {
             if let Some(b) = &mut self.bloom {
                 b.constants.insert(key, v);
@@ -983,7 +1006,12 @@ impl SceneRenderer {
                 extra_combos.insert("BLENDMODE".to_string(), blend_mode);
             }
         }
-        let material = self.resolve_pass(gl, pass_json, None, &[], &extra_combos, false)?;
+        // `instance` (instanced models such as `solidlayer_instance_4`): the
+        // object's own textures / combos over the shared material. Chainsaw
+        // Man 3577990983's dock icons are solid layers whose `instance`
+        // texture is the icon: without it they drew as white squares.
+        let instance = obj.get("instance").filter(|i| i.is_object());
+        let material = self.resolve_pass(gl, pass_json, instance, &[], &extra_combos, false)?;
         let flipbook = self.load_flipbook(gl, pass_json);
 
         let (w, h) = (self.width as f32, self.height as f32);
@@ -1033,6 +1061,7 @@ impl SceneRenderer {
                 .map(|(name, parent)| (parent, name.to_string(), local_matrix(obj))),
             material,
             puppet,
+            cull_back: pass_json.get("cullmode").and_then(|c| c.as_str()) == Some("normal"),
             composite,
             effects,
             parked,
@@ -1458,46 +1487,111 @@ impl SceneRenderer {
         }
 
         for k in 0..self.order.len() {
-            let i = match self.order[k] {
-                ObjRef::Layer(i) => i,
-                ObjRef::Particles(i) => {
-                    if let Some(only) = &self.only
-                        && !only.contains(&self.particle_objs[i].id)
-                    {
-                        continue;
-                    }
-                    self.simulate_particles(i, frame);
-                    if self.particle_objs[i].visible {
-                        self.draw_particles(gl, i);
-                    }
-                    continue;
-                }
-            };
-            if !self.layers[i].visible
-                || self
-                    .only
-                    .as_ref()
-                    .is_some_and(|o| !o.contains(&self.layers[i].id))
+            let r = self.order[k];
+            // members of a compose group are drawn by their group
+            if self
+                .group_of
+                .get(&self.obj_id(r))
+                .is_some_and(|g| self.layers.iter().any(|l| l.id == *g))
             {
                 continue;
             }
-            let needs_target = !self.layers[i].effects.is_empty()
-                || matches!(self.layers[i].kind, LayerKind::Passthrough { .. })
-                || self.referenced.contains(&self.layers[i].id);
-            if needs_target {
-                if let Some(t) = self.composite_layer(gl, i, frame) {
-                    self.draw_composite(gl, i, &t);
-                    if self.referenced.contains(&self.layers[i].id) {
-                        self.keep_composite(gl, i, t);
-                    } else {
-                        self.give(t);
-                    }
-                }
-            } else {
-                self.draw_direct(gl, i, frame);
-            }
+            self.draw_obj(gl, r, frame);
         }
         self.post_process(gl);
+    }
+
+    fn obj_id(&self, r: ObjRef) -> i64 {
+        match r {
+            ObjRef::Layer(i) => self.layers[i].id,
+            ObjRef::Particles(i) => self.particle_objs[i].id,
+        }
+    }
+
+    /// Draws one object of the draw order onto `self.scene`.
+    fn draw_obj(&mut self, gl: &glow::Context, r: ObjRef, frame: FrameInput) {
+        let i = match r {
+            ObjRef::Layer(i) => i,
+            ObjRef::Particles(i) => {
+                if let Some(only) = &self.only
+                    && !only.contains(&self.particle_objs[i].id)
+                {
+                    return;
+                }
+                self.simulate_particles(i, frame);
+                if self.particle_objs[i].visible {
+                    self.draw_particles(gl, i);
+                }
+                return;
+            }
+        };
+        if !self.layers[i].visible
+            || self
+                .only
+                .as_ref()
+                .is_some_and(|o| !o.contains(&self.layers[i].id))
+        {
+            return;
+        }
+        let needs_target = !self.layers[i].effects.is_empty()
+            || matches!(self.layers[i].kind, LayerKind::Passthrough { .. })
+            || self.referenced.contains(&self.layers[i].id);
+        if needs_target {
+            let t = if self.groups.contains_key(&self.layers[i].id) {
+                self.composite_group(gl, i, frame)
+            } else {
+                self.composite_layer(gl, i, frame)
+            };
+            if let Some(t) = t {
+                self.draw_composite(gl, i, &t);
+                if self.referenced.contains(&self.layers[i].id) {
+                    self.keep_composite(gl, i, t);
+                } else {
+                    self.give(t);
+                }
+            }
+        } else {
+            self.draw_direct(gl, i, frame);
+        }
+    }
+
+    /// A compose layer with children: WE draws the children into the
+    /// layer (it is a "composition" of them) and applies the layer's
+    /// effects to the result. `copybackground: false` starts that target
+    /// transparent, otherwise from what is behind. Lofi Cafe 2370927443:
+    /// the chalkboard's photo/date/title group (children of compose 3479)
+    /// is squeezed into the board by the compose layer's perspective effect;
+    /// drawn as plain layers they were ~4x too large and off the board.
+    fn composite_group(
+        &mut self,
+        gl: &glow::Context,
+        i: usize,
+        frame: FrameInput,
+    ) -> Option<Target> {
+        let id = self.layers[i].id;
+        let copy_bg = self.groups.get(&id).copied().unwrap_or(true);
+        let (w, h) = (self.scene.tex.width, self.scene.tex.height);
+        let mut target = match self.group_targets.remove(&id) {
+            Some(t) if t.tex.width == w && t.tex.height == h => t,
+            _ => Target::with_format(gl, w, h, self.scene_hdr),
+        };
+        if copy_bg {
+            self.scene.blit_to(gl, &target);
+        } else {
+            target.clear(gl, [0.0; 4]);
+        }
+        std::mem::swap(&mut self.scene, &mut target);
+        for k in 0..self.order.len() {
+            let r = self.order[k];
+            if self.group_of.get(&self.obj_id(r)) == Some(&id) {
+                self.draw_obj(gl, r, frame);
+            }
+        }
+        // the compose shader samples `_rt_FullFrameBuffer`: the group
+        let t = self.composite_layer(gl, i, frame);
+        std::mem::swap(&mut self.scene, &mut target);
+        self.group_targets.insert(id, target);
+        t
     }
 
     /// Scene projection. Note: `camera.eye`/`center` are NOT applied — WE
@@ -1913,7 +2007,17 @@ impl SceneRenderer {
         let mut current = self.take(gl, fw, fh);
         current.clear(gl, [0.0, 0.0, 0.0, 0.0]);
 
-        // 1) the layer itself
+        // 1) the layer itself. A quad is copied as is; a puppet mesh is many
+        // overlapping triangles whose hulls are mostly transparent texels, so
+        // it needs the material's blending: copied opaque, a hair strand drawn
+        // after the face erased it. Chainsaw Man 3577990983: the head (face +
+        // hair pieces from the parts atlas, all over the head in the bind
+        // pose) was missing, only the last-drawn strands showed.
+        let layer_blend = if self.layers[i].puppet.is_some() {
+            self.layers[i].material.blend
+        } else {
+            Blend::Opaque
+        };
         let (mvp, model, proj, verts) = match self.layers[i].kind {
             LayerKind::Image => (
                 math::centered_ortho(uw, uh),
@@ -1947,7 +2051,7 @@ impl SceneRenderer {
                 model,
                 proj,
                 verts,
-                blend: Blend::Opaque,
+                blend: layer_blend,
                 frame,
             },
         );
@@ -2439,7 +2543,23 @@ impl SceneRenderer {
         }
 
         match (&call.which, &self.layers[call.layer].puppet) {
-            (PassRef::Material, Some((_, mesh))) => mesh.draw(gl),
+            (PassRef::Material, Some((_, mesh))) => {
+                let cull = self.layers[call.layer].cull_back;
+                unsafe {
+                    // our targets keep row 0 at the top (y flipped), so
+                    // WE's back faces are GL's front faces. Chainsaw Man
+                    // 3577990983: culling BACK removed the whole puppet,
+                    // FRONT leaves exactly WE's image.
+                    if cull {
+                        gl.enable(glow::CULL_FACE);
+                        gl.cull_face(glow::FRONT);
+                    }
+                }
+                mesh.draw(gl);
+                unsafe {
+                    gl.disable(glow::CULL_FACE);
+                }
+            }
             _ if uv_scale != [1.0, 1.0] => {
                 let mut v = call.verts;
                 for vert in v.chunks_mut(5) {
@@ -3399,6 +3519,42 @@ fn attach_order(layers: &[Layer]) -> Vec<usize> {
         .collect();
     v.sort_by_key(|&i| depth(i));
     v
+}
+
+/// Compose layers with children, and which group each object is drawn into
+/// (its nearest compose-layer ancestor). Returns (group id -> copybackground,
+/// object id -> group id).
+fn compose_groups(
+    objects: &[Value],
+    compose: &HashSet<i64>,
+) -> (HashMap<i64, bool>, HashMap<i64, i64>) {
+    let by_id: HashMap<i64, &Value> = objects
+        .iter()
+        .filter_map(|o| Some((o.get("id")?.as_i64()?, o)))
+        .collect();
+    let mut groups = HashMap::new();
+    let mut group_of = HashMap::new();
+    for (&id, o) in &by_id {
+        let mut cur = o.get("parent").and_then(|p| p.as_i64());
+        let mut depth = 0;
+        while let (Some(pid), true) = (cur, depth < 64) {
+            if compose.contains(&pid) {
+                group_of.insert(id, pid);
+                let copy = by_id
+                    .get(&pid)
+                    .map(|p| value::get_bool(p, "copybackground", true))
+                    .unwrap_or(true);
+                groups.insert(pid, copy);
+                break;
+            }
+            cur = by_id
+                .get(&pid)
+                .and_then(|p| p.get("parent"))
+                .and_then(|p| p.as_i64());
+            depth += 1;
+        }
+    }
+    (groups, group_of)
 }
 
 /// Ids of objects hidden because an ancestor is hidden.

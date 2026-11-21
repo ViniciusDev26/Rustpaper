@@ -5,7 +5,7 @@
 //   apply(id)            -> (re)starts the engine on that wallpaper
 //   get_properties(id)   -> the wallpaper's customizable properties + saved values
 //   save_properties(id, values) -> persists them and hot-swaps the running engine
-//   get_settings / set_autostart
+//   get_settings / set_autostart / set_scripts
 
 mod settings;
 
@@ -100,6 +100,9 @@ fn engine_args(id: &str, dir: &Path) -> Vec<String> {
     if let Some(p) = settings::properties_file(id).filter(|p| p.exists()) {
         args.push("--props".into());
         args.push(p.to_string_lossy().into_owned());
+    }
+    if settings::load().no_scripts {
+        args.push("--no-scripts".into());
     }
     args
 }
@@ -224,6 +227,26 @@ fn set_autostart(enabled: bool) -> Result<(), String> {
     settings::write_autostart(&engine_path(), &args).map_err(|e| e.to_string())
 }
 
+/// "Run scripts" checkbox: saves the preference, restarts the running
+/// wallpaper with it and refreshes the autostart entry.
+#[tauri::command]
+fn set_scripts(enabled: bool, state: tauri::State<EngineState>) -> Result<(), String> {
+    let mut s = settings::load();
+    s.no_scripts = !enabled;
+    settings::save(&s);
+    let running = state.0.lock().unwrap().as_ref().map(|(id, _)| id.clone());
+    if let Some(id) = running {
+        start_engine(&id, &state)?;
+    }
+    if s.autostart
+        && let Some(id) = &s.last_id
+    {
+        let args = engine_args(id, &wallpaper_dir(id)?);
+        settings::write_autostart(&engine_path(), &args).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 fn main() {
     setup_linux_env();
 
@@ -244,7 +267,8 @@ fn main() {
             get_properties,
             save_properties,
             get_settings,
-            set_autostart
+            set_autostart,
+            set_scripts
         ])
         // Closing the selector leaves the wallpaper running (dropping a
         // `Child` doesn't kill it).

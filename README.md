@@ -85,8 +85,9 @@ average image (SSIM) and on how much it moves
 
 **SceneScript** (the author's JavaScript) runs in a separate, locked-down
 process (seccomp allowlist, no files/network/exec, memory and time limits):
-see [`docs/SCENESCRIPT.md`](./docs/SCENESCRIPT.md). `--no-scripts` keeps
-scripted properties at their static values. Not supported yet: **web
+see [`docs/SCENESCRIPT.md`](./docs/SCENESCRIPT.md). `--no-scripts` (or
+**Run scripts** off in the selector) keeps scripted properties at their
+static values. Not supported yet: **web
 wallpapers**.
 
 Details and known gaps: [`docs/GL_RENDERER.md`](./docs/GL_RENDERER.md),

@@ -64,7 +64,7 @@ comments, with the measurement that justified it.
 ```sh
 cargo build --release                       # toolchain pinned by mise.toml
 ./target/release/rustpaper-selector         # gallery; applies via the engine
-./target/release/rustpaper <wallpaper dir> [--props file.json] [--fps N] [--no-audio] [--mute] [--no-scripts]
+./target/release/rustpaper <wallpaper dir> [--props file.json] [--fps N] [--no-audio] [--mute] [--no-scripts] [--output NAME]
 ./target/release/rustpaper-render <workshop id> --describe
 ./scripts/install.sh                        # ~/.local/bin + launcher entry
 ```
