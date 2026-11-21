@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# dist.sh [--no-build] <out dir>
+#
+# Builds the release binaries and packs the prebuilt tarball that GitHub
+# Releases carry and the `rustpaper-bin` AUR package installs:
+#
+#   rustpaper-<version>-x86_64-linux.tar.gz
+#     rustpaper-<version>/bin/{rustpaper,rustpaper-selector,rustpaper-render,rustpaper-script-worker}
+#     rustpaper-<version>/share/applications/rustpaper.desktop
+#     rustpaper-<version>/share/icons/hicolor/128x128/apps/rustpaper.png
+#     rustpaper-<version>/LICENSE, README.md
+#
+# plus its .sha256. The version comes from the workspace Cargo.toml.
+set -euo pipefail
+
+build=1
+[ "${1:-}" = "--no-build" ] && { build=0; shift; }
+out=${1:?usage: dist.sh [--no-build] <out dir>}
+repo=$(cd "$(dirname "$0")/.." && pwd)
+version=$(sed -n 's/^version = "\([^"]*\)".*/\1/p' "$repo/Cargo.toml" | head -1)
+bins=(rustpaper rustpaper-selector rustpaper-render rustpaper-script-worker)
+
+if [ $build = 1 ]; then
+    (cd "$repo" && cargo build --release --locked \
+        -p rustpaper-engine -p rustpaper-selector -p rustpaper-gl -p rustpaper-script --bins)
+fi
+
+name=rustpaper-$version
+stage=$(mktemp -d)
+trap 'rm -rf "$stage"' EXIT
+root=$stage/$name
+install -d "$root/bin" "$root/share/applications" "$root/share/icons/hicolor/128x128/apps"
+for b in "${bins[@]}"; do install -m 755 "$repo/target/release/$b" "$root/bin/$b"; done
+install -m 644 "$repo/packaging/rustpaper.desktop" "$root/share/applications/rustpaper.desktop"
+install -m 644 "$repo/crates/rustpaper-selector/icons/128x128.png" \
+    "$root/share/icons/hicolor/128x128/apps/rustpaper.png"
+install -m 644 "$repo/LICENSE" "$repo/README.md" "$root/"
+
+mkdir -p "$out"
+tarball=$out/$name-x86_64-linux.tar.gz
+tar -C "$stage" --owner=0 --group=0 -czf "$tarball" "$name"
+(cd "$out" && sha256sum "$(basename "$tarball")" > "$(basename "$tarball").sha256")
+echo "$tarball"

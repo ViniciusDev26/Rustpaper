@@ -1,0 +1,108 @@
+name: Release
+
+# Conventional Commits on main -> release-please keeps a "release PR" open
+# (version bump + CHANGELOG). Merging it tags vX.Y.Z and creates the GitHub
+# release; then the prebuilt tarball is attached and the AUR packages are
+# updated. See docs/RELEASING.md.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      tag_name: ${{ steps.rp.outputs.tag_name }}
+      version: ${{ steps.rp.outputs.version }}
+      pr_branch: ${{ steps.rp.outputs.pr && fromJSON(steps.rp.outputs.pr).headBranchName || '' }}
+    steps:
+      - id: rp
+        uses: googleapis/release-please-action@v5
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  # release-please bumps Cargo.toml but not Cargo.lock (the workspace crates'
+  # versions are recorded there too, and `--locked` builds would refuse a
+  # stale lockfile): refresh it on the release PR's branch.
+  lockfile:
+    needs: release-please
+    if: needs.release-please.outputs.pr_branch != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.pr_branch }}
+      - run: cargo update --workspace
+      - name: Commit Cargo.lock
+        run: |
+          if git diff --quiet Cargo.lock; then exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore: update Cargo.lock for the release"
+          git push
+
+  # Prebuilt binaries, built on Arch (the AUR's target) with its own libraries.
+  build:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    env:
+      TAG: ${{ needs.release-please.outputs.tag_name }}
+      VERSION: ${{ needs.release-please.outputs.version }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Install build dependencies
+        run: |
+          pacman -Syu --noconfirm --needed git rust pkgconf github-cli \
+            gtk3 webkit2gtk-4.1 libglvnd libxkbcommon wayland
+      - uses: actions/checkout@v4
+      - name: Build the tarball
+        run: ./packaging/dist.sh dist
+      - name: PKGBUILD for rustpaper-bin with the real checksum
+        run: |
+          sum=$(cut -d' ' -f1 dist/rustpaper-$VERSION-x86_64-linux.tar.gz.sha256)
+          sed -e "s/^pkgver=.*/pkgver=$VERSION/" -e "s/^sha256sums=.*/sha256sums=('$sum')/" \
+            packaging/aur/rustpaper-bin/PKGBUILD > dist/rustpaper-bin.PKGBUILD
+      - name: Attach to the release
+        run: gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+
+  # Needs the AUR_SSH_PRIVATE_KEY secret (an AUR account's SSH key); skipped
+  # until it is configured.
+  aur:
+    needs: [release-please, build]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        pkg: [rustpaper-bin, rustpaper]
+    env:
+      VERSION: ${{ needs.release-please.outputs.version }}
+    steps:
+      - id: key
+        env:
+          KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          if [ -n "$KEY" ]; then echo "ok=true" >> "$GITHUB_OUTPUT"
+          else echo "::notice::AUR_SSH_PRIVATE_KEY not set: not publishing ${{ matrix.pkg }}"; fi
+      - uses: actions/checkout@v4
+        if: steps.key.outputs.ok == 'true'
+      - name: Set the version
+        if: steps.key.outputs.ok == 'true'
+        run: sed -i -e "s/^pkgver=.*/pkgver=$VERSION/" -e "s/^pkgrel=.*/pkgrel=1/" packaging/aur/${{ matrix.pkg }}/PKGBUILD
+      - uses: KSXGitHub/github-actions-deploy-aur@v4.2.0
+        if: steps.key.outputs.ok == 'true'
+        with:
+          pkgname: ${{ matrix.pkg }}
+          pkgbuild: packaging/aur/${{ matrix.pkg }}/PKGBUILD
+          updpkgsums: true
+          commit_username: ${{ github.actor }}
+          commit_email: ${{ github.actor }}@users.noreply.github.com
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: "Update to ${{ needs.release-please.outputs.version }}"

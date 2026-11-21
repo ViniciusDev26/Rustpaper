@@ -46,9 +46,19 @@ Without that, there's nothing for this project to render.
 
 ---
 
-## 🚧 Project status: beta, build from source
+## 🚧 Project status: beta
 
-No packaged releases yet. Build and install for your user:
+**Arch Linux:** each [GitHub release](https://github.com/ViniciusDev26/Rustpaper/releases)
+carries prebuilt binaries and a ready `rustpaper-bin.PKGBUILD`:
+
+```sh
+mkdir rustpaper && cd rustpaper
+curl -LO https://github.com/ViniciusDev26/Rustpaper/releases/latest/download/rustpaper-bin.PKGBUILD
+mv rustpaper-bin.PKGBUILD PKGBUILD && makepkg -si
+```
+
+(AUR packages `rustpaper-bin` / `rustpaper` will follow; their PKGBUILDs are
+in `packaging/aur/`.) **From source**, for your user:
 
 ```sh
 ./scripts/install.sh          # cargo build --release + ~/.local/bin + launcher entry
