@@ -42,6 +42,15 @@ pub fn pid() -> Option<u32> {
         .min()
 }
 
+/// The X display the running WE renders on (its `DISPLAY`).
+pub fn display() -> Option<String> {
+    let environ = std::fs::read(format!("/proc/{}/environ", pid()?)).ok()?;
+    environ
+        .split(|&b| b == 0)
+        .find_map(|e| e.strip_prefix(b"DISPLAY="))
+        .map(|d| String::from_utf8_lossy(d).into_owned())
+}
+
 /// Linux path -> the same file as Wine sees it (`Z:` is the host root; the
 /// Steam library drive letter is not mapped in every Proton session).
 pub fn wine_path(p: &Path) -> String {
