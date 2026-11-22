@@ -125,7 +125,6 @@ fn start_engine(id: &str, state: &EngineState) -> Result<(), String> {
         .args(engine_args(id, &dir))
         .spawn()
         .map_err(|e| format!("failed to start the engine: {e}"))?;
-    let new_pid = child.id();
     let previous = state.0.lock().unwrap().replace((id.to_string(), child));
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(2500));
@@ -133,16 +132,19 @@ fn start_engine(id: &str, state: &EngineState) -> Result<(), String> {
             let _ = old.kill();
             let _ = old.wait();
         }
-        kill_stray_engines(new_pid);
+        kill_stray_engines();
     });
     Ok(())
 }
 
-/// Kills every other `rustpaper` engine of this user: ones left by a
-/// previous selector session (closing the selector leaves its wallpaper
-/// running) or started by hand / autostart. Two engines on the same layer
-/// flicker, and this selector only holds a handle to the engines it started.
-fn kill_stray_engines(keep: u32) {
+/// Kills the `rustpaper` engines of this user that this selector did not
+/// start: ones left by a previous selector session (closing the selector
+/// leaves its wallpaper running) or started by hand / autostart. Two engines
+/// on the same layer flicker. Our own children are left alone: the handover
+/// above stops them one by one, and with quick successive applies a child
+/// may be the engine that must stay (keeping "the newest pid" instead raced:
+/// an older handover killed the newer engine).
+fn kill_stray_engines() {
     // SAFETY: getuid has no preconditions.
     let uid = unsafe { libc::getuid() };
     let Ok(procs) = std::fs::read_dir("/proc") else {
@@ -152,7 +154,7 @@ fn kill_stray_engines(keep: u32) {
         let Some(pid) = p.file_name().to_str().and_then(|s| s.parse::<u32>().ok()) else {
             continue;
         };
-        if pid == keep || !is_engine(&p.path(), uid) {
+        if !is_engine(&p.path(), uid) {
             continue;
         }
         eprintln!("stopping engine {pid} (not started by this selector)");
@@ -162,18 +164,24 @@ fn kill_stray_engines(keep: u32) {
 }
 
 /// `/proc/<pid>` is a `rustpaper` process (exact name, so not the selector
-/// or the script worker) owned by `uid`.
+/// or the script worker) owned by `uid` and not a child of this selector.
 fn is_engine(proc_dir: &Path, uid: libc::uid_t) -> bool {
     let named =
         std::fs::read_to_string(proc_dir.join("comm")).is_ok_and(|c| c.trim_end() == "rustpaper");
-    named
-        && std::fs::read_to_string(proc_dir.join("status")).is_ok_and(|s| {
-            s.lines()
-                .find_map(|l| l.strip_prefix("Uid:"))
-                .and_then(|l| l.split_whitespace().next())
-                .and_then(|u| u.parse::<libc::uid_t>().ok())
-                == Some(uid)
-        })
+    let Some(status) = named
+        .then(|| std::fs::read_to_string(proc_dir.join("status")).ok())
+        .flatten()
+    else {
+        return false;
+    };
+    let field = |name: &str| {
+        status
+            .lines()
+            .find_map(|l| l.strip_prefix(name))
+            .and_then(|l| l.split_whitespace().next())
+            .and_then(|v| v.parse::<u32>().ok())
+    };
+    field("Uid:") == Some(uid) && field("PPid:") != Some(std::process::id())
 }
 
 #[tauri::command]
@@ -362,14 +370,34 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let fake = dir.join("rustpaper");
         std::fs::copy("/bin/sleep", &fake).unwrap();
-        let mut child = std::process::Command::new(&fake).arg("5").spawn().unwrap();
         let uid = unsafe { libc::getuid() };
-        let proc_dir = PathBuf::from(format!("/proc/{}", child.id()));
-        assert!(is_engine(&proc_dir, uid));
-        assert!(!is_engine(&proc_dir, uid + 1), "another user's engine");
+        // our own child: stopped by the handover, never a stray
+        let mut own = std::process::Command::new(&fake).arg("5").spawn().unwrap();
+        let own_dir = PathBuf::from(format!("/proc/{}", own.id()));
+        assert!(!is_engine(&own_dir, uid), "a child of this selector");
+        // started by someone else (here: a shell that is its parent)
+        let mut sh = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("'{}' 5; true", fake.display()))
+            .spawn()
+            .unwrap();
+        let children = format!("/proc/{0}/task/{0}/children", sh.id());
+        let stray = (0..50)
+            .find_map(|_| {
+                std::thread::sleep(Duration::from_millis(20));
+                let c = std::fs::read_to_string(&children).ok()?;
+                c.split_whitespace().next()?.parse::<u32>().ok()
+            })
+            .expect("the shell's child");
+        let stray_dir = PathBuf::from(format!("/proc/{stray}"));
+        assert!(is_engine(&stray_dir, uid));
+        assert!(!is_engine(&stray_dir, uid + 1), "another user's engine");
         assert!(!is_engine(Path::new("/proc/self"), uid), "the test binary");
-        let _ = child.kill();
-        let _ = child.wait();
+        unsafe { libc::kill(stray as libc::pid_t, libc::SIGKILL) };
+        for c in [&mut own, &mut sh] {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
