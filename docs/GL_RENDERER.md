@@ -1017,13 +1017,34 @@ customization panel (`docs/SELECTOR.md`).
 
 - **SceneScript** runs sandboxed (`docs/SCENESCRIPT.md`). **`web`
   wallpapers** are not supported.
-- Chainsaw Man 3577990983 (0.927 after the cursor-relative parallax;
-  fireworks replay after random delays, so runs differ by ~0.004): what is
-  left is mostly the edges of the two foreground hands, whose parallax
-  depends on the cursor WE saw. This capture's `we_pointer.txt` says (0, 0),
-  but the first depth calibration showed that reading can be wrong (it said
-  (0, 0.232) while the squares put WE's cursor at about (0.24, 0)); a
-  recapture with a good reading is the next step.
+- Camera parallax strength (`k` in `Parallax::shift`) is NOT settled. The
+  depth calibration's slope gives `k` directly, independent of the cursor:
+  0.778 with amount 0.78 / influence 0.5 (Chainsaw Man's values) and 0.40
+  with amount 0.4 / influence 1, i.e. `k = amount`. But re-scoring the 10
+  camera-parallax scenes on fresh captures (2026-11-22, all with an
+  unclamped pointer near 0.45, 0.44) splits them: `amount x influence`
+  wins 2224061441, 2617953025, 2902406982, Chainsaw Man 3577990983 and
+  3835761947 (influence -0.07: 0.86 vs 0.48); `amount` wins Lucy
+  3521337568 (0.873 -> 0.953, PASS) and 3195212886. Lucy and 2902406982
+  have the same amount and influence (0.5 / 0.5) yet prefer opposite
+  factors, so another variable is involved (the follow `delay`: 0.44 vs
+  0.1; or the cursor itself). Kept: `amount x influence`. Making the
+  first follow step catch up with the whole time since scene start (the
+  harness renders from `--start` ~6.8 s, WE has run since 0; we clamp
+  the first step to 0.5 s) barely moves any scene (all within 0.001
+  except Chainsaw Man: 0.892 -> 0.875 with `amount x influence`, 0.868 ->
+  0.880 with `amount`): not adopted.
+- The pointer `we_pointer.txt` records is unreliable for parallax:
+  xpointer.py reads the X pointer once, when recording starts. A reading
+  clamped to an edge can be wrong (one said (0, 0.232) while the
+  calibration squares put WE's cursor at (0.24, 0)), and the same scene
+  recaptured minutes apart moved by up to 0.04 (Chainsaw Man 0.928 ->
+  0.892, 3835761947 0.951 -> 0.860, same model), so the cursor drifts
+  during or between captures. With the cursor the calibration measured,
+  Chainsaw Man's two foreground hands align with WE's to 0 px (mean SSIM
+  0.936). Next: measure WE's cursor with the calibration scene
+  (`run_depths.sh`, whose fit gives `k` and the cursor) right before each
+  parallax capture instead of trusting xpointer.py.
 - Lucy 3521337568 (mean SSIM 0.790, above WE's own WE-vs-WE floor of
   0.778, energy ratio 1.05): what is left is noise-level. Its fullscreen
   `filmgrain` (#1937) matches WE on average: one-frame high-pass
