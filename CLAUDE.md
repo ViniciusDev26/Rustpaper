@@ -32,30 +32,41 @@ behaviour in comments, with the measurement or observation that justified it.
 
 - `docs/ENGINE.md`: how the engine drives WE and mirrors it, every Hyprland
   and WE quirk it works around, measurements, known gaps.
-- `docs/SELECTOR.md`: gallery, customization panel, persistence.
+- `docs/SELECTOR.md`: gallery, customization panel, engine service,
+  Performance tab, persistence.
+- `docs/LOCKSCREEN.md`: animated lock screen, the routes and their
+  prerequisites (not implemented yet).
 - `docs/RELEASING.md`: Conventional Commits, release-please, release
   tarball and AUR packaging (`packaging/`).
 
 ## Workspace (`crates/`)
 
-- **`rustpaper-core`**: `paths` (Steam library, WE install, Workshop dir) and
-  `project` (project.json).
+- **`rustpaper-core`**: shared by the engine and the selector.
+  - `paths`: Steam library, WE install, Workshop dir.
+  - `project`: project.json.
+  - `state`: `~/.config/rustpaper/state.json`, the selector's decisions,
+    which the engine reads.
+  - `performance`: WE's quality settings and the Playback conditions as
+    data.
 - **`rustpaper-engine`**: binary **`rustpaper`**, the live wallpaper.
-  - `main.rs`: one headless output + workspace + WE window per monitor, and
-    the watchdog.
+  - `main.rs`: one headless output + workspace + WE window per monitor, the
+    watchdog (arrangement and Playback rules), `--service` mode (state.json,
+    SIGHUP reload).
   - `we.rs`: WE under Proton (`-control` commands through `nsenter` into its
     container, config.json tweaks, starting it through Steam).
   - `mirror.rs`: ext-image-copy-capture of WE's windows into GBM dmabufs,
     shown on layer-shell surfaces.
   - `gbm.rs`: minimal libgbm FFI.
-  - `hyprland.rs`: IPC socket client.
+  - `hyprland.rs`: IPC socket client (also what covers each monitor).
+  - `power.rs`: on battery or not.
 - **`rustpaper-selector`**: Tauri v2 app, binary **`rustpaper-selector`**.
   The UI lives in `ui/`: React + TypeScript + Tailwind v4 (Vite), Zustand
   stores, Zod-validated command replies (`src/api`). build.rs builds it
   (needs Node.js + npm) into `$OUT_DIR/ui`; run `cd ui && npm test` for its
   unit tests. Undecorated under Hyprland, colors from the active Omarchy
-  theme (`src/omarchy.rs`, see SELECTOR.md). Starts the engine and hands
-  over with SIGTERM.
+  theme (`src/omarchy.rs`, see SELECTOR.md). Runs the engine as the systemd
+  user service `rustpaper.service` (`src/service.rs`): every change saves
+  state.json and reloads the service; "Start on login" enables it.
 - **`rustpaper-workshop`**: binary **`rustpaper-workshop`**, the selector's
   Steam Workshop store.
   - Talks to the running Steam client through Steamworks as WE (AppID
@@ -70,6 +81,9 @@ behaviour in comments, with the measurement or observation that justified it.
 cargo build --release                       # toolchain pinned by mise.toml
 ./target/release/rustpaper-selector         # gallery; applies via the engine
 ./target/release/rustpaper <wallpaper dir> [--props file.json] [--mute] [--volume 0..100] [--output NAME]
+./target/release/rustpaper --service        # what the selector chose (state.json); SIGHUP reloads
+systemctl --user status rustpaper           # the engine as the selector runs it
+journalctl --user -u rustpaper -f           # its log
 ./scripts/install.sh                        # ~/.local/bin + launcher entry
 ```
 

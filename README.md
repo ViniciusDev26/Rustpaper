@@ -83,11 +83,16 @@ Engine is found in your Steam library automatically (`WE_DIR` /
   (sliders, colors, toggles, dropdowns, text) like WE and sends them to WE.
 - **Workshop store**: browse, search and subscribe to Workshop wallpapers
   from the selector (through your running Steam client).
-- **Desktop integration**: pauses while a fullscreen window covers the
-  monitors, autostart, Omarchy theme from the wallpaper's colors.
+- **Performance tab** like WE's: quality presets and settings (FPS,
+  anti-aliasing, texture resolution, post-processing, shadows, lighting) and
+  Playback rules (pause when a window is fullscreen, maximized/tiled or
+  focused, when the display sleeps, on battery).
+- **Desktop integration**: runs as a systemd user service ("Start on login"
+  enables it), Omarchy theme from the wallpaper's colors.
 
 Not yet: cursor interaction (eye tracking, parallax, clicks), per-wallpaper
-volume (only mute). Workshop JavaScript (SceneScript, web wallpapers) runs
+volume (only mute), an animated lock screen (prerequisites in
+[`docs/LOCKSCREEN.md`](./docs/LOCKSCREEN.md)). Workshop JavaScript (SceneScript, web wallpapers) runs
 inside Wallpaper Engine as it does on Windows: **not sandboxed**.
 
 How it works, measurements and known gaps: [`docs/ENGINE.md`](./docs/ENGINE.md),

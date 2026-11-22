@@ -86,9 +86,9 @@ panel does it once.
 - The selector's own colors follow (see above), since they come from the
   active Omarchy theme.
 
-The selector starts the engine binary found next to itself
+The engine binary is the one next to the selector
 (`target/release/rustpaper`, or the install prefix), else `rustpaper` from
-`PATH`.
+`PATH`; it runs as a systemd user service (see "Engine service" below).
 
 ## Gallery
 
@@ -107,7 +107,7 @@ Built from `general.properties` of project.json, in WE's `order`:
 |---|---|---|
 | `slider` | range (min/max/step; integer unless `fraction`) | number |
 | `bool` | checkbox | bool |
-| `color` | color picker | `"r g b"`, floats 0..1 (WE's format) |
+| `color` | picker + hex field + default + colors from the wallpaper | `"r g b"`, floats 0..1 (WE's format) |
 | `combo` | dropdown of `options[].label` | the option's `value` (type kept) |
 | `textinput`, `text` | text field | string |
 | `group` | section header | — |
@@ -125,31 +125,89 @@ Built from `general.properties` of project.json, in WE's `order`:
 - Changes are saved (debounced 0.7 s) to
   `~/.config/rustpaper/properties/<id>.json` — only values that differ from
   the defaults; **Reset** deletes the file.
-- If that wallpaper is on screen, the engine is restarted with
-  `--props <file>`, which it hands to WE (`-control applyProperties`). The
-  new engine starts first and the old one is stopped 2.5 s later, so the
-  desktop never flashes between them.
+- If that wallpaper is on screen, the engine reloads (SIGHUP) and hands the
+  values to WE (`-control applyProperties`) in place: no restart, no flash.
+- **Color properties** (WE's "Scheme color" above all): users saw a lone
+  color picker and did not know what it changes. The control shows the
+  current color and its hex code, a picker, the author's default (one
+  click to go back), and up to 8 colors taken from the wallpaper's preview
+  (`wallpaper_colors`: k-means in OKLab, palette.rs; near-duplicates closer
+  than 70/765 merged). Scheme color also gets a sentence explaining it: the
+  wallpaper's theme color, which the parts of the scene its author linked
+  to it take.
 
 ## Persistence
 
-- `~/.config/rustpaper/state.json`: last applied wallpaper, the autostart
-  flag and `volume`; the panel reopens the last wallpaper at startup.
-- One engine at a time: applying a wallpaper starts the new engine, and
-  2.5 s later (after its first frame, so the desktop never flashes) stops
-  (SIGTERM, so the last engine out can stop WE's wallpapers; SIGKILL after
-  5 s) the previous one and every `rustpaper` process of the user this selector
-  did not start (not its child), e.g. the engine a closed selector session
-  left running. Its own children are only stopped by the handover: keeping
-  "the newest engine" instead raced when applying twice within 2.5 s.
-- Autostart: `~/.config/autostart/rustpaper.desktop` runs the engine with the
-  last wallpaper and its `--props` file (arguments quoted per the Desktop Entry
-  spec).
-- **Volume** (header slider, 0..100, default 100): the engine gets
-  `--volume N` (`--mute` at 0, nothing at 100). Wallpaper Engine has no
-  volume command, so for now 0 mutes WE and anything else unmutes it (WE's
-  own volume setting applies). Applied on release of the slider, restarting
-  the wallpaper and rewriting the autostart entry. Older state files load as
-  100; their `no_scripts` (native renderer era) is ignored.
+- `~/.config/rustpaper/state.json` (`rustpaper_core::state`): the wallpaper
+  on screen, volume, "Theme from wallpaper", the Performance tab's quality
+  settings and Playback rules. The selector writes it; the engine
+  (`rustpaper --service`) reads it and re-reads it on reload. The panel
+  reopens the last wallpaper at startup. Unknown fields of older files
+  (`autostart`, `no_scripts`) are ignored.
+- `~/.config/rustpaper/properties/<id>.json`: per-wallpaper property values.
+
+## Engine service
+
+- The engine is the systemd user service `rustpaper.service`
+  (`src/service.rs`). The selector writes the unit
+  (`~/.config/systemd/user/rustpaper.service`, `ExecStart=<engine> --service`,
+  `ExecReload=kill -HUP`, `PartOf=`/`WantedBy=graphical-session.target`) and
+  rewrites it when the engine moved.
+- Every change (apply, properties, volume, quality, playback) saves
+  state.json and runs `systemctl --user reload-or-restart rustpaper.service`.
+  - A running engine reloads in place (new wallpaper loaded into the same WE
+    windows): the desktop never shows the plain background.
+  - A stopped one starts.
+  - Engines systemd does not run (an older selector's, started by hand) are
+    stopped with SIGTERM 2.5 s later.
+- **Start on login** = `systemctl --user enable/disable rustpaper.service`;
+  the checkbox shows `is-enabled`. The old
+  `~/.config/autostart/rustpaper.desktop` is removed when the unit is
+  installed.
+- Without a systemd user manager the selector falls back to its own child
+  engine (`rustpaper --service`, handed over after 2.5 s), and "Start on
+  login" reports an error.
+- Closing the selector leaves the wallpaper running (systemd owns it).
+- **Volume** (header slider, 0..100, default 100): 0 mutes WE and anything
+  else unmutes it, because Wallpaper Engine has no volume command (WE's own
+  volume setting applies). Applied on release of the slider.
+
+## Performance tab
+
+Like WE's own Performance settings, drawn from data
+(`rustpaper_core::performance`): adding a WE setting is one table entry, no
+UI code.
+
+- **Quality.** WE's settings with WE's own keys and values, read from its UI
+  bundle:
+  - FPS 10..60;
+  - anti-aliasing none / MSAA x2 / x4 / x8;
+  - texture resolution full / half / auto;
+  - post-processing disabled / enabled / ultra;
+  - reflections;
+  - shadows and volumetric lighting disabled..ultra;
+  - WE's presets Low / Medium / High / Ultra, with "Custom" shown when no
+    preset matches.
+
+  Saved to state.json (debounced 0.9 s). The engine then stops WE, writes
+  the values into WE's config.json and starts it again: written while WE
+  runs, WE would overwrite them on exit. Shown values: the saved choice,
+  else WE's config, else WE's defaults.
+- **Playback.** WE's conditions:
+  - other application focused;
+  - other application maximized or tiled;
+  - other application fullscreen;
+  - display asleep;
+  - on battery.
+
+  Each one is Keep running or Pause. The engine evaluates them per monitor
+  from Hyprland (and `/sys/class/power_supply`), because WE's own copies are
+  forced to "run" (every wallpaper window is a fullscreen app to WE).
+  Defaults: pause under fullscreen windows and when the display sleeps, as
+  WE does.
+
+`RUSTPAPER_SELECTOR_TAB=library|store|performance` opens the selector on a
+tab (screenshots, launcher shortcuts).
 
 ## Workshop tab (store)
 
@@ -201,8 +259,10 @@ helper `crates/rustpaper-workshop`).
 ## Commands (Rust -> UI)
 
 `list_wallpapers`, `apply(id)`, `get_properties(id)` (definitions + saved
-values), `save_properties(id, values)`, `get_settings`,
-`set_autostart(enabled)`, `set_scripts(enabled)`, `set_volume(volume)`,
+values), `save_properties(id, values)`, `wallpaper_colors(id)`,
+`get_settings`, `set_autostart(enabled)`, `set_volume(volume)`,
+`get_performance`, `set_performance(values)`, `set_playback(playback)`,
 `workshop_query(query)`, `workshop_subscribe(id)`, `workshop_unsubscribe(id)`,
-`workshop_status(ids)`, `workshop_subscriptions()`. Ids are validated as plain folder names before any
-path is built.
+`workshop_status(ids)`, `workshop_subscriptions()`, `get_theme`,
+`theme_from_wallpaper(id)`, `set_wallpaper_theme(enabled)`, `desktop_info`.
+Ids are validated as plain folder names before any path is built.
