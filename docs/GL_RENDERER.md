@@ -69,6 +69,13 @@ the object's `instance.textures` / `combos` over the shared material, like an
 effect pass's scene overrides. Chainsaw Man 3577990983's dock icons drew as
 white squares (the material's `util/white`).
 
+**`g_LayerModelMatrix`** is the layer's world matrix in every pass,
+effect passes included (their `g_ModelMatrix` is texture space). Workshop
+effect `frame_builder` (3573886911) reads the layer's scale from it to
+keep its rounded box in pixels; unset it was zero, `v_Size` went negative
+and Chainsaw Man 3577990983's dock backdrop drew nothing. Only that scene
+uses it in the corpus.
+
 **Vector strings may use commas.** Workshop effects store `"0.0, 1.0"`
 (material constants and shader annotation defaults). Read on whitespace only
 it was `[1.0]`: 3195212886's audio bars (`u_BarBounds`) stood at full height
