@@ -3187,6 +3187,7 @@ dependencies = [
 name = "rustpaper-selector"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "rustpaper-core",
  "serde",
  "serde_json",

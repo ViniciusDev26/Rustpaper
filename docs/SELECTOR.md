@@ -56,6 +56,10 @@ Built from `general.properties` of project.json, in WE's `order`:
 
 - `~/.config/rustpaper/state.json`: last applied wallpaper, the autostart
   flag, `no_scripts` and `volume`; the panel reopens the last wallpaper at startup.
+- One engine at a time: applying a wallpaper starts the new engine, and
+  2.5 s later (after its first frame, so the desktop never flashes) kills
+  the previous one and any other `rustpaper` process of the user, e.g. the
+  engine a closed selector session left running.
 - Autostart: `~/.config/autostart/rustpaper.desktop` runs the engine with the
   last wallpaper and its `--props` file (arguments quoted per the Desktop Entry
   spec).

@@ -125,15 +125,55 @@ fn start_engine(id: &str, state: &EngineState) -> Result<(), String> {
         .args(engine_args(id, &dir))
         .spawn()
         .map_err(|e| format!("failed to start the engine: {e}"))?;
+    let new_pid = child.id();
     let previous = state.0.lock().unwrap().replace((id.to_string(), child));
-    if let Some((_, mut old)) = previous {
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(2500));
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(2500));
+        if let Some((_, mut old)) = previous {
             let _ = old.kill();
             let _ = old.wait();
-        });
-    }
+        }
+        kill_stray_engines(new_pid);
+    });
     Ok(())
+}
+
+/// Kills every other `rustpaper` engine of this user: ones left by a
+/// previous selector session (closing the selector leaves its wallpaper
+/// running) or started by hand / autostart. Two engines on the same layer
+/// flicker, and this selector only holds a handle to the engines it started.
+fn kill_stray_engines(keep: u32) {
+    // SAFETY: getuid has no preconditions.
+    let uid = unsafe { libc::getuid() };
+    let Ok(procs) = std::fs::read_dir("/proc") else {
+        return;
+    };
+    for p in procs.flatten() {
+        let Some(pid) = p.file_name().to_str().and_then(|s| s.parse::<u32>().ok()) else {
+            continue;
+        };
+        if pid == keep || !is_engine(&p.path(), uid) {
+            continue;
+        }
+        eprintln!("stopping engine {pid} (not started by this selector)");
+        // SAFETY: plain kill(2) on a pid that was just read from /proc.
+        unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+    }
+}
+
+/// `/proc/<pid>` is a `rustpaper` process (exact name, so not the selector
+/// or the script worker) owned by `uid`.
+fn is_engine(proc_dir: &Path, uid: libc::uid_t) -> bool {
+    let named =
+        std::fs::read_to_string(proc_dir.join("comm")).is_ok_and(|c| c.trim_end() == "rustpaper");
+    named
+        && std::fs::read_to_string(proc_dir.join("status")).is_ok_and(|s| {
+            s.lines()
+                .find_map(|l| l.strip_prefix("Uid:"))
+                .and_then(|l| l.split_whitespace().next())
+                .and_then(|u| u.parse::<libc::uid_t>().ok())
+                == Some(uid)
+        })
 }
 
 #[tauri::command]
@@ -296,7 +336,8 @@ fn main() {
             set_volume
         ])
         // Closing the selector leaves the wallpaper running (dropping a
-        // `Child` doesn't kill it).
+        // `Child` doesn't kill it); the next selector replaces it on apply
+        // (`kill_stray_engines`).
         .run(tauri::generate_context!())
         .expect("failed to run the Tauri app");
 }
@@ -307,5 +348,28 @@ fn setup_linux_env() {
     if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
         // SAFETY: called first thing in main, before any thread exists.
         unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn engines_are_recognized_by_exact_name_and_owner() {
+        // a copy of `sleep` named `rustpaper` looks like an engine to /proc
+        let dir = std::env::temp_dir().join(format!("rp-engine-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("rustpaper");
+        std::fs::copy("/bin/sleep", &fake).unwrap();
+        let mut child = std::process::Command::new(&fake).arg("5").spawn().unwrap();
+        let uid = unsafe { libc::getuid() };
+        let proc_dir = PathBuf::from(format!("/proc/{}", child.id()));
+        assert!(is_engine(&proc_dir, uid));
+        assert!(!is_engine(&proc_dir, uid + 1), "another user's engine");
+        assert!(!is_engine(Path::new("/proc/self"), uid), "the test binary");
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
