@@ -70,7 +70,8 @@ Everything a script can reach is defined in `prelude.js`:
   `thisScene.getLayer(name|id)`: `origin`, `scale`, `angles`, `color`,
   `alpha`, `brightness`, `visible`, `text` read and write the layer state
   the renderer applies; `getParent`, `getChildren`, animation stubs, sound
-  stubs (`play`/`stop`).
+  stubs (`play`/`stop`), `getTextureAnimation()` (flipbook control, see
+  below).
 - `thisScene.getCameraTransforms()` / `setCameraTransforms({zoom})`: the
   camera zoom (`general.zoom`) reaches the renderer; eye / center / up are
   read-only placeholders. Persona 3 3151551777 zooms from a user property
@@ -118,6 +119,19 @@ fps (WE has been running them since the wallpaper started).
   bloom constants; `general.zoom` the camera zoom.
 - Sound layers' `play()` / `stop()`: the live engine starts or holds that
   sound (`startsilent` sounds are loaded, held until a script plays them).
+- `thisLayer.getTextureAnimation()` on a flipbook layer (sprite sheet or
+  GIF): `frameCount`, `duration`, `fps`, `rate`, `getFrame()`,
+  `setFrame()`, `play()`, `pause()`, `stop()` (rewinds to frame 0),
+  `isPlaying()`. The host sends each flipbook's frame durations in the
+  layer state; once a script asks for the animation, the worker runs its
+  clock (starting at `engine.runtime`, the phase the renderer was drawing)
+  and reports it as `anim_time`, which then drives that layer's flipbook
+  instead of the scene clock. Chainsaw Man 3577990983: five 4.9 s
+  fireworks (140 frames x 35 ms, frame 0 empty) stop on their last frame
+  and replay after a random 1.8-6.7 s; the stub (always frame 0, 1 frame)
+  left all five looping non-stop. Harness: motion energy ratio 1.45 ->
+  0.70 (WE-vs-WE floor 0.91), mean SSIM 0.653 -> 0.660; Lonely Cat
+  3299228616 (also calls it) 0.8567 -> 0.8568.
 
 ## Live engine
 

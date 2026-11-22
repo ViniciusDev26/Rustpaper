@@ -159,6 +159,44 @@ fn sound_play_and_stop_reach_the_host() {
 }
 
 #[test]
+fn texture_animation_stop_rewinds_and_play_resumes() {
+    // Chainsaw Man 3577990983's fireworks: stop() at start, play() later;
+    // the sheet's clock goes to the host as `anim_time`
+    let s = script(
+        0,
+        "alpha",
+        ValueKind::Float,
+        json!(1),
+        "let a; export function init() { a = thisLayer.getTextureAnimation(); a.stop(); }\n\
+         export function update() { if (engine.runtime >= 0.5) a.play(); return a.frameCount * 100 + a.getFrame(); }",
+    );
+    let mut l = layer(1);
+    l.frames = vec![0.1; 10];
+    let mut i = init(vec![s]);
+    i.layers = vec![l];
+    let (mut host, _) = ScriptHost::spawn_worker(Path::new(WORKER), &i, 0).unwrap();
+    let at = |t: f64, dt: f64| Frame {
+        time: t,
+        dt,
+        ..Default::default()
+    };
+    let r = host.frame(&at(0.3, 0.1)).unwrap();
+    assert!(r.logs.is_empty(), "{:?}", r.logs);
+    let up = r.layers.iter().find(|u| u.id == 1).unwrap();
+    // created at engine.runtime (0.3 s into the sheet), then rewound
+    assert_eq!(up.anim_time, Some(0.0));
+    assert_eq!(up.alpha, Some(1000.0), "10 frames, frame 0");
+    let r = host.frame(&at(0.4, 0.1)).unwrap();
+    let up = r.layers.iter().find(|u| u.id == 1);
+    assert_eq!(up.and_then(|u| u.anim_time), None, "stopped: unchanged");
+    host.frame(&at(0.5, 0.1)).unwrap(); // play()
+    let r = host.frame(&at(0.75, 0.25)).unwrap();
+    let up = r.layers.iter().find(|u| u.id == 1).unwrap();
+    assert!((up.anim_time.unwrap() - 0.25).abs() < 1e-6, "{up:?}");
+    assert_eq!(up.alpha, Some(1002.0));
+}
+
+#[test]
 fn scripts_see_angles_in_degrees() {
     let s = script(
         0,

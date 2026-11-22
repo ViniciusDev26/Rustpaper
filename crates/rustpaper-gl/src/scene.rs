@@ -147,6 +147,9 @@ struct Layer {
     anim: Option<LayerAnim>,
     /// Animated image (GIF scenes, `spritesheet` combo): frames over images.
     flipbook: Option<Flipbook>,
+    /// The flipbook's own clock once a SceneScript controls it
+    /// (`getTextureAnimation()`: play / stop / setFrame); None: scene time.
+    anim_time: Option<f32>,
     /// `"attachment": name` with a puppet `parent`: (parent id, name, local).
     attach: Option<(i64, String, Mat4)>,
     material: Pass,
@@ -477,8 +480,9 @@ impl SceneRenderer {
             if obj.get("image").and_then(|i| i.as_str()).is_some() || is_shape_quad(obj) {
                 match r.load_layer(gl, obj) {
                     Ok(mut layer) => {
-                        if layer.shape_quad
-                            && obj.get("parallaxDepth").is_none()
+                        // children without their own depth take their
+                        // ancestor's (see inherited_parallax)
+                        if obj.get("parallaxDepth").is_none()
                             && let Some(p) = inherited_parallax(objects, obj)
                         {
                             layer.parallax = p;
@@ -618,7 +622,17 @@ impl SceneRenderer {
             return 0;
         };
         let canvas = [self.width as f32, self.height as f32];
-        match crate::scripting::Scripts::load(&objects, &general, &props, canvas, screen) {
+        let flipbooks: HashMap<i64, Vec<f32>> = self
+            .layers
+            .iter()
+            .filter_map(|l| {
+                let fb = l.flipbook.as_ref()?;
+                Some((l.id, fb.frames.iter().map(|f| f.duration).collect()))
+            })
+            .collect();
+        match crate::scripting::Scripts::load(
+            &objects, &general, &props, canvas, screen, &flipbooks,
+        ) {
             Ok(Some(s)) => {
                 let n = s.count();
                 self.scripts = Some(s);
@@ -803,6 +817,9 @@ impl SceneRenderer {
             if let Some(b) = ch.brightness.get(&l.id) {
                 l.brightness = *b;
                 l.own_brightness = true;
+            }
+            if let Some(t) = ch.anim_time.get(&l.id) {
+                l.anim_time = Some(*t);
             }
         }
         for (id, s) in ch.text {
@@ -1086,6 +1103,7 @@ impl SceneRenderer {
                 || obj.pointer("/brightness/animation").is_some(),
             anim: LayerAnim::parse(obj, self.world_of(obj)),
             flipbook,
+            anim_time: None,
             attach: obj
                 .get("attachment")
                 .and_then(|a| a.as_str())
@@ -2522,6 +2540,12 @@ impl SceneRenderer {
         let f = &call.frame;
         prog.set(gl, "g_ModelViewProjectionMatrix", &call.mvp);
         prog.set(gl, "g_ModelMatrix", &call.model);
+        // The layer's own transform, also in effect passes (whose model
+        // matrix is the identity of texture space). Workshop effect
+        // frame_builder reads the layer scale from it (FIXSCALE); unset it
+        // was all zeros, so Chainsaw Man 3577990983's dock backdrop (a
+        // 100x100 solid scaled ~9.6 x 1.8, black at 0.55 alpha) drew nothing.
+        prog.set(gl, "g_LayerModelMatrix", &self.layers[call.layer].world);
         prog.set(gl, "g_ViewProjectionMatrix", &call.proj);
         prog.set(gl, "g_EffectTextureProjectionMatrix", &math::IDENTITY);
         prog.set(
@@ -2549,10 +2573,11 @@ impl SceneRenderer {
         prog.set(gl, "g_EyePosition", &[sw / 2.0, sh / 2.0, 1.0]);
         prog.set(gl, "g_LightAmbientColor", &self.ambient);
         prog.set(gl, "g_LightSkylightColor", &self.skylight);
+        let anim_time = self.layers[call.layer].anim_time.unwrap_or(f.time);
         let flip = is_material
             .then(|| self.layers[call.layer].flipbook.as_ref())
             .flatten()
-            .and_then(|fb| fb.at(f.time));
+            .and_then(|fb| fb.at(anim_time));
         match flip {
             Some((tex, rot, tr)) => {
                 prog.set(gl, "g_Texture0Rotation", &rot);
@@ -3322,6 +3347,11 @@ fn is_shape_quad(obj: &Value) -> bool {
 /// saw (0, 0), only the parent's depth puts the glow where WE has it (sky
 /// left of the planet: |diff| 26.4 -> 16.6, region SSIM 0.814 -> 0.834;
 /// depth 0 gives 17.8 / 0.831).
+/// Image children follow the same rule: Chainsaw Man 3577990983's sky,
+/// clouds and fireworks hang from group 35 (depth 0) and WE saw the pointer
+/// at (0, 0); with depth 1 the 3840x2160 background slid ~100 px right and
+/// down, uncovering black along the top and left edges (mean SSIM 0.66 ->
+/// 0.86 with the parent's depth). Camellya 3366882745 0.829 -> 0.936.
 fn inherited_parallax(objects: &[Value], obj: &Value) -> Option<[f32; 2]> {
     let by_id: HashMap<i64, &Value> = objects
         .iter()

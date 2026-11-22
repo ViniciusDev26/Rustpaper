@@ -221,13 +221,69 @@ const __rp = (() => {
     const RAD2DEG = 180 / Math.PI;
     const LAYER_FIELDS = { origin: 'vec3', scale: 'vec3', angles: 'vec3', color: 'vec3',
                            alpha: 'float', brightness: 'float', visible: 'bool', text: 'string',
-                           playing: 'bool' };
+                           playing: 'bool', anim_time: 'float' };
 
     function stub(extra) {
         const o = { play() {}, pause() {}, stop() {}, isPlaying() { return false; },
                     setFrame() {}, getFrame() { return 0; }, frameCount: 1, fps: 0, rate: 1,
                     duration: 0, ...extra };
         return o;
+    }
+
+    // Texture animation (sprite sheet / GIF flipbook) of an image layer.
+    // `st.frames` holds its frame durations (from the .tex); layers without
+    // one get the stub. The clock only runs here once a script asked for the
+    // animation: it starts at engine.runtime (the phase the renderer was
+    // drawing from the scene clock) and is reported as `anim_time`, which
+    // then drives the layer's flipbook instead of the scene clock.
+    // WE semantics: stop() rewinds to the first frame and holds it, pause()
+    // holds the current frame, play() resumes; the animation loops.
+    // Chainsaw Man 3577990983's five fireworks stop themselves on their last
+    // frame and replay after a random delay; frame 0 of the sheet is empty,
+    // so a stopped firework is invisible (WE's capture shows the sky empty
+    // between bursts; we played all five non-stop).
+    const textureAnims = [];
+    function textureAnimation(st) {
+        const frames = Array.isArray(st.frames) ? st.frames.map((d) => Math.max(num(d, 0), 0)) : [];
+        const total = frames.reduce((a, b) => a + b, 0);
+        if (frames.length < 2 || !(total > 0)) return stub();
+        if (st.anim) return st.anim.api;
+        const a = { t: engine.runtime % total, playing: true, rate: 1 };
+        const frameAt = (t) => {
+            let k = 0;
+            for (; k < frames.length - 1; k++) {
+                if (t < frames[k]) break;
+                t -= frames[k];
+            }
+            return k;
+        };
+        const startOf = (n) => frames.slice(0, n).reduce((s, d) => s + d, 0);
+        a.advance = (dt) => {
+            if (a.playing) a.t = (a.t + dt * a.rate) % total;
+            if (a.t < 0) a.t += total;
+            st.anim_time = a.t;
+        };
+        a.api = {
+            frameCount: frames.length,
+            duration: total,
+            fps: frames.length / total,
+            get rate() { return a.rate; },
+            set rate(v) { a.rate = num(v, a.rate); },
+            play() { a.playing = true; },
+            pause() { a.playing = false; },
+            stop() { a.playing = false; a.t = 0; st.anim_time = 0; },
+            isPlaying() { return a.playing; },
+            getFrame() { return frameAt(a.t); },
+            setFrame(n) {
+                const k = Math.max(0, Math.min(Math.floor(num(n, 0)), frames.length - 1));
+                a.t = startOf(k);
+                st.anim_time = a.t;
+            },
+        };
+        st.anim = a;
+        st.anim_time = a.t;
+        textureAnims.push(a);
+        return a.api;
     }
 
     class Layer {
@@ -259,7 +315,7 @@ const __rp = (() => {
         getParent() { const p = byId.get(this._s.parent); return p ? p.layer : null; }
         getChildren() { return layers.filter((s) => s.parent === this._s.id).map((s) => s.layer); }
         getAnimation() { return stub(); }
-        getTextureAnimation() { return stub(); }
+        getTextureAnimation() { return textureAnimation(this._s); }
         getEffect() { return { visible: true, getMaterial() { return {}; } }; }
         getEffectCount() { return 0; }
         getAnimationLayer() { return stub(); }
@@ -274,6 +330,7 @@ const __rp = (() => {
     function addLayer(st) {
         st.origin0 = st.origin.slice();
         if (st.playing === undefined) st.playing = null; // a diff baseline
+        st.anim_time = null; // set once a script uses getTextureAnimation()
         st.layer = new Layer(st);
         layers.push(st);
         byId.set(st.id, st);
@@ -529,6 +586,7 @@ const __rp = (() => {
     function applyFrame(f) {
         engine.frametime = num(f.dt, 0);
         engine.runtime = num(f.time, 0);
+        for (const a of textureAnims) a.advance(engine.frametime);
         engine.timeOfDay = num(f.daytime, 0);
         clockMs = num(f.clock_ms, 0);
         nowMs = engine.runtime * 1000;

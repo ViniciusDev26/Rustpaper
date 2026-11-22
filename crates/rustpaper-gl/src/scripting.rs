@@ -63,6 +63,9 @@ pub struct Changes {
     pub alpha: HashMap<i64, f32>,
     pub brightness: HashMap<i64, f32>,
     pub text: HashMap<i64, String>,
+    /// Texture animation clocks of the layers whose flipbook a script
+    /// controls (`getTextureAnimation()`), seconds into the sheet.
+    pub anim_time: HashMap<i64, f32>,
     /// Effect constants (`effects[n].passes[p].constantshadervalues.key`).
     pub constants: Vec<ConstantChange>,
     /// (object id, effect index, shown).
@@ -162,6 +165,7 @@ impl Scripts {
         user_properties: &Map<String, Value>,
         canvas: [f32; 2],
         screen: [f32; 2],
+        flipbooks: &HashMap<i64, Vec<f32>>,
     ) -> Result<Option<Scripts>, String> {
         let mut scripts = Vec::new();
         let mut targets = Vec::new();
@@ -181,7 +185,14 @@ impl Scripts {
         if scripts.is_empty() {
             return Ok(None);
         }
-        let layers: Vec<LayerState> = objects.iter().filter_map(layer_state).collect();
+        let mut layers: Vec<LayerState> = objects.iter().filter_map(layer_state).collect();
+        // getTextureAnimation() needs the sheet's frames (only the renderer
+        // has parsed the .tex)
+        for l in &mut layers {
+            if let Some(f) = flipbooks.get(&l.id) {
+                l.frames = f.clone();
+            }
+        }
         let objs: HashMap<i64, Obj> = layers
             .iter()
             .map(|l| {
@@ -333,7 +344,11 @@ impl Scripts {
                 visible,
                 text,
                 playing,
+                anim_time,
             } = u;
+            if let Some(t) = anim_time {
+                ch.anim_time.insert(id, t);
+            }
             if let Some(p) = playing {
                 ch.sound_playing.retain(|s| s.0 != id);
                 ch.sound_playing.push((id, p));
@@ -754,6 +769,7 @@ fn layer_state(obj: &Value) -> Option<LayerState> {
         brightness: value::get_f32(obj, "brightness", 1.0),
         visible: value::get_bool(obj, "visible", true),
         text,
+        frames: Vec::new(),
     })
 }
 
