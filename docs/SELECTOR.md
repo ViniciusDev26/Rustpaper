@@ -58,8 +58,10 @@ Built from `general.properties` of project.json, in WE's `order`:
   flag, `no_scripts` and `volume`; the panel reopens the last wallpaper at startup.
 - One engine at a time: applying a wallpaper starts the new engine, and
   2.5 s later (after its first frame, so the desktop never flashes) kills
-  the previous one and any other `rustpaper` process of the user, e.g. the
-  engine a closed selector session left running.
+  the previous one and every `rustpaper` process of the user this selector
+  did not start (not its child), e.g. the engine a closed selector session
+  left running. Its own children are only stopped by the handover: keeping
+  "the newest engine" instead raced when applying twice within 2.5 s.
 - Autostart: `~/.config/autostart/rustpaper.desktop` runs the engine with the
   last wallpaper and its `--props` file (arguments quoted per the Desktop Entry
   spec).
