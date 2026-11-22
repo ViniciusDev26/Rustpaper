@@ -147,6 +147,10 @@ struct Layer {
     anim: Option<LayerAnim>,
     /// Animated image (GIF scenes, `spritesheet` combo): frames over images.
     flipbook: Option<Flipbook>,
+    /// `alignment` of an image layer: which point of the quad sits at its
+    /// origin, as a shift of the quad in units of its size (see
+    /// `anchor_shift`). [0, 0] = centered.
+    align: [f32; 2],
     /// The flipbook's own clock once a SceneScript controls it
     /// (`getTextureAnimation()`: play / stop / setFrame); None: scene time.
     anim_time: Option<f32>,
@@ -774,7 +778,7 @@ impl SceneRenderer {
             .iter()
             .filter(|l| l.visible)
             .filter(|l| {
-                let inv = math::invert(&l.world);
+                let inv = math::invert(&l.quad_world());
                 let lx = inv[0] * c[0] + inv[4] * c[1] + inv[12];
                 let ly = inv[1] * c[0] + inv[5] * c[1] + inv[13];
                 lx.abs() <= l.size[0] / 2.0 && ly.abs() <= l.size[1] / 2.0
@@ -1109,6 +1113,12 @@ impl SceneRenderer {
                 _ => self.world_of(obj),
             },
             size,
+            align: match kind {
+                LayerKind::Image if obj.get("text").is_none_or(|t| t.is_null()) => {
+                    anchor_shift(obj.get("alignment").and_then(|a| a.as_str()))
+                }
+                _ => [0.0; 2],
+            },
             color: value::get_vec3(obj, "color", [1.0; 3]),
             alpha: value::get_f32(obj, "alpha", 1.0),
             brightness: value::get_f32(obj, "brightness", 1.0),
@@ -2068,7 +2078,7 @@ impl SceneRenderer {
     /// Layer without effects: material straight onto the scene.
     fn draw_direct(&mut self, gl: &glow::Context, i: usize, frame: FrameInput) {
         let l = &self.layers[i];
-        let model = l.world;
+        let model = l.quad_world();
         let proj = self.view_proj_at(l.parallax);
         let mvp = math::mul(&proj, &model);
         let verts = math::quad(l.size[0], l.size[1], 1.0, 1.0);
@@ -2196,7 +2206,7 @@ impl SceneRenderer {
             && !self.referenced.contains(&self.layers[i].id))
         .then(|| {
             let l = &self.layers[i];
-            let mvp = math::mul(&self.view_proj_at(l.parallax), &l.world);
+            let mvp = math::mul(&self.view_proj_at(l.parallax), &l.quad_world());
             let mut q = math::quad(uw, uh, 1.0, 1.0);
             for c in q.chunks_mut(5) {
                 let p = [c[0], c[1], c[2], 1.0];
@@ -2406,7 +2416,7 @@ impl SceneRenderer {
                 ),
                 math::quad(self.width as f32, self.height as f32, 1.0, 1.0),
             ),
-            _ => (l.world, math::quad(l.size[0], l.size[1], 1.0, 1.0)),
+            _ => (l.quad_world(), math::quad(l.size[0], l.size[1], 1.0, 1.0)),
         };
         let proj = self.view_proj_at(l.parallax);
         let mvp = math::mul(&proj, &model);
@@ -3373,6 +3383,50 @@ fn is_shape_quad(obj: &Value) -> bool {
         && obj.get("shape").and_then(|s| s.as_str()) == Some("quad")
 }
 
+/// Shift of an image layer's quad, in units of its size (scene y up), that
+/// puts the point named by `alignment` at the layer's origin: "bottom" draws
+/// the quad above its origin, "topleft" below and to the right of it (text
+/// objects have their own alignment). Chainsaw Man 3577990983's dock icons
+/// (y 36.8 in the 4K scene, 102 high, `bottom`): WE draws their centers 43
+/// px above the bottom of its 1080p capture = (36.8 + 102 / 2) / 2, centered
+/// quads put them at 18 px. Persona 3 3151551777's bottom-aligned audio bars
+/// stand on the window's lower edge in WE (row 480 of its mean image, ours
+/// the same with the shift; centered, they were hidden behind the seats).
+fn anchor_shift(alignment: Option<&str>) -> [f32; 2] {
+    let a = alignment.unwrap_or("center").to_ascii_lowercase();
+    let x = if a.contains("left") {
+        0.5
+    } else if a.contains("right") {
+        -0.5
+    } else {
+        0.0
+    };
+    let y = if a.contains("bottom") {
+        0.5
+    } else if a.contains("top") {
+        -0.5
+    } else {
+        0.0
+    };
+    [x, y]
+}
+
+impl Layer {
+    /// World matrix of the layer's quad: `world` with the `alignment` shift.
+    /// Only the layer's own geometry moves; children keep `world`.
+    fn quad_world(&self) -> Mat4 {
+        if self.align == [0.0; 2] {
+            return self.world;
+        }
+        let d = [
+            self.align[0] * self.size[0],
+            self.align[1] * self.size[1],
+            0.0,
+        ];
+        math::mul(&self.world, &math::model(d, 0.0, [1.0; 3]))
+    }
+}
+
 /// Parallax of a child object: the `parallaxDepth` of the nearest ancestor
 /// that sets one, which overrides the child's own. Lucy 3521337568's planet
 /// (`parallaxDepth` 0.5, child of group 556 at 0, pointer at (0, 0)):
@@ -3828,6 +3882,17 @@ mod tests {
             Some([0.12, 0.12])
         );
         assert_eq!(inherited_parallax(&objects, &objects[3]), None);
+    }
+
+    #[test]
+    fn alignment_names_the_point_at_the_origin() {
+        assert_eq!(anchor_shift(None), [0.0, 0.0]);
+        assert_eq!(anchor_shift(Some("center")), [0.0, 0.0]);
+        // scene y is up: a bottom-aligned quad is drawn above its origin
+        assert_eq!(anchor_shift(Some("bottom")), [0.0, 0.5]);
+        assert_eq!(anchor_shift(Some("topleft")), [0.5, -0.5]);
+        assert_eq!(anchor_shift(Some("right")), [-0.5, 0.0]);
+        assert_eq!(anchor_shift(Some("bottomright")), [-0.5, 0.5]);
     }
 
     #[test]
