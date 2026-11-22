@@ -44,40 +44,72 @@ missing.
 
 | Desktop | Adapter | Stage | Status |
 |---|---|---|---|
-| Hyprland 0.56+ | `desktop/hyprland.rs` | headless outputs `RP-<output>`, pinned workspaces, window rules | in use, measured |
-| Sway 1.11+ | `desktop/sway.rs` | `create_output` headless outputs, `workspace ... output`, `for_window` | written against sway-ipc(7), unit-tested on recorded replies; not run on a live Sway yet |
-| KDE, niri, others with layer-shell | none yet | the private stage (below) avoids needing compositor-specific hiding | planned |
-| GNOME | none | no layer-shell: needs a Shell extension to show the wallpaper | not planned |
+| any with layer-shell | the private stage (below) hosts WE; the adapter only reports monitors and coverage | private | verified on Hyprland (with WE, 4K + 1080p at 60 fps) and on a nested Sway 1.12 (test X client) |
+| Hyprland 0.56+ | `desktop/hyprland.rs` | private, or headless outputs `RP-<output>` + window rules | both stages verified with WE |
+| Sway 1.11+ | `desktop/sway.rs` | private, or `create_output` + `workspace ... output` + `for_window` | both stages verified on a nested Sway 1.12 with a test X client (class `steam_app_431960`); not yet with WE on a real Sway session |
+| KDE, niri, others | `desktop/generic.rs` (monitors from `wl_output`, no coverage) | private only | not run yet |
+| GNOME | none | none | no layer-shell: needs a Shell extension to show the wallpaper |
 
 What every adapter can rely on: `zwlr-layer-shell` to show the wallpaper
 and `ext-image-copy-capture` + `ext-foreign-toplevel-list` to capture WE's
 windows. The mirror uses only these.
 
-### The private stage (planned)
+### The private stage (`stage.rs`)
 
-Today's stages borrow the user's compositor (headless outputs, rules). The
-general answer is a Stage that is Rustpaper's own:
-- **What it is.** A minimal headless compositor (Smithay) with its own
-  XWayland, where WE opens its windows. Window sizes, focus and visibility
-  are then ours, without rules or repairs.
-- **What it gives.** WE's buffers reach us directly, without capture, and
-  pointer motion can be injected into WE: the missing cursor interaction.
-- **Adapters shrink.** Any compositor with layer-shell then only needs a
-  `Desktop` adapter, or none at all, with a generic one built on
-  `wlr-foreign-toplevel`.
+The desktop stages borrow the user's compositor: headless outputs, rules,
+and constant repairs. The private stage is Rustpaper's own instead:
+- **What it is.** A headless Smithay compositor on its own thread, with its
+  own XWayland. WE opens its windows there.
+- **Monitors.** Each monitor is a `wl_output` of ours, so WE sees the real
+  monitors.
+- **Windows.** The X11 window manager gives `rustpaper-<output>` its
+  monitor's exact geometry. WE's other windows (UI, dialogs) are mapped
+  and shown nowhere. Nothing needs hiding, rules or repairs: Hyprland sees
+  no WE window at all.
+- **Buffers.** Each commit of a wallpaper window hands its dmabuf to the
+  main thread, which attaches it as-is to the monitor's layer-shell surface
+  on the user's compositor: no capture, no copy. The client buffer goes
+  back to WE once the user's compositor released it, and shm buffers are
+  copied.
+- **Formats.** Our XWayland is offered exactly the dmabuf layouts the
+  user's compositor imports, read from its `zwp_linux_dmabuf_v1` default
+  feedback (Hyprland's main device gave XWayland glamor).
+- **Measured.** WE on the private stage drew 60.0 fps on both monitors (4K
+  and 1080p), with no WE window in Hyprland (2026-11-22).
 
-Prerequisites, in order of risk:
-1. **WE must connect to our X display.** WE inherits Steam's environment, so
-   this needs a Steam launch option for WE, for example a
-   `rustpaper-we-launch %command%` wrapper that sets `DISPLAY` when the
-   engine runs and changes nothing otherwise. Set it once (Steam rewrites
-   `localconfig.vdf` while it runs, so not behind its back).
-2. **Explicit sync on NVIDIA.** XWayland on the proprietary driver needs
-   `wp_linux_drm_syncobj`. The stage must implement it and forward the sync
-   points to the host compositor (Hyprland advertises the protocol).
-3. **Buffer forwarding.** WE's dmabufs must be re-imported on the host
-   (same GPU) and held until the host releases them; shm needs a fallback
-   copy.
+Choosing it: `state.json` `stage` (`auto`, `desktop` or `private`), or
+`--stage`. `auto` picks the private stage once WE's launch option is set
+up, or when the desktop adapter has no stage of its own.
+
+**Pointing WE at our display.** WE inherits Steam's environment. Its Steam
+launch option `"<rustpaper>" we-launch %command%` (`launch.rs`) runs us
+first:
+- with a private stage up (its display in
+  `$XDG_RUNTIME_DIR/rustpaper/stage-display`), we set `DISPLAY` to it,
+  drop `WAYLAND_DISPLAY` and `exec` Steam's command;
+- otherwise we change nothing. Verified: WE launched through the wrapper
+  with no stage behaves as before.
+
+`rustpaper setup-steam` writes that option into every account's
+`localconfig.vdf` (`rustpaper_core::steam`, a KeyValues reader/writer whose
+output reproduced the user's real file byte for byte). Steam keeps that
+file in memory and rewrites it on exit, so the command closes Steam
+(`steam -shutdown`), writes the option with a one-time backup, and starts
+Steam again. When WE runs on another display at engine start, the engine
+restarts it so Steam relaunches it onto the stage.
+
+Not yet: explicit sync (`wp_linux_drm_syncobj`) is not offered. XWayland
+then uses implicit sync, which showed no corruption on the NVIDIA driver in
+the tests. Cursor injection into our XWayland (eye tracking, parallax) is
+now possible, but not done yet.
+
+**Stopping WE cleanly** (`we::restart`). Killing only `wallpaper64.exe`
+left Wine's helpers (`wineserver`, `winedevice.exe`, ...) and the embedded
+Chromium's `CrGpuMain` alive in WE's Steam container. Steam then refused
+every new launch: `WaitingPrevProcess` -> `AppError_16` in
+`~/.local/share/Steam/logs/console_log.txt`, until those processes were
+gone. The engine now stops every process carrying `SteamAppId=431960` or
+WE's Wine prefix in its environment (SIGTERM, then SIGKILL after 10 s).
 
 ## How it works (Hyprland stage)
 
