@@ -46,18 +46,31 @@ behaviour in comments, with the measurement or observation that justified it.
   - `project`: project.json.
   - `state`: `~/.config/rustpaper/state.json`, the selector's decisions,
     which the engine reads.
+  - `steam`: Steam's `localconfig.vdf` (KeyValues reader/writer), for WE's
+    launch option.
   - `performance`: WE's quality settings and the Playback conditions as
     data.
 - **`rustpaper-engine`**: binary **`rustpaper`**, the live wallpaper.
-  - `main.rs`: one headless output + workspace + WE window per monitor, the
-    watchdog (arrangement and Playback rules), `--service` mode (state.json,
-    SIGHUP reload).
+  - `main.rs`: the core, identical on every desktop. One long-lived WE
+    window per monitor, the watchdog (Stage repairs, WE restarts, Playback
+    rules), reload.
+  - `config.rs`: CLI and `--service` mode (state.json, SIGHUP reload).
+  - `desktop/`: **the only compositor-specific code**, behind the
+    `Desktop` and `Stage` traits (`mod.rs`). Adapters: `hyprland.rs`
+    (IPC; also re-applies the stage on `configreloaded`), `sway.rs`, and
+    `generic.rs` (any layer-shell compositor, private stage only). A new
+    desktop is a new adapter; never call a compositor from the core.
+  - `stage.rs`: the private stage, our own Smithay compositor + XWayland
+    hosting WE; its dmabufs go straight to the layer surfaces.
+  - `launch.rs`: `rustpaper we-launch %command%` (WE's Steam launch option,
+    points WE at the private stage) and `rustpaper setup-steam` (writes it).
+  - Debugging: `RUSTPAPER_NO_WE=1` runs only the stage and the mirror (test
+    with any X client titled `rustpaper-<output>`).
   - `we.rs`: WE under Proton (`-control` commands through `nsenter` into its
     container, config.json tweaks, starting it through Steam).
   - `mirror.rs`: ext-image-copy-capture of WE's windows into GBM dmabufs,
     shown on layer-shell surfaces.
   - `gbm.rs`: minimal libgbm FFI.
-  - `hyprland.rs`: IPC socket client (also what covers each monitor).
   - `power.rs`: on battery or not.
 - **`rustpaper-selector`**: Tauri v2 app, binary **`rustpaper-selector`**.
   The UI lives in `ui/`: React + TypeScript + Tailwind v4 (Vite), Zustand
