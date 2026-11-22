@@ -82,6 +82,11 @@ jobs:
       - uses: actions/checkout@v4
       - run: cargo fmt --all -- --check
 
+  # Its own cache: `cargo clippy` only produces check metadata (.rmeta),
+  # useless to the build/test job, and a cache key is saved by whichever job
+  # finishes first. With one shared key, Clippy (fastest) saved first and the
+  # build/test jobs restored metadata only, recompiling everything (Test took
+  # 4m10s compiling after a "cache hit").
   clippy:
     name: Clippy
     needs: image
@@ -89,40 +94,24 @@ jobs:
     container: ${{ needs.image.outputs.image }}
     steps:
       - uses: actions/checkout@v4
-      # Fixed shared-key: otherwise rust-cache keys on the job name and
-      # clippy/build/test each rebuild the deps (wgpu, webkit2gtk-sys, gtk...)
-      # from scratch, even though they run one after another on the same image.
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: rustpaper-ci
+          shared-key: rustpaper-clippy
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-  build:
-    name: Build
+  # Build and test in ONE job: `cargo test` reuses what `cargo build
+  # --all-targets` just compiled (same dev profile) instead of rebuilding the
+  # workspace on another runner. The build step still covers examples and
+  # benches, which `cargo test` doesn't compile.
+  test:
+    name: Build and test
     needs: image
     runs-on: ubuntu-latest
     container: ${{ needs.image.outputs.image }}
     steps:
       - uses: actions/checkout@v4
-      # Fixed shared-key: otherwise rust-cache keys on the job name and
-      # clippy/build/test each rebuild the deps (wgpu, webkit2gtk-sys, gtk...)
-      # from scratch, even though they run one after another on the same image.
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: rustpaper-ci
-      - run: cargo build --workspace --all-targets --verbose
-
-  test:
-    name: Test
-    needs: [image, build]
-    runs-on: ubuntu-latest
-    container: ${{ needs.image.outputs.image }}
-    steps:
-      - uses: actions/checkout@v4
-      # Fixed shared-key: otherwise rust-cache keys on the job name and
-      # clippy/build/test each rebuild the deps (wgpu, webkit2gtk-sys, gtk...)
-      # from scratch, even though they run one after another on the same image.
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: rustpaper-ci
-      - run: cargo test --workspace --verbose
+          shared-key: rustpaper-build
+      - run: cargo build --workspace --all-targets
+      - run: cargo test --workspace
