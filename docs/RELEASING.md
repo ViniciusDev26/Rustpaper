@@ -24,7 +24,7 @@ hand.
 | `docs`, `refactor`, `test`, `ci`, `build`, `chore`, `style` | none (in the CHANGELOG only if feat/fix/perf) |
 
 Scopes are free; the usual ones are the crates and folders: `gl`, `script`,
-`engine`, `selector`, `core`, `harness`, `packaging`, `ci`, `docs`.
+`engine`, `selector`, `core`, `workshop`, `packaging`, `ci`, `docs`.
 Examples: `feat(gl): compose layers group their children`,
 `fix(script): camera zoom from setCameraTransforms`.
 

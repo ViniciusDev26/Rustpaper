@@ -24,7 +24,6 @@ export const Wallpapers = z.array(Wallpaper);
 export const Settings = z.object({
   last_id: z.string().nullable(),
   autostart: z.boolean(),
-  no_scripts: z.boolean(),
   volume: z.number().int().min(0).max(100),
   wallpaper_theme: z.boolean().default(false),
 });

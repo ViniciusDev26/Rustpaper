@@ -80,10 +80,6 @@ function Header({ tab, setTab }: { tab: Tab; setTab: (t: Tab) => void }) {
           </select>
         </>
       )}
-      <label className={check} title="SceneScripts run in a sandbox (no files, network or processes)">
-        <input type="checkbox" checked={settings.scripts} onChange={(e) => settings.setScripts(e.currentTarget.checked)} />
-        Run scripts
-      </label>
       <VolumeSlider />
       {settings.omarchy && (
         <label className={check} title="Generate an Omarchy theme from each applied wallpaper's colors (like Aether) and apply it to the whole desktop">

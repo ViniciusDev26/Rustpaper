@@ -1,10 +1,10 @@
 // Minimal Hyprland IPC client (request socket only).
 //
-// The wallpaper lives on a layer surface that never receives pointer input, so
-// the compositor is asked directly: where the cursor is (cursor-reactive
-// effects, parallax) and which outputs are covered by a fullscreen window
-// (pause rendering there). On other compositors every call returns None and
-// the engine falls back to "cursor at the center, never paused".
+// The engine needs the compositor for more than a wallpaper usually does:
+// it creates headless outputs where WE's windows render out of sight, pins
+// workspaces and window rules to them, and asks which real monitors are
+// covered by a fullscreen window (pause there). The Lua dispatchers used here
+// (`hl.dsp.*`, `hl.window_rule`, ...) need Hyprland 0.56+.
 
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
@@ -31,7 +31,7 @@ fn request(cmd: &str) -> Option<String> {
     Some(out)
 }
 
-fn json(cmd: &str) -> Option<serde_json::Value> {
+pub fn json(cmd: &str) -> Option<serde_json::Value> {
     serde_json::from_str(&request(cmd)?).ok()
 }
 
@@ -57,18 +57,10 @@ pub fn disable_layer_animations() -> bool {
         .any(|r| request(r).is_some_and(|reply| reply.trim() == "ok"))
 }
 
-/// Cursor in global logical coordinates.
-pub fn cursor() -> Option<(f64, f64)> {
-    let v = json("j/cursorpos")?;
-    Some((v.get("x")?.as_f64()?, v.get("y")?.as_f64()?))
-}
-
 /// One output as Hyprland sees it.
 #[derive(Debug, Clone)]
 pub struct Monitor {
     pub name: String,
-    /// logical rectangle (x, y, w, h)
-    pub rect: (f64, f64, f64, f64),
     /// a fullscreen window is shown on its active workspace
     pub covered: bool,
 }
@@ -88,22 +80,55 @@ pub fn monitors() -> Option<Vec<Monitor>> {
         mons.as_array()?
             .iter()
             .filter_map(|m| {
-                let scale = m.get("scale")?.as_f64()?.max(0.1);
-                let (w, h) = (m.get("width")?.as_f64()?, m.get("height")?.as_f64()?);
-                // `transform` 1/3/5/7 rotate by 90 degrees: swap the axes
-                let rotated = m.get("transform").and_then(|t| t.as_i64()).unwrap_or(0) % 2 == 1;
-                let (lw, lh) = if rotated {
-                    (h / scale, w / scale)
-                } else {
-                    (w / scale, h / scale)
-                };
                 let ws = m.pointer("/activeWorkspace/id").and_then(|i| i.as_i64());
                 Some(Monitor {
                     name: m.get("name")?.as_str()?.to_string(),
-                    rect: (m.get("x")?.as_f64()?, m.get("y")?.as_f64()?, lw, lh),
                     covered: ws.is_some_and(|w| fullscreen_ws.contains(&w)),
                 })
             })
             .collect(),
     )
+}
+
+/// Runs a request that answers "ok" on success (`dispatch ...`, `eval ...`,
+/// `output ...`).
+pub fn command(cmd: &str) -> bool {
+    request(cmd).is_some_and(|reply| reply.trim() == "ok")
+}
+
+/// `hyprctl dispatch <lua>`, e.g. `hl.dsp.focus({ ... })`.
+pub fn dispatch(lua: &str) -> bool {
+    command(&format!("dispatch {lua}"))
+}
+
+/// `hyprctl eval <lua>`, e.g. `hl.window_rule({ ... })`.
+pub fn eval(lua: &str) -> bool {
+    command(&format!("eval {lua}"))
+}
+
+/// Every window, as `hyprctl clients -j` lists them.
+pub fn clients() -> Vec<serde_json::Value> {
+    json("j/clients")
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default()
+}
+
+/// Every output, as `hyprctl monitors -j` lists them.
+pub fn monitors_raw() -> Vec<serde_json::Value> {
+    json("j/monitors")
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default()
+}
+
+/// Address of the focused window, if any.
+pub fn active_window() -> Option<String> {
+    json("j/activewindow")?
+        .get("address")?
+        .as_str()
+        .map(String::from)
+        .filter(|a| !a.is_empty())
+}
+
+pub fn create_headless(name: &str) -> bool {
+    command(&format!("output create headless {name}"))
 }

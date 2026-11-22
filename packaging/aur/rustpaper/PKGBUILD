@@ -5,16 +5,13 @@
 pkgname=rustpaper
 pkgver=0.2.0 # x-release-please-version
 pkgrel=1
-pkgdesc="Wallpaper Engine scene and video wallpapers on Wayland (live engine + selector)"
+pkgdesc="Wallpaper Engine wallpapers on Wayland: the real WE under Proton, mirrored onto the desktop (+ selector)"
 arch=('x86_64')
 url="https://github.com/ViniciusDev26/Rustpaper"
 license=('MIT')
 depends=('gcc-libs' 'glibc' 'gtk3' 'libglvnd' 'libxkbcommon' 'wayland' 'webkit2gtk-4.1'
-         'ffmpeg' 'vulkan-icd-loader')
+         'mesa' 'util-linux' 'hyprland' 'steam')
 makedepends=('cargo' 'pkgconf' 'nodejs' 'npm')
-optdepends=('pipewire: audio-reactive wallpapers (pw-record)'
-            'hyprland: pause while a window is fullscreen, cursor effects'
-            'steam: Wallpaper Engine (its assets and Workshop wallpapers are required)')
 conflicts=('rustpaper-bin')
 source=("$pkgname-$pkgver.tar.gz::https://github.com/ViniciusDev26/Rustpaper/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=('SKIP')
@@ -33,13 +30,12 @@ build() {
     export RUSTUP_TOOLCHAIN=stable
     export CARGO_TARGET_DIR=target
     cargo build --frozen --release \
-        -p rustpaper-engine -p rustpaper-selector -p rustpaper-gl -p rustpaper-script \
-        -p rustpaper-workshop --bins
+        -p rustpaper-engine -p rustpaper-selector -p rustpaper-workshop --bins
 }
 
 package() {
     cd "Rustpaper-$pkgver"
-    for b in rustpaper rustpaper-selector rustpaper-render rustpaper-script-worker rustpaper-workshop; do
+    for b in rustpaper rustpaper-selector rustpaper-workshop; do
         install -Dm755 "target/release/$b" "$pkgdir/usr/bin/$b"
     done
     # Steamworks client library (bundled by steamworks-sys, copied by the
