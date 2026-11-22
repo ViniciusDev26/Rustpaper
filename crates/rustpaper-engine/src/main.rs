@@ -26,8 +26,10 @@
 mod config;
 mod desktop;
 mod gbm;
+mod launch;
 mod mirror;
 mod power;
+mod stage;
 mod we;
 
 use std::os::fd::AsRawFd;
@@ -38,7 +40,8 @@ use std::time::{Duration, Instant};
 use config::{Config, Source};
 use desktop::{Coverage, Desktop, Output, Stage};
 use mirror::Mirrors;
-use rustpaper_core::state::{Action, Playback};
+use rustpaper_core::state::{Action, Playback, StageChoice};
+use stage::{PrivateStage, StageEvent};
 
 /// Watchdog period.
 const TICK: Duration = Duration::from_secs(2);
@@ -82,14 +85,31 @@ fn fail(msg: impl std::fmt::Display) -> ! {
 }
 
 fn main() {
+    // the Steam launch option for WE (launch.rs): exec, never returns
+    let argv: Vec<String> = std::env::args().collect();
+    if argv.get(1).map(String::as_str) == Some("we-launch") {
+        launch::run(&argv[2..]);
+    }
+    if argv.get(1).map(String::as_str) == Some("setup-steam") {
+        match launch::setup_steam() {
+            Ok(()) => std::process::exit(0),
+            Err(e) => fail(e),
+        }
+    }
     let (source, only) = config::parse_args();
     let mut cfg = match &source {
         Source::Args(c) => c.clone(),
-        Source::Service => config::service_config().unwrap_or_else(|e| {
-            // nothing to show is not a failure (the service must not loop)
-            eprintln!("rustpaper: {e}");
-            std::process::exit(0);
-        }),
+        Source::Service(stage) => {
+            let mut c = config::service_config().unwrap_or_else(|e| {
+                // nothing to show is not a failure (the service must not loop)
+                eprintln!("rustpaper: {e}");
+                std::process::exit(0);
+            });
+            if let Some(s) = stage {
+                c.stage = *s;
+            }
+            c
+        }
     };
     for sig in [libc::SIGTERM, libc::SIGINT] {
         // SAFETY: the handler only stores to an atomic.
@@ -98,17 +118,13 @@ fn main() {
     // SAFETY: same.
     unsafe { libc::signal(libc::SIGHUP, on_reload as *const () as libc::sighandler_t) };
 
-    let desktop = desktop::detect().unwrap_or_else(|e| fail(e));
-    let stage = desktop.stage().unwrap_or_else(|| {
-        fail(format!(
-            "{} has no Stage to host Wallpaper Engine's windows yet",
-            desktop.name()
-        ))
-    });
+    // the user's compositor first: the generic adapter reads its outputs
+    let (mut mirrors, mut queue, conn) = Mirrors::connect().unwrap_or_else(|e| fail(e));
+    let qh = queue.handle();
+    let desktop = desktop::detect(mirrors.wl_outputs()).unwrap_or_else(|e| fail(e));
     eprintln!("desktop: {}", desktop.name());
     // before any layer surface exists: no compositor fade when switching
     desktop.prepare_layers();
-
     let outputs: Vec<Output> = desktop
         .outputs()
         .into_iter()
@@ -117,15 +133,55 @@ fn main() {
     if outputs.is_empty() {
         fail("no monitor to show the wallpaper on");
     }
-    if !we::ensure_running(&cfg.performance) {
+
+    // RUSTPAPER_NO_WE=1 (debugging): only the stage and the mirror run, for
+    // testing them with any X client (e.g. a window titled rustpaper-DP-1).
+    let we_on = std::env::var_os("RUSTPAPER_NO_WE").is_none();
+    // Where WE's windows live: Rustpaper's own compositor (private stage),
+    // or the desktop adapter's stage inside the user's compositor.
+    let private = match cfg.stage {
+        StageChoice::Private => true,
+        StageChoice::Desktop => false,
+        StageChoice::Auto => launch::configured() || desktop.stage().is_none(),
+    };
+    let private_stage = if private {
+        if we_on && !launch::configured() {
+            fail(
+                "the private stage needs Wallpaper Engine's Steam launch option: run `rustpaper setup-steam` once",
+            );
+        }
+        Some(PrivateStage::start(&outputs, mirrors.host_dmabuf.clone()).unwrap_or_else(|e| fail(e)))
+    } else {
+        None
+    };
+    let stage: &dyn Stage = match &private_stage {
+        Some(p) => p,
+        None => desktop.stage().unwrap_or_else(|| {
+            fail(format!(
+                "{} cannot host Wallpaper Engine's windows: use the private stage (`rustpaper setup-steam`)",
+                desktop.name()
+            ))
+        }),
+    };
+
+    if we_on && !we::ensure_running(&cfg.performance) {
         fail("Wallpaper Engine is not running (start it from Steam)");
     }
-    stage.hide_we_ui();
-    // a previous instance may have paused WE (all monitors covered)
-    we::control(&["-control", "play"]);
+    if we_on
+        && let Some(p) = &private_stage
+        && we::display().as_deref() != Some(p.display())
+    {
+        // started before this stage (or without it): Steam starts it again
+        // through the launch option, which points it at our display
+        eprintln!("stage: moving Wallpaper Engine onto the private stage");
+        we::restart(&cfg.performance);
+    }
+    if we_on {
+        stage.hide_we_ui();
+        // a previous instance may have paused WE (all monitors covered)
+        we::control(&["-control", "play"]);
+    }
 
-    let (mut mirrors, mut queue, conn) = Mirrors::connect().unwrap_or_else(|e| fail(e));
-    let qh = queue.handle();
     let mut targets: Vec<Target> = outputs
         .into_iter()
         .filter_map(|output| {
@@ -137,9 +193,11 @@ fn main() {
                 attempts: 0,
                 configured: false,
             };
-            open_window(&cfg.project, &mut t);
+            if we_on {
+                open_window(&cfg.project, &mut t);
+            }
             mirrors
-                .add(&qh, &t.output.name, &t.title)
+                .add(&qh, &t.output.name, &t.title, private_stage.is_none())
                 .map_err(|e| eprintln!("{}: {e}", t.output.name))
                 .ok()?;
             Some(t)
@@ -151,12 +209,25 @@ fn main() {
     let mut stats = Instant::now();
     let fd = conn.backend().poll_fd().as_raw_fd();
     while !QUIT.load(Ordering::SeqCst) {
-        if let Err(e) = dispatch(&mut queue, &mut mirrors, fd) {
+        let stage_fd = private_stage.as_ref().map(|p| p.notify_fd());
+        if let Err(e) = dispatch(&mut queue, &mut mirrors, fd, stage_fd) {
             eprintln!("error: Wayland connection lost: {e}");
             break;
         }
+        if let Some(p) = &private_stage {
+            // WE's frames to the monitors; released buffers back to WE
+            for event in p.drain() {
+                match event {
+                    StageEvent::Frame(frame) => mirrors.show(&qh, frame),
+                    StageEvent::BufferGone(key) => mirrors.forget(key),
+                }
+            }
+            for key in mirrors.take_released() {
+                p.release(key);
+            }
+        }
         mirrors.pump(&qh);
-        if RELOAD.swap(false, Ordering::SeqCst) && matches!(source, Source::Service) {
+        if RELOAD.swap(false, Ordering::SeqCst) && matches!(source, Source::Service(_)) {
             match config::service_config() {
                 Ok(new) => {
                     reload(stage, &cfg, &new, &mut targets);
@@ -166,7 +237,7 @@ fn main() {
             }
             last_tick = Instant::now() - TICK;
         }
-        if last_tick.elapsed() >= TICK {
+        if we_on && last_tick.elapsed() >= TICK {
             last_tick = Instant::now();
             watchdog(
                 desktop.as_ref(),
@@ -194,7 +265,7 @@ fn main() {
     // The windows and hidden outputs stay for the next engine (closing WE's
     // windows is unreliable, see the top). The last engine out stops WE's
     // wallpapers so they cost nothing while no wallpaper is shown.
-    if !other_engine_running() {
+    if we_on && !other_engine_running() {
         we::control(&["-control", "stop"]);
     }
 }
@@ -244,18 +315,28 @@ fn dispatch(
     queue: &mut wayland_client::EventQueue<Mirrors>,
     mirrors: &mut Mirrors,
     fd: i32,
+    stage_fd: Option<i32>,
 ) -> Result<(), String> {
     queue.dispatch_pending(mirrors).map_err(|e| e.to_string())?;
     queue.flush().map_err(|e| e.to_string())?;
     if let Some(guard) = queue.prepare_read() {
-        let mut pfd = libc::pollfd {
-            fd,
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        // SAFETY: one valid pollfd.
-        let n = unsafe { libc::poll(&mut pfd, 1, 250) };
+        // also wake up for the private stage's frames
+        let mut pfds = [
+            libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: stage_fd.unwrap_or(-1),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+        ];
+        // SAFETY: two valid pollfds (a negative fd is ignored by poll).
+        let n = unsafe { libc::poll(pfds.as_mut_ptr(), 2, 250) };
         if n > 0
+            && pfds[0].revents != 0
             && let Err(e) = guard.read()
             && !harmless(&e)
         {

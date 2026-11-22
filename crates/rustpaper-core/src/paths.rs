@@ -24,6 +24,13 @@ fn steam_roots() -> Vec<PathBuf> {
     roots
 }
 
+/// The Steam install (the root holding `steamapps/` and `userdata/`).
+pub fn steam_root() -> Option<PathBuf> {
+    steam_roots()
+        .into_iter()
+        .find(|r| r.join("steamapps").is_dir())
+}
+
 fn first_existing(env: &str, suffix: &str) -> Option<PathBuf> {
     if let Some(p) = std::env::var_os(env).map(PathBuf::from) {
         return Some(p);
