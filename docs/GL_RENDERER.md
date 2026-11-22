@@ -784,6 +784,56 @@ unchanged WE material shader draws it.
   nearest filtering, as WE draws it at screen resolution (Aesthetic City
   843532366: mean SSIM 0.91 -> 0.9997).
 
+## Shape quads (`"shape": "quad"`)
+
+Objects with no `image`, only `"shape": "quad"` and effects: the editor's
+light shafts presets (`assets/presets/lightshafts`, variants corner /
+radial / linear). All 10 in the corpus (3299228616 x6, 3521337568 x2,
+3287715210, 3288381550) carry one `effects/lightshafts` pass compiled with
+`DIRECTDRAW=1`, and none stores a `size`. Before, they were dropped (not
+even in `--describe`). Now they are layers listed as `"shape quad"`:
+
+- **The DIRECTDRAW pass is the material.** With `DIRECTDRAW=1` the shader
+  ignores `g_Texture0` (albedo = 0), and the point/mask/blend-mode options are
+  `"require": {"DIRECTDRAW": 0}`. It draws itself straight onto the scene
+  with the object's MVP (vertex shader: `g_ModelViewProjectionMatrix`, UVs
+  0..1 across the quad, v down). No layer target, no composite.
+- **It adds light.** The material says `"blending": "normal"` (opaque for an
+  image layer), but the pass outputs rgb = color x intensity x fx with
+  alpha = fx, and WE composites it as `src * alpha + dst` (`SRC_ALPHA, ONE`).
+  3288381550's corner shafts over its flat gray scene (beam region
+  x 1250..1920, 5 stills averaged vs WE's mean, notification box masked):
+  correlation 0.975 and energy ratio 1.06 with `SRC_ALPHA, ONE`; `ONE, ONE`
+  was 3.8x too bright; translucent blending darkened the gray around the
+  rays (negative correlation) where WE only brightens it.
+- **Default size: a square the scene's height on a side.** 3288381550
+  (5824x3264, quad at scale 1): correlation 0.909 / 0.975 / 0.931 at sizes
+  3150 / 3264 / 3380 (with `ONE, ONE` the sweep 2400..3500 peaked at 3264
+  as well). The editor presets agree: their preview scenes are 256 high and the
+  quads are scaled ~2 so the rays cover them. Lucy's region SSIM is flat
+  between 2160 and 3000 and best at 2160 once parallax is right; 3287715210's
+  small radial burst (scale 0.4, on a near-white HDR scene) barely changes
+  anything at any size.
+- **Parallax comes from the parent.** Quads never set `parallaxDepth` and
+  are always children; they take the nearest ancestor's. Lucy 3521337568's
+  shafts hang from group 2065 (depth 0.12) and WE saw the pointer at (0, 0):
+  with depth 1 (our default) the glow was too bright on the left
+  (sky left of the planet, x 0..650: |diff| 26.4, region SSIM 0.814), with
+  the parent's 0.12 the region's mean color matches WE's (62/72/82 vs
+  62/72/83, |diff| 16.6, SSIM 0.834; depth 0 gives 17.8 / 0.831). Only
+  quads inherit it: image children keep the default 1 (see Known gaps).
+
+Harness, against the existing WE captures (2026-11-22): Lucy 3521337568
+0.611 -> 0.710 (beam region |diff| 50.0 -> 18.9, SSIM 0.42 -> 0.86; still
+FAIL from its puppet, planet and grain gaps); 3287715210 0.9647 -> 0.9649
+(PASS, energy 0.917 -> 0.918); Lonely Cat 3299228616 0.860 -> 0.857 (its
+quad is at the right place under the clock, but that area is already ~+15
+brighter than WE without it: the HDR bloom gap in Known gaps);
+3288381550 (excluded: WE's crash dialog sits on its capture) energy ratio
+0.086 -> 0.937, motion SSIM 0.926 -> 0.951: the shafts are the only thing
+that moves in WE's capture. 26 scenes without quads render byte-identical
+(Lofi Cafe 2370927443 differs, but two baseline runs of it differ too).
+
 ## Timeline animations (`keyframes.rs`)
 
 Object properties can carry an `animation` (the editor timeline): one curve
@@ -873,6 +923,13 @@ customization panel (`docs/SELECTOR.md`).
   brighter than WE's (the layer's own passes match; `general.bloom` with
   `hdr: true`). Not calibrated yet.
 - Scene lights (`LIGHTING=1` materials use ambient only).
+- Shape quads: the default size (scene height) is measured on landscape
+  scenes only; a portrait scene could use its width (min side) instead.
+  Shapes other than `quad`, and quads without a `DIRECTDRAW` effect, are
+  skipped with a warning (none in the corpus). Image CHILDREN without
+  `parallaxDepth` still use depth 1; inheriting the parent's, as quads do,
+  is likely right for them too but changes non-quad scenes and needs its
+  own gate.
 - Particles: **the prewarm (`starttime`) runs in real time**: it ignores
   `instanceoverride.rate`. In `make_particles.py pre_rate001` (rate 0.01,
   starttime 10, emission 2/s, life 12), WE shows 0.82x the dots of rate 1
