@@ -742,6 +742,13 @@ unchanged WE material shader draws it.
   a duration (fps = frames / value) matched WE worse (2900431360: motion SSIM
   0.57 vs 0.60).
 - Play modes `loop`, `mirror` (ping-pong), `single` (hold last frame).
+- **Additive layers add their key's difference to the BIND pose** (the
+  bone's local matrix), not to the animation's own first key. Lucy
+  3521337568's intro layer (`single`, root 0.8x and offset at frame 0, the
+  bind pose at its last frame) ended 1.25x bigger and shifted up-left when
+  taken relative to its first key. Mean SSIM 0.611 -> 0.651; the other 6
+  scenes with additive layers unchanged or better (Chainsaw Man motion
+  0.427 -> 0.450).
 - **Attachments (MDAT0001)**: named points on bones (u32, u16 count, then per
   attachment u16 bone, name, f32x16). Scene objects with `"attachment": name`
   and a puppet as `parent` are placed at parent world x current bone pose x

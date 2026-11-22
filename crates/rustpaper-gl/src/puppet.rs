@@ -32,6 +32,9 @@ struct AnimLayer {
 pub struct PuppetRt {
     pub puppet: Puppet,
     bind_inv: Vec<Mat4>,
+    /// Every bone's bind (rest) local transform as a key: what additive
+    /// layers are relative to.
+    bind_keys: Vec<Key>,
     layers: Vec<AnimLayer>,
     /// Interleaved (x, y, z, u, v) of the current pose, for the mesh buffer.
     pub vertices: Vec<f32>,
@@ -64,6 +67,7 @@ impl PuppetRt {
     pub fn new(puppet: Puppet, animation_layers: Option<&Value>) -> PuppetRt {
         let bind_world = world_poses(&puppet, |b| puppet.bones[b].local);
         let bind_inv = bind_world.iter().map(math::invert).collect();
+        let bind_keys = puppet.bones.iter().map(|b| matrix_key(&b.local)).collect();
         let bone_world = bind_world.clone();
         let layers = animation_layers
             .and_then(|l| l.as_array())
@@ -86,6 +90,7 @@ impl PuppetRt {
         let mut rt = PuppetRt {
             puppet,
             bind_inv,
+            bind_keys,
             layers,
             vertices: Vec::new(),
             bone_world,
@@ -139,7 +144,12 @@ impl PuppetRt {
             None
         } else {
             // local transform per bone: bind pose, replaced by the animation
-            // key of the first non-additive layer, additive layers on top
+            // key of a non-additive layer, additive layers on top. An
+            // additive layer adds its key's difference to the BIND pose, not
+            // to its own first key: Lucy 3521337568's intro layer (single,
+            // root key 0.8x and offset at frame 0, the bind pose at its last
+            // frame) must end on the bind pose. Relative to its first key it
+            // ended 1.25x bigger and shifted up-left (mean SSIM 0.61).
             let mut keys: Vec<Option<Key>> = vec![None; p.bones.len()];
             for l in self.layers.iter().filter(|l| l.visible) {
                 let a = &p.animations[l.anim];
@@ -148,9 +158,10 @@ impl PuppetRt {
                         continue;
                     };
                     *slot = Some(match (*slot, l.additive) {
-                        (Some(base), true) => add_key(base, k, first_key(a, b), l.blend),
+                        (Some(base), true) => add_key(base, k, self.bind_keys[b], l.blend),
+                        (None, true) => add_key(self.bind_keys[b], k, self.bind_keys[b], l.blend),
                         (Some(base), false) => mix_key(base, k, l.blend),
-                        (None, _) => k,
+                        (None, false) => k,
                     });
                 }
             }
@@ -228,18 +239,6 @@ fn world_poses(p: &Puppet, local: impl Fn(usize) -> Mat4) -> Vec<Mat4> {
         .collect()
 }
 
-fn first_key(a: &Animation, bone: usize) -> Key {
-    a.tracks
-        .get(bone)
-        .and_then(|t| t.first())
-        .copied()
-        .unwrap_or(Key {
-            position: [0.0; 3],
-            rotation: [0.0; 3],
-            scale: [1.0; 3],
-        })
-}
-
 /// Interpolated key of `bone` at `t` seconds, honoring the play mode.
 fn sample(a: &Animation, bone: usize, t: f32) -> Option<Key> {
     let track = a.tracks.get(bone)?;
@@ -271,7 +270,7 @@ fn mix_key(a: Key, b: Key, t: f32) -> Key {
     }
 }
 
-/// Additive layer: its change relative to its own first key, on top of base.
+/// Additive layer: its change relative to the bind pose `rest`, on top of base.
 fn add_key(base: Key, k: Key, rest: Key, w: f32) -> Key {
     let d = |b: [f32; 3], x: [f32; 3], r: [f32; 3]| [0, 1, 2].map(|i| b[i] + (x[i] - r[i]) * w);
     Key {
@@ -279,6 +278,20 @@ fn add_key(base: Key, k: Key, rest: Key, w: f32) -> Key {
         rotation: d(base.rotation, k.rotation, rest.rotation),
         scale: [0, 1, 2]
             .map(|i| base.scale[i] * (1.0 + (k.scale[i] / rest.scale[i].max(1e-6) - 1.0) * w)),
+    }
+}
+
+/// Inverse of `key_matrix` for a bone's bind matrix (no shear): column
+/// lengths are the scale, Euler angles from the normalized rotation.
+fn matrix_key(m: &Mat4) -> Key {
+    let len = |c: usize| (m[c] * m[c] + m[c + 1] * m[c + 1] + m[c + 2] * m[c + 2]).sqrt();
+    let scale = [len(0), len(4), len(8)];
+    let r = |row: usize, col: usize| m[col * 4 + row] / scale[col].max(1e-12);
+    let ry = (-r(2, 0)).clamp(-1.0, 1.0).asin();
+    Key {
+        position: [m[12], m[13], m[14]],
+        rotation: [r(2, 1).atan2(r(2, 2)), ry, r(1, 0).atan2(r(0, 0))],
+        scale,
     }
 }
 
@@ -356,6 +369,35 @@ mod tests {
         assert!((rt.vertices[0] - 10.0).abs() < 1e-4, "frame 0 = bind pose");
         rt.update(0.5); // halfway between keys: +2
         assert!((rt.vertices[0] - 12.0).abs() < 1e-3, "{}", rt.vertices[0]);
+    }
+
+    #[test]
+    fn matrix_key_inverts_key_matrix() {
+        let k = Key {
+            position: [3.0, -2.0, 1.0],
+            rotation: [0.1, -0.2, 0.7],
+            scale: [0.8, 1.5, 1.0],
+        };
+        let back = matrix_key(&key_matrix(&k));
+        for i in 0..3 {
+            assert!((back.position[i] - k.position[i]).abs() < 1e-4);
+            assert!((back.rotation[i] - k.rotation[i]).abs() < 1e-4, "{back:?}");
+            assert!((back.scale[i] - k.scale[i]).abs() < 1e-4, "{back:?}");
+        }
+    }
+
+    #[test]
+    fn additive_layer_is_relative_to_the_bind_pose() {
+        // bind at x = 0; an additive "intro" animation going from x = 5 back
+        // to the bind pose must end on the bind pose (Lucy 3521337568), not
+        // at -5 (relative to its own first key).
+        let mut p = one_bone(vec![key(0.0), key(0.0)], PlayMode::Single);
+        p.animations[0].tracks[0] = vec![key(5.0), key(0.0)];
+        let layers = serde_json::json!([{ "animation": 7, "additive": true }]);
+        let mut rt = PuppetRt::new(p, Some(&layers));
+        assert!((rt.vertices[0] - 15.0).abs() < 1e-4, "{}", rt.vertices[0]);
+        rt.update(2.0); // past the end: holds the last key (bind)
+        assert!((rt.vertices[0] - 10.0).abs() < 1e-4, "{}", rt.vertices[0]);
     }
 
     #[test]
