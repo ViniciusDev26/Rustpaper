@@ -27,7 +27,8 @@ comments, with the measurement that justified it.
   and motion energy ratio 0.7..1.4 against the real WE.
 - Gate before committing (CI runs the same): `cargo fmt --all`,
   `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
-  `cargo test --workspace`.
+  `cargo test --workspace`; UI changes also `cd crates/rustpaper-selector/ui
+  && npm run typecheck && npm test`.
 
 ## Docs
 
@@ -64,7 +65,9 @@ comments, with the measurement that justified it.
   with ffplay, killed with the engine via PR_SET_PDEATHSIG; `--volume`,
   `--mute`). `RUSTPAPER_LEGACY_SCENE=1` = old wgpu scenes.
 - **`rustpaper-selector`** — Tauri v2 app, binary **`rustpaper-selector`**;
-  static UI in `ui/` (`index.html`, `properties.js`, `workshop.js`).
+  UI in `ui/`: React + TypeScript + Tailwind v4 (Vite), Zustand stores,
+  Zod-validated command replies (`src/api`). build.rs builds it (needs
+  Node.js + npm) into `$OUT_DIR/ui`; `cd ui && npm test` for its unit tests.
 - **`rustpaper-workshop`** — binary **`rustpaper-workshop`**: the selector's
   Steam Workshop store. Talks to the running Steam client through Steamworks
   as WE (AppID 431960): query, subscribe/unsubscribe, download progress;

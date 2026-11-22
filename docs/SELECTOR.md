@@ -8,6 +8,35 @@ cargo build --release -p rustpaper-selector -p rustpaper-engine
 ./target/release/rustpaper-selector
 ```
 
+## UI (`ui/`)
+
+React 19 + TypeScript + Tailwind CSS v4, bundled by Vite; state in Zustand
+stores, every command reply validated with Zod.
+
+- `src/api/schemas.ts`: Zod schemas mirroring the Rust replies
+  (`WallpaperEntry`, `Settings`, `PropertiesView`, the Workshop protocol);
+  `src/api/tauri.ts`: typed wrappers of the commands, which reject with
+  the Rust error string or on a reply that doesn't match its schema.
+- `src/store/`: `library` (wallpapers, selection, search, order,
+  unsubscribe), `settings` (scripts, volume, autostart), `workshop`
+  (queries, subscriptions, download polling), `toast`.
+- `src/components/`: `LibraryView`, `PropertiesPanel` + `PropertyControl`
+  (one control per WE property type), `WorkshopView`, shared pieces in
+  `common.tsx`.
+- `src/lib/properties.ts`: labels, color conversion and the `condition`
+  parser, pure and unit-tested (`npm test`, vitest). Author texts are
+  rendered as React text, never HTML; conditions are parsed, never
+  evaluated as JavaScript.
+
+Build: the selector's `build.rs` runs `npm ci` (only when `ui/node_modules`
+is missing), `npm run typecheck` and `vite build` into `$OUT_DIR/ui`, and
+points Tauri's `frontendDist` there through `TAURI_CONFIG` (merged over
+tauri.conf.json at compile time). A build output dir, not `ui/dist`:
+watching a folder the script writes would make cargo rerun it on every
+build. `RUSTPAPER_UI_DIST=<dir>` uses a prebuilt bundle. Working on the UI
+alone: `cd ui && npm run dev` (the Tauri commands need the real app; the
+page loads, but the API calls fail outside it).
+
 The selector starts the engine binary found next to itself
 (`target/release/rustpaper`, or the install prefix), else `rustpaper` from
 `PATH`.
