@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evalCondition, fromHex, label, plainText, toHex } from "./properties";
+import { colorHint, evalCondition, fromHex, isHex, label, plainText, toHex } from "./properties";
 
 describe("conditions", () => {
   const v = { mode: "2", clock: true, size: 5, name: "x" };
@@ -40,5 +40,21 @@ describe("colors", () => {
     expect(fromHex("#ff8000")).toBe("1.00000 0.50196 0.00000");
     expect(toHex("255 0 0")).toBe("#ff0000");
     expect(toHex("garbage")).toBe("#ffffff");
+  });
+});
+
+describe("color helpers", () => {
+  it("recognizes hex codes", () => {
+    expect(isHex("#1a2B3c")).toBe(true);
+    expect(isHex("1a2b3c")).toBe(false);
+    expect(isHex("#12345")).toBe(false);
+  });
+  it("explains the scheme color only", () => {
+    expect(colorHint({ name: "schemecolor" })).toMatch(/theme color/);
+    expect(colorHint({ name: "x", text: "ui_browse_properties_scheme_color" })).toMatch(/theme color/);
+    expect(colorHint({ name: "barcolor", text: "Bar Color" })).toBeNull();
+  });
+  it("round-trips WE colors through hex", () => {
+    expect(toHex(fromHex("#ff8000"))).toBe("#ff8000");
   });
 });

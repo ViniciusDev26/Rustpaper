@@ -57,37 +57,72 @@ pub fn disable_layer_animations() -> bool {
         .any(|r| request(r).is_some_and(|reply| reply.trim() == "ok"))
 }
 
-/// One output as Hyprland sees it.
-#[derive(Debug, Clone)]
+/// What covers one output (the conditions of the Playback settings).
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Monitor {
     pub name: String,
-    /// a fullscreen window is shown on its active workspace
-    pub covered: bool,
+    /// A fullscreen window is on its active workspace.
+    pub fullscreen: bool,
+    /// A maximized or tiled window is on its active workspace (Hyprland
+    /// tiles by default: the wallpaper then only shows in the gaps).
+    pub maximized: bool,
+    /// The focused window is on its active workspace.
+    pub focused: bool,
+    /// Powered off (DPMS).
+    pub asleep: bool,
 }
 
 pub fn monitors() -> Option<Vec<Monitor>> {
     let mons = json("j/monitors")?;
     let clients = json("j/clients").unwrap_or_default();
-    let fullscreen_ws: Vec<i64> = clients
+    let focused_ws = json("j/activewindow").and_then(|w| w.pointer("/workspace/id")?.as_i64());
+    Some(covering(&mons, &clients, focused_ws))
+}
+
+/// `monitors()` from `hyprctl monitors -j` / `clients -j` replies (pure, for
+/// tests).
+fn covering(
+    mons: &serde_json::Value,
+    clients: &serde_json::Value,
+    focused_ws: Option<i64>,
+) -> Vec<Monitor> {
+    let visible: Vec<&serde_json::Value> = clients
         .as_array()
         .into_iter()
         .flatten()
-        .filter(|c| c.get("fullscreen").and_then(|f| f.as_i64()).unwrap_or(0) > 0)
         .filter(|c| c.get("hidden").and_then(|h| h.as_bool()) != Some(true))
-        .filter_map(|c| c.pointer("/workspace/id").and_then(|i| i.as_i64()))
+        .filter(|c| c.get("mapped").and_then(|h| h.as_bool()) != Some(false))
         .collect();
-    Some(
-        mons.as_array()?
+    let on = |ws: i64, pred: &dyn Fn(&serde_json::Value) -> bool| {
+        visible
             .iter()
-            .filter_map(|m| {
-                let ws = m.pointer("/activeWorkspace/id").and_then(|i| i.as_i64());
-                Some(Monitor {
-                    name: m.get("name")?.as_str()?.to_string(),
-                    covered: ws.is_some_and(|w| fullscreen_ws.contains(&w)),
-                })
+            .any(|c| c.pointer("/workspace/id").and_then(|i| i.as_i64()) == Some(ws) && pred(c))
+    };
+    // `fullscreen`: 0 none, 1 maximized, 2 fullscreen
+    let mode = |c: &serde_json::Value| c.get("fullscreen").and_then(|f| f.as_i64()).unwrap_or(0);
+    let floating =
+        |c: &serde_json::Value| c.get("floating").and_then(|f| f.as_bool()).unwrap_or(false);
+    mons.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|m| {
+            let ws = m.pointer("/activeWorkspace/id").and_then(|i| i.as_i64());
+            let name = m.get("name")?.as_str()?.to_string();
+            let Some(ws) = ws else {
+                return Some(Monitor {
+                    name,
+                    ..Default::default()
+                });
+            };
+            Some(Monitor {
+                name,
+                fullscreen: on(ws, &|c| mode(c) >= 2),
+                maximized: on(ws, &|c| mode(c) == 1 || (mode(c) == 0 && !floating(c))),
+                focused: focused_ws == Some(ws),
+                asleep: m.get("dpmsStatus").and_then(|d| d.as_bool()) == Some(false),
             })
-            .collect(),
-    )
+        })
+        .collect()
 }
 
 /// Runs a request that answers "ok" on success (`dispatch ...`, `eval ...`,
@@ -131,4 +166,37 @@ pub fn active_window() -> Option<String> {
 
 pub fn create_headless(name: &str) -> bool {
     command(&format!("output create headless {name}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn what_covers_each_monitor() {
+        let mons = json!([
+            { "name": "A", "activeWorkspace": { "id": 1 }, "dpmsStatus": true },
+            { "name": "B", "activeWorkspace": { "id": 2 }, "dpmsStatus": true },
+            { "name": "C", "activeWorkspace": { "id": 3 }, "dpmsStatus": false },
+            { "name": "D", "activeWorkspace": { "id": 4 }, "dpmsStatus": true },
+        ]);
+        let clients = json!([
+            { "workspace": { "id": 1 }, "fullscreen": 2, "floating": false },
+            { "workspace": { "id": 2 }, "fullscreen": 0, "floating": false },
+            { "workspace": { "id": 4 }, "fullscreen": 0, "floating": true },
+            { "workspace": { "id": 4 }, "fullscreen": 0, "floating": false, "hidden": true },
+        ]);
+        let m = covering(&mons, &clients, Some(2));
+        assert!(m[0].fullscreen && !m[0].focused);
+        assert!(
+            m[1].maximized && !m[1].fullscreen && m[1].focused,
+            "a tiled window"
+        );
+        assert!(m[2].asleep && !m[2].maximized);
+        assert!(
+            !m[3].maximized,
+            "floating and hidden windows leave the wallpaper visible"
+        );
+    }
 }
