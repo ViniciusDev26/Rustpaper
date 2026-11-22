@@ -4,6 +4,7 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type { z } from "zod";
 import {
+  DesktopInfo,
   MaybeTheme,
   PropertiesView,
   Settings,
@@ -60,7 +61,17 @@ export const api = {
   workshopStatus: (ids: string[]) => call(StatusMap, "workshop_status", { ids }),
   workshopSubscriptions: () => call(Subscriptions, "workshop_subscriptions"),
   getTheme: () => call(MaybeTheme, "get_theme"),
+  desktopInfo: () => call(DesktopInfo, "desktop_info"),
+  themeFromWallpaper: (id: string) => run("theme_from_wallpaper", { id }),
+  setWallpaperTheme: (enabled: boolean) => run("set_wallpaper_theme", { enabled }),
 };
+
+/// Result of the background theme generation after an apply: null = done,
+/// a string = the error.
+export async function onWallpaperTheme(cb: (error: string | null) => void): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<unknown>("wallpaper-theme", (e) => cb(typeof e.payload === "string" ? e.payload : null));
+}
 
 /// Omarchy theme switches (emitted by the backend's watcher).
 export async function onThemeChanged(cb: (t: z.infer<typeof MaybeTheme>) => void): Promise<() => void> {
