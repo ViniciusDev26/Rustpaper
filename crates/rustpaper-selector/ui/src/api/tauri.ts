@@ -4,7 +4,10 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type { z } from "zod";
 import {
+  Colors,
   DesktopInfo,
+  PerformanceView,
+  type Playback,
   MaybeTheme,
   PropertiesView,
   Settings,
@@ -54,6 +57,10 @@ export const api = {
   getSettings: () => call(Settings, "get_settings"),
   setAutostart: (enabled: boolean) => run("set_autostart", { enabled }),
   setVolume: (volume: number) => run("set_volume", { volume }),
+  wallpaperColors: (id: string) => call(Colors, "wallpaper_colors", { id }),
+  getPerformance: () => call(PerformanceView, "get_performance"),
+  setPerformance: (values: Record<string, unknown>) => run("set_performance", { values }),
+  setPlayback: (playback: Playback) => run("set_playback", { playback }),
   workshopQuery: (query: WorkshopQuery) => call(WorkshopPage, "workshop_query", { query }),
   workshopSubscribe: (id: string) => run("workshop_subscribe", { id }),
   workshopUnsubscribe: (id: string) => run("workshop_unsubscribe", { id }),

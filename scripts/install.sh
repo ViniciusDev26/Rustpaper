@@ -2,7 +2,9 @@
 # install.sh [--uninstall]
 #
 # Builds the release binaries and installs them for the current user:
-#   $PREFIX/bin/rustpaper            live wallpaper (drives Wallpaper Engine)
+#   $PREFIX/bin/rustpaper            live wallpaper (drives Wallpaper Engine; run by
+#                                    the systemd user service rustpaper.service,
+#                                    which the selector writes and enables)
 #   $PREFIX/bin/rustpaper-selector   gallery + customization panel
 #   $PREFIX/bin/rustpaper-workshop   Steam Workshop bridge (selector's store)
 #   $PREFIX/lib/rustpaper/libsteam_api.so  its Steamworks library
@@ -25,6 +27,13 @@ if [ "${1:-}" = "--uninstall" ]; then
     rm -rf "$DEST/lib/rustpaper"
     rm -f "$DEST/share/applications/rustpaper.desktop" \
           "$DEST/share/icons/hicolor/128x128/apps/rustpaper.png"
+    # the engine's systemd user service (the selector writes it)
+    unit=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/rustpaper.service
+    if [ -z "${DESTDIR:-}" ] && [ -f "$unit" ]; then
+        systemctl --user disable --now rustpaper.service 2>/dev/null || true
+        rm -f "$unit"
+        systemctl --user daemon-reload 2>/dev/null || true
+    fi
     echo "removed from $DEST (settings in ~/.config/rustpaper are kept)"
     exit 0
 fi
@@ -46,4 +55,12 @@ Exec=$PREFIX/bin/rustpaper-selector
 Icon=rustpaper
 Categories=Utility;Graphics;
 DESKTOP
+# An existing engine service (written by the selector) runs the new binary
+# from now on; the selector rewrites the unit anyway when it differs.
+unit=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/rustpaper.service
+if [ -z "${DESTDIR:-}" ] && [ -f "$unit" ]; then
+    sed -i "s|^ExecStart=.*|ExecStart=\"$PREFIX/bin/rustpaper\" --service|" "$unit"
+    systemctl --user daemon-reload 2>/dev/null || true
+    systemctl --user try-restart rustpaper.service 2>/dev/null || true
+fi
 echo "installed into $DEST/bin — run rustpaper-selector (or open Rustpaper from the launcher)"

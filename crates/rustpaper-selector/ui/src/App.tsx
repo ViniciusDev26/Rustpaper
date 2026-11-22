@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Button, Toast, field } from "./components/common";
 import { LibraryView } from "./components/LibraryView";
+import { PerformanceView } from "./components/PerformanceView";
 import { WorkshopView } from "./components/WorkshopView";
 import { useLibrary, visibleWallpapers, type SortMode } from "./store/library";
 import { useSettings, volumeText } from "./store/settings";
@@ -8,7 +9,7 @@ import { errorText, toast } from "./store/toast";
 import { api, onThemeChanged, onWallpaperTheme } from "./api/tauri";
 import { applyTheme } from "./lib/theme";
 
-type Tab = "library" | "store";
+type Tab = "library" | "store" | "performance";
 
 function VolumeSlider() {
   const { volume, setVolume } = useSettings();
@@ -57,6 +58,13 @@ function Header({ tab, setTab }: { tab: Tab; setTab: (t: Tab) => void }) {
         >
           Workshop
         </Button>
+        <Button
+          variant={tab === "performance" ? "tab-active" : "tab"}
+          title="Quality and playback settings, like Wallpaper Engine's"
+          onClick={() => setTab("performance")}
+        >
+          Performance
+        </Button>
       </nav>
       {tab === "library" && <span className="text-sm whitespace-nowrap text-muted">{count} wallpapers</span>}
       <span data-tauri-drag-region className="flex-1 self-stretch" />
@@ -91,7 +99,7 @@ function Header({ tab, setTab }: { tab: Tab; setTab: (t: Tab) => void }) {
           Theme from wallpaper
         </label>
       )}
-      <label className={check}>
+      <label className={check} title="Runs the wallpaper as a systemd user service (rustpaper.service) that starts with your session">
         <input type="checkbox" checked={settings.autostart} onChange={(e) => settings.setAutostart(e.currentTarget.checked)} />
         Start on login
       </label>
@@ -111,6 +119,10 @@ export function App() {
       void unlisten.then((f) => f());
       void unlistenWallpaper.then((f) => f());
     };
+  }, []);
+
+  useEffect(() => {
+    api.desktopInfo().then((d) => d.start_tab && setTab(d.start_tab), () => {});
   }, []);
 
   useEffect(() => {
@@ -137,7 +149,13 @@ export function App() {
     <div className="flex h-full flex-col">
       <Header tab={tab} setTab={showTab} />
       <main className="flex min-h-0 flex-1">
-        {tab === "library" ? <LibraryView /> : <WorkshopView onApplied={() => showTab("library")} />}
+        {tab === "library" ? (
+          <LibraryView />
+        ) : tab === "store" ? (
+          <WorkshopView onApplied={() => showTab("library")} />
+        ) : (
+          <PerformanceView />
+        )}
       </main>
       <Toast />
     </div>
