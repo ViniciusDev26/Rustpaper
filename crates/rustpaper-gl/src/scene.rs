@@ -1745,11 +1745,15 @@ impl SceneRenderer {
     }
 
     /// `view_proj` shifted by the camera parallax for an object at `depth`.
-    fn view_proj_at(&self, depth: [f32; 2]) -> Mat4 {
+    /// View-projection of an object at parallax `depth` whose world matrix
+    /// is `world` (its origin decides its parallax shift, see
+    /// `Parallax::shift`).
+    fn view_proj_at(&self, depth: [f32; 2], world: &Mat4) -> Mat4 {
         let proj = self.view_proj();
         match &self.parallax {
             Some(p) => {
-                let [dx, dy] = p.shift(depth, self.width as f32, self.height as f32);
+                let origin = [world[12], world[13]];
+                let [dx, dy] = p.shift(depth, origin, self.width as f32, self.height as f32);
                 math::mul(&proj, &math::model([dx, dy, 0.0], 0.0, [1.0; 3]))
             }
             None => proj,
@@ -2079,7 +2083,7 @@ impl SceneRenderer {
     fn draw_direct(&mut self, gl: &glow::Context, i: usize, frame: FrameInput) {
         let l = &self.layers[i];
         let model = l.quad_world();
-        let proj = self.view_proj_at(l.parallax);
+        let proj = self.view_proj_at(l.parallax, &l.world);
         let mvp = math::mul(&proj, &model);
         let verts = math::quad(l.size[0], l.size[1], 1.0, 1.0);
         let blend = l.material.blend;
@@ -2206,7 +2210,7 @@ impl SceneRenderer {
             && !self.referenced.contains(&self.layers[i].id))
         .then(|| {
             let l = &self.layers[i];
-            let mvp = math::mul(&self.view_proj_at(l.parallax), &l.quad_world());
+            let mvp = math::mul(&self.view_proj_at(l.parallax, &l.world), &l.quad_world());
             let mut q = math::quad(uw, uh, 1.0, 1.0);
             for c in q.chunks_mut(5) {
                 let p = [c[0], c[1], c[2], 1.0];
@@ -2418,7 +2422,7 @@ impl SceneRenderer {
             ),
             _ => (l.quad_world(), math::quad(l.size[0], l.size[1], 1.0, 1.0)),
         };
-        let proj = self.view_proj_at(l.parallax);
+        let proj = self.view_proj_at(l.parallax, &l.world);
         let mvp = math::mul(&proj, &model);
         if let Some(blend) = l.composite.as_ref().map(|c| c.blend) {
             let scene = self.scene;
@@ -3142,7 +3146,7 @@ impl SceneRenderer {
         let (w, h) = (self.width as f32, self.height as f32);
         let o = &self.particle_objs[i];
         let model = o.world;
-        let proj = self.view_proj_at(o.parallax);
+        let proj = self.view_proj_at(o.parallax, &o.world);
         let mvp_flat = math::mul(&proj, &model);
         let (persp, eye) = math::scene_perspective(w, h, self.fov);
         let persp = match &self.crop {
@@ -3589,12 +3593,30 @@ impl Parallax {
         }
     }
 
-    /// Scene-space translation (Y up) for an object at `depth`.
-    fn shift(&self, depth: [f32; 2], width: f32, height: f32) -> [f32; 2] {
+    /// Scene-space translation (Y up) for an object at `depth` whose origin
+    /// is `origin` (scene units, Y up): WE moves every object AWAY FROM THE
+    /// CURSOR by `amount x mouseinfluence x depth x (origin - cursor)`, i.e.
+    /// positions scale about the cursor (sizes don't). The cursor is the
+    /// smoothed pointer (`offset` + center) in scene units.
+    ///
+    /// Measured (harness/calibration/run_depths.sh, five squares at depths
+    /// -0.5..1 spread along the middle of a 3840x2160 scene): with amount
+    /// 0.4, influence 1 and WE's cursor at (0.448, 0.431), WE moved them by
+    /// dx +116 / +10 / +4 / +86 and dy -14 / -4 / +4 / +14 px (1080p);
+    /// this model gives +114 / +10 / +5 / +87 and -15 / -3 / +4 / +15. The
+    /// old model (the screen CENTER in place of the object's origin) is
+    /// the same for centered objects but not at the edges: Chainsaw Man
+    /// 3577990983's foreground hands (x 466 and 3408 of 3840) sat 40-76 px
+    /// off WE's while the girl near the center matched.
+    fn shift(&self, depth: [f32; 2], origin: [f32; 2], width: f32, height: f32) -> [f32; 2] {
         let k = self.amount * self.influence;
+        let cursor = [
+            (0.5 + self.offset[0]) * width,
+            (0.5 - self.offset[1]) * height,
+        ];
         [
-            -self.offset[0] * k * depth[0] * width,
-            self.offset[1] * k * depth[1] * height,
+            k * depth[0] * (origin[0] - cursor[0]),
+            k * depth[1] * (origin[1] - cursor[1]),
         ]
     }
 }
@@ -3882,6 +3904,30 @@ mod tests {
             Some([0.12, 0.12])
         );
         assert_eq!(inherited_parallax(&objects, &objects[3]), None);
+    }
+
+    #[test]
+    fn parallax_moves_objects_away_from_the_cursor() {
+        // amount 0.4 x influence 1, cursor (smoothed pointer) at (0.25, 0.75)
+        let p = Parallax {
+            amount: 0.4,
+            influence: 1.0,
+            delay: 0.0,
+            offset: [-0.25, 0.25],
+            last_time: 0.0,
+        };
+        let (w, h) = (3840.0, 2160.0);
+        // the cursor in scene units (y up): x 960, y 540
+        let at = |o: [f32; 2]| p.shift([0.5, 0.5], o, w, h);
+        // an object under the cursor does not move
+        assert_eq!(at([960.0, 540.0]), [0.0, 0.0]);
+        // a centered object moves like the old center-based model:
+        // -offset.x * k * d * w, offset.y * k * d * h
+        let c = at([w / 2.0, h / 2.0]);
+        assert!((c[0] - 0.25 * 0.4 * 0.5 * w).abs() < 1e-3, "{c:?}");
+        assert!((c[1] - 0.25 * 0.4 * 0.5 * h).abs() < 1e-3, "{c:?}");
+        // farther from the cursor = farther moved (positions scale about it)
+        assert!(at([w, h / 2.0])[0] > c[0]);
     }
 
     #[test]
