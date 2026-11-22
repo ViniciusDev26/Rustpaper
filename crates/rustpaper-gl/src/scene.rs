@@ -135,6 +135,9 @@ struct Layer {
     world: Mat4,
     /// `parallaxDepth`: how much the object follows the camera parallax.
     parallax: [f32; 2],
+    /// Ancestor whose `parallaxDepth` this object took (`inherited_parallax`):
+    /// the shift is computed from that ancestor's origin.
+    parallax_anchor: Option<i64>,
     size: [f32; 2],
     color: [f32; 3],
     alpha: f32,
@@ -195,6 +198,8 @@ struct ParticleObject {
     /// parent transforms * own transform (objects can be parented).
     world: Mat4,
     parallax: [f32; 2],
+    /// See `Layer::parallax_anchor`.
+    parallax_anchor: Option<i64>,
     /// Timeline animations of origin / angles / scale.
     anim: Option<LayerAnim>,
     systems: Vec<SystemRt>,
@@ -492,8 +497,9 @@ impl SceneRenderer {
             if obj.get("image").and_then(|i| i.as_str()).is_some() || is_shape_quad(obj) {
                 match r.load_layer(gl, obj) {
                     Ok(mut layer) => {
-                        if let Some(p) = inherited_parallax(objects, obj) {
+                        if let Some((a, p)) = inherited_parallax(objects, obj) {
                             layer.parallax = p;
+                            layer.parallax_anchor = Some(a);
                         }
                         r.order.push(ObjRef::Layer(r.layers.len()));
                         r.layers.push(layer);
@@ -506,8 +512,9 @@ impl SceneRenderer {
             } else if obj.get("particle").and_then(|p| p.as_str()).is_some() {
                 match r.load_particles(gl, obj) {
                     Ok(mut p) => {
-                        if let Some(d) = inherited_parallax(objects, obj) {
+                        if let Some((a, d)) = inherited_parallax(objects, obj) {
                             p.parallax = d;
+                            p.parallax_anchor = Some(a);
                         }
                         r.order.push(ObjRef::Particles(r.particle_objs.len()));
                         r.particle_objs.push(p);
@@ -554,8 +561,9 @@ impl SceneRenderer {
                         r.texts.push(t);
                         match r.load_layer(gl, obj) {
                             Ok(mut layer) => {
-                                if let Some(p) = inherited_parallax(objects, obj) {
+                                if let Some((a, p)) = inherited_parallax(objects, obj) {
                                     layer.parallax = p;
+                                    layer.parallax_anchor = Some(a);
                                 }
                                 r.order.push(ObjRef::Layer(r.layers.len()));
                                 r.layers.push(layer);
@@ -1097,6 +1105,7 @@ impl SceneRenderer {
 
         Ok(Layer {
             parallax: value::get_vec2(obj, "parallaxDepth", [1.0, 1.0]),
+            parallax_anchor: None,
             id: obj.get("id").and_then(|i| i.as_i64()).unwrap_or(-1),
             name: obj
                 .get("name")
@@ -1744,10 +1753,10 @@ impl SceneRenderer {
         math::mul(&ortho, &zoom)
     }
 
-    /// `view_proj` shifted by the camera parallax for an object at `depth`.
     /// World matrix whose origin a layer's parallax shift is computed from:
-    /// its own, except compose / passthrough layers, which redraw the scene
-    /// behind them and must move with it (the scene center).
+    /// its own, or that of the ancestor it took its depth from (see
+    /// `anchor_world`), except compose / passthrough layers, which redraw the
+    /// scene behind them and must move with it (the scene center).
     fn parallax_origin(&self, l: &Layer) -> Mat4 {
         match l.kind {
             LayerKind::Passthrough { .. } => math::model(
@@ -1755,8 +1764,21 @@ impl SceneRenderer {
                 0.0,
                 [1.0; 3],
             ),
-            _ => l.world,
+            _ => self.anchor_world(l.parallax_anchor, &l.world),
         }
+    }
+
+    /// An object that inherits its ancestor's `parallaxDepth` moves rigidly
+    /// with that ancestor: WE shifts the ancestor (from the ancestor's origin)
+    /// and the children follow. Chainsaw Man 3577990983: the railing and the
+    /// clock hang from group 5365 (depth 0.09, origin y 861; railing at 392,
+    /// clock at 640); shifting each from its own origin put them 17 and 7 px
+    /// lower than WE at the probe-measured cursor (0.452, 0.433); from the
+    /// group's origin both line up (railing |dy| <= 1 px).
+    fn anchor_world(&self, anchor: Option<i64>, own: &Mat4) -> Mat4 {
+        anchor
+            .and_then(|a| self.worlds.get(&a).copied())
+            .unwrap_or(*own)
     }
 
     /// View-projection of an object at parallax `depth` whose world matrix
@@ -2940,6 +2962,7 @@ impl SceneRenderer {
         let prewarm = systems.first().map(|s| s.sim.def.start_time).unwrap_or(0.0);
         Ok(ParticleObject {
             parallax: value::get_vec2(obj, "parallaxDepth", [1.0, 1.0]),
+            parallax_anchor: None,
             id,
             name: obj
                 .get("name")
@@ -3163,7 +3186,7 @@ impl SceneRenderer {
         let (w, h) = (self.width as f32, self.height as f32);
         let o = &self.particle_objs[i];
         let model = o.world;
-        let proj = self.view_proj_at(o.parallax, &o.world);
+        let proj = self.view_proj_at(o.parallax, &self.anchor_world(o.parallax_anchor, &o.world));
         let mvp_flat = math::mul(&proj, &model);
         let (persp, eye) = math::scene_perspective(w, h, self.fov);
         let persp = match &self.crop {
@@ -3462,7 +3485,7 @@ impl Layer {
 /// at (0, 0); with depth 1 the 3840x2160 background slid ~100 px right and
 /// down, uncovering black along the top and left edges (mean SSIM 0.66 ->
 /// 0.86 with the parent's depth). Camellya 3366882745 0.829 -> 0.936.
-fn inherited_parallax(objects: &[Value], obj: &Value) -> Option<[f32; 2]> {
+fn inherited_parallax(objects: &[Value], obj: &Value) -> Option<(i64, [f32; 2])> {
     let by_id: HashMap<i64, &Value> = objects
         .iter()
         .filter_map(|o| Some((o.get("id")?.as_i64()?, o)))
@@ -3471,7 +3494,7 @@ fn inherited_parallax(objects: &[Value], obj: &Value) -> Option<[f32; 2]> {
     for _ in 0..64 {
         let p = by_id.get(&cur?)?;
         if p.get("parallaxDepth").is_some() {
-            return Some(value::get_vec2(p, "parallaxDepth", [1.0, 1.0]));
+            return Some((cur?, value::get_vec2(p, "parallaxDepth", [1.0, 1.0])));
         }
         cur = p.get("parent").and_then(|p| p.as_i64());
     }
@@ -3925,7 +3948,7 @@ mod tests {
         assert!(!is_shape_quad(&objects[4]));
         assert_eq!(
             inherited_parallax(&objects, &objects[2]),
-            Some([0.12, 0.12])
+            Some((1, [0.12, 0.12]))
         );
         assert_eq!(inherited_parallax(&objects, &objects[3]), None);
     }
