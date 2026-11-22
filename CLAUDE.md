@@ -49,15 +49,19 @@ behaviour in comments, with the measurement or observation that justified it.
   - `performance`: WE's quality settings and the Playback conditions as
     data.
 - **`rustpaper-engine`**: binary **`rustpaper`**, the live wallpaper.
-  - `main.rs`: one headless output + workspace + WE window per monitor, the
-    watchdog (arrangement and Playback rules), `--service` mode (state.json,
-    SIGHUP reload).
+  - `main.rs`: the core, identical on every desktop. One long-lived WE
+    window per monitor, the watchdog (Stage repairs, WE restarts, Playback
+    rules), reload.
+  - `config.rs`: CLI and `--service` mode (state.json, SIGHUP reload).
+  - `desktop/`: **the only compositor-specific code**, behind the
+    `Desktop` and `Stage` traits (`mod.rs`). Adapters: `hyprland.rs`
+    (IPC; also re-applies the stage on `configreloaded`) and `sway.rs`.
+    A new desktop is a new adapter; never call a compositor from the core.
   - `we.rs`: WE under Proton (`-control` commands through `nsenter` into its
     container, config.json tweaks, starting it through Steam).
   - `mirror.rs`: ext-image-copy-capture of WE's windows into GBM dmabufs,
     shown on layer-shell surfaces.
   - `gbm.rs`: minimal libgbm FFI.
-  - `hyprland.rs`: IPC socket client (also what covers each monitor).
   - `power.rs`: on battery or not.
 - **`rustpaper-selector`**: Tauri v2 app, binary **`rustpaper-selector`**.
   The UI lives in `ui/`: React + TypeScript + Tailwind v4 (Vite), Zustand
