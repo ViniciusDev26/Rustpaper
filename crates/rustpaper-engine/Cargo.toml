@@ -29,6 +29,8 @@ calloop-wayland-source = "0.4"
 rustpaper-gl = { path = "../rustpaper-gl" }
 wayland-egl = "0.32"
 wayland-protocols = { version = "0.32", features = ["client"] }
+# prctl(PR_SET_PDEATHSIG) for ffplay (sound.rs).
+libc = "0.2.186"
 
 # Examples only (render_material writes a PNG for offscreen inspection).
 [dev-dependencies]

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-#[derive(Serialize, Deserialize, Default, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Settings {
     pub last_id: Option<String>,
     pub autostart: bool,
@@ -15,6 +15,25 @@ pub struct Settings {
     /// by default; this is for users who want no Workshop code at all.
     #[serde(default)]
     pub no_scripts: bool,
+    /// Master volume (0..100) of the wallpapers' own sounds
+    /// (`rustpaper --volume`); 0 mutes them.
+    #[serde(default = "full_volume")]
+    pub volume: u8,
+}
+
+fn full_volume() -> u8 {
+    100
+}
+
+impl Default for Settings {
+    fn default() -> Settings {
+        Settings {
+            last_id: None,
+            autostart: false,
+            no_scripts: false,
+            volume: full_volume(),
+        }
+    }
 }
 
 fn config_home() -> PathBuf {
@@ -134,9 +153,11 @@ mod tests {
     }
 
     #[test]
-    fn old_state_files_keep_scripts_on() {
+    fn old_state_files_keep_scripts_on_and_full_volume() {
         let s: Settings = serde_json::from_str(r#"{"last_id":"1","autostart":true}"#).unwrap();
         assert!(!s.no_scripts);
+        assert_eq!(s.volume, 100);
+        assert_eq!(Settings::default().volume, 100);
     }
 
     #[test]

@@ -17,6 +17,7 @@
       header .count { color: var(--muted); font-size: .85rem; }
       header .spacer { flex: 1; }
       header input[type=search] { background: var(--card); border: 1px solid #45475a; color: var(--fg); border-radius: 6px; padding: 5px 9px; width: 220px; }
+      #volume { width: 90px; accent-color: var(--accent); }
       label.check { font-size: .85rem; color: var(--sub); display: flex; align-items: center; gap: 6px; cursor: pointer; }
       main { flex: 1; display: flex; min-height: 0; }
       #gallery { flex: 1; overflow-y: auto; }
@@ -65,6 +66,7 @@
       <span class="spacer"></span>
       <input type="search" id="search" placeholder="Search" />
       <label class="check" title="SceneScripts run in a sandbox (no files, network or processes)"><input type="checkbox" id="scripts" /> Run scripts</label>
+      <label class="check" title="Volume of the wallpapers' own music and sounds (0 = muted)"><span id="volume-label">Volume</span> <input type="range" id="volume" min="0" max="100" step="5" /></label>
       <label class="check"><input type="checkbox" id="autostart" /> Start on login</label>
     </header>
     <main>
@@ -221,9 +223,25 @@
         }
       });
 
+      const volumeText = (v) => (Number(v) === 0 ? "Muted" : `Volume ${v}%`);
+      // label follows the drag; the engine restarts only on release
+      $("volume").addEventListener("input", (ev) => {
+        $("volume-label").textContent = volumeText(ev.target.value);
+      });
+      $("volume").addEventListener("change", async (ev) => {
+        try {
+          await invoke("set_volume", { volume: Number(ev.target.value) });
+          showToast(volumeText(ev.target.value));
+        } catch (e) {
+          showToast(`${e}`);
+        }
+      });
+
       (async () => {
         try {
           const settings = await invoke("get_settings");
+          $("volume").value = settings.volume;
+          $("volume-label").textContent = volumeText(settings.volume);
           $("autostart").checked = settings.autostart;
           $("scripts").checked = !settings.no_scripts;
           wallpapers = await invoke("list_wallpapers");

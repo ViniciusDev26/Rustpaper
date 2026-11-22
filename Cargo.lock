@@ -3142,6 +3142,7 @@ dependencies = [
  "calloop 0.14.4",
  "calloop-wayland-source 0.4.1",
  "image",
+ "libc",
  "naga",
  "pollster",
  "raw-window-handle",
@@ -3186,6 +3187,7 @@ dependencies = [
 name = "rustpaper-selector"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "rustpaper-core",
  "serde",
  "serde_json",
