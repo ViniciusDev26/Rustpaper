@@ -5,7 +5,8 @@
 # Releases carry and the `rustpaper-bin` AUR package installs:
 #
 #   rustpaper-<version>-x86_64-linux.tar.gz
-#     rustpaper-<version>/bin/{rustpaper,rustpaper-selector,rustpaper-render,rustpaper-script-worker}
+#     rustpaper-<version>/bin/{rustpaper,rustpaper-selector,rustpaper-render,rustpaper-script-worker,rustpaper-workshop}
+#     rustpaper-<version>/lib/rustpaper/libsteam_api.so   (Steamworks, for rustpaper-workshop)
 #     rustpaper-<version>/share/applications/rustpaper.desktop
 #     rustpaper-<version>/share/icons/hicolor/128x128/apps/rustpaper.png
 #     rustpaper-<version>/LICENSE, README.md
@@ -18,19 +19,22 @@ build=1
 out=${1:?usage: dist.sh [--no-build] <out dir>}
 repo=$(cd "$(dirname "$0")/.." && pwd)
 version=$(sed -n 's/^version = "\([^"]*\)".*/\1/p' "$repo/Cargo.toml" | head -1)
-bins=(rustpaper rustpaper-selector rustpaper-render rustpaper-script-worker)
+bins=(rustpaper rustpaper-selector rustpaper-render rustpaper-script-worker rustpaper-workshop)
 
 if [ $build = 1 ]; then
     (cd "$repo" && cargo build --release --locked \
-        -p rustpaper-engine -p rustpaper-selector -p rustpaper-gl -p rustpaper-script --bins)
+        -p rustpaper-engine -p rustpaper-selector -p rustpaper-gl -p rustpaper-script \
+        -p rustpaper-workshop --bins)
 fi
 
 name=rustpaper-$version
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 root=$stage/$name
-install -d "$root/bin" "$root/share/applications" "$root/share/icons/hicolor/128x128/apps"
+install -d "$root/bin" "$root/lib/rustpaper" "$root/share/applications" "$root/share/icons/hicolor/128x128/apps"
 for b in "${bins[@]}"; do install -m 755 "$repo/target/release/$b" "$root/bin/$b"; done
+# rustpaper-workshop's RUNPATH has $ORIGIN/../lib/rustpaper (its build.rs)
+install -m 755 "$repo/target/release/libsteam_api.so" "$root/lib/rustpaper/libsteam_api.so"
 install -m 644 "$repo/packaging/rustpaper.desktop" "$root/share/applications/rustpaper.desktop"
 install -m 644 "$repo/crates/rustpaper-selector/icons/128x128.png" \
     "$root/share/icons/hicolor/128x128/apps/rustpaper.png"
