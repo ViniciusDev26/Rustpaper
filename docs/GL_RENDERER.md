@@ -69,6 +69,13 @@ the object's `instance.textures` / `combos` over the shared material, like an
 effect pass's scene overrides. Chainsaw Man 3577990983's dock icons drew as
 white squares (the material's `util/white`).
 
+**`g_LayerModelMatrix`** is the layer's world matrix in every pass,
+effect passes included (their `g_ModelMatrix` is texture space). Workshop
+effect `frame_builder` (3573886911) reads the layer's scale from it to
+keep its rounded box in pixels; unset it was zero, `v_Size` went negative
+and Chainsaw Man 3577990983's dock backdrop drew nothing. Only that scene
+uses it in the corpus.
+
 **Vector strings may use commas.** Workshop effects store `"0.0, 1.0"`
 (material constants and shader annotation defaults). Read on whitespace only
 it was `[1.0]`: 3195212886's audio bars (`u_BarBounds`) stood at full height
@@ -780,6 +787,11 @@ unchanged WE material shader draws it.
   SEVERAL images of the .tex (atlases). `TEXS0001` stores the rectangle as
   integers, 0002/0003 as floats. Each frame sets `g_Texture0Translation` /
   `g_Texture0Rotation` and binds its image.
+- The flipbook follows the scene clock, looping, until a SceneScript takes
+  it over with `getTextureAnimation()` (stop / play / setFrame, see
+  docs/SCENESCRIPT.md): then the layer's own `anim_time` from the worker.
+  Chainsaw Man 3577990983's fireworks are idle (frame 0 is empty) most of
+  the time in WE; looping, they covered the sky (energy ratio 1.45 -> 0.70).
 - Pixel art (`flags & 1`, no interpolation) is scaled to the screen with
   nearest filtering, as WE draws it at screen resolution (Aesthetic City
   843532366: mean SSIM 0.91 -> 0.9997).
@@ -820,8 +832,20 @@ even in `--describe`). Now they are layers listed as `"shape quad"`:
   with depth 1 (our default) the glow was too bright on the left
   (sky left of the planet, x 0..650: |diff| 26.4, region SSIM 0.814), with
   the parent's 0.12 the region's mean color matches WE's (62/72/82 vs
-  62/72/83, |diff| 16.6, SSIM 0.834; depth 0 gives 17.8 / 0.831). Only
-  quads inherit it: image children keep the default 1 (see Known gaps).
+  62/72/83, |diff| 16.6, SSIM 0.834; depth 0 gives 17.8 / 0.831).
+- **Image children inherit it too.** Chainsaw Man 3577990983 hangs its sky
+  (3840x2160, scale 1.05), clouds and five fireworks from group 35, depth
+  0; the children store no `parallaxDepth`. WE saw the pointer at (0, 0)
+  and its background covers the screen; with depth 1 ours slid ~100 px
+  right and down and left black bands along the top and left edges. With
+  the parent's depth (2026-11-22, against the existing captures,
+  texture-animation fix in both runs):
+  Chainsaw Man 0.660 -> 0.859 (energy ratio 0.70 -> 1.11), Camellya
+  3366882745 0.829 -> 0.936 (ratio 2.10 -> 0.95), 3233141951 0.62635 ->
+  0.62642; 3195212886 and Lucy 3521337568 identical (their affected
+  children are quads or sit still). No other corpus scene has an image or
+  particle child without a depth under a parent with one != 1 and camera
+  parallax on.
 
 Harness, against the existing WE captures (2026-11-22): Lucy 3521337568
 0.611 -> 0.710 (beam region |diff| 50.0 -> 18.9, SSIM 0.42 -> 0.86; still
@@ -919,6 +943,26 @@ customization panel (`docs/SELECTOR.md`).
 
 - **SceneScript** runs sandboxed (`docs/SCENESCRIPT.md`). **`web`
   wallpapers** are not supported.
+- **Image-layer `alignment`** (`bottom`, `topleft`, ...: which point of
+  the quad sits at the origin) is ignored; quads stay centered. Chainsaw
+  Man 3577990983's dock icons (y 36.8 in the 4K scene, 102 high,
+  `bottom`) have their centers 43 px above the bottom of WE's 1080p capture
+  = 36.8 + 102 / 2 scene units, ours at 18 px, and half of the dock
+  backdrop is under the screen edge. Shifting the quad (scene y up, by
+  half its size) gave Chainsaw Man 0.8718 -> 0.8839, Jinx 3078285611
+  +0.003, 3448290956 +0.005, 3830708962 / 2902406982 identical, but
+  Persona 3 3151551777 0.848 -> 0.825: its bottom-aligned audio bars
+  (`Simple_Audio_Bars`, bounds set by a script) moved where WE draws bars,
+  yet with a different pattern. Rejected until Persona's bars are
+  understood; the patch is a `Layer::quad_world` used by the draw and
+  hover paths. Scripts also write `layer.alignment` (the dock does every
+  frame); the prelude does not forward it.
+- Chainsaw Man 3577990983, after the 2026-11-22 fixes (0.856..0.860,
+  energy ratio 0.86..0.91; fireworks replay after random delays, so runs
+  differ by ~0.004): the two hands in the foreground (`左` / `右`, depths
+  0.12 / -0.11) sit a few px off WE's in the mean (the camera parallax
+  model; letting the follow catch up from t = 0 on the first frame did not
+  change the score: 0.856), and the dock alignment above.
 - Lonely Cat 3299228616: the HDR bloom of its water reflection is much
   brighter than WE's (the layer's own passes match; `general.bloom` with
   `hdr: true`). Not calibrated yet.
@@ -926,10 +970,9 @@ customization panel (`docs/SELECTOR.md`).
 - Shape quads: the default size (scene height) is measured on landscape
   scenes only; a portrait scene could use its width (min side) instead.
   Shapes other than `quad`, and quads without a `DIRECTDRAW` effect, are
-  skipped with a warning (none in the corpus). Image CHILDREN without
-  `parallaxDepth` still use depth 1; inheriting the parent's, as quads do,
-  is likely right for them too but changes non-quad scenes and needs its
-  own gate.
+  skipped with a warning (none in the corpus). Particle CHILDREN without
+  `parallaxDepth` still use depth 1 (images and quads inherit the
+  parent's): not measured.
 - Particles: **the prewarm (`starttime`) runs in real time**: it ignores
   `instanceoverride.rate`. In `make_particles.py pre_rate001` (rate 0.01,
   starttime 10, emission 2/s, life 12), WE shows 0.82x the dots of rate 1
