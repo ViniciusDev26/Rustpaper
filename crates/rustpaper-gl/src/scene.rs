@@ -128,6 +128,9 @@ struct Layer {
     name: String,
     visible: bool,
     kind: LayerKind,
+    /// `"shape": "quad"`: its material is a DIRECTDRAW effect pass, drawn
+    /// straight onto the scene (see `direct_draw_material`).
+    shape_quad: bool,
     /// parent transforms * own transform (objects can be parented).
     world: Mat4,
     /// `parallaxDepth`: how much the object follows the camera parallax.
@@ -471,9 +474,15 @@ impl SceneRenderer {
         r.worlds = world_matrices(objects);
         for obj in objects {
             // `"image": null` is common on non-image objects: test for a string
-            if obj.get("image").and_then(|i| i.as_str()).is_some() {
+            if obj.get("image").and_then(|i| i.as_str()).is_some() || is_shape_quad(obj) {
                 match r.load_layer(gl, obj) {
-                    Ok(layer) => {
+                    Ok(mut layer) => {
+                        if layer.shape_quad
+                            && obj.get("parallaxDepth").is_none()
+                            && let Some(p) = inherited_parallax(objects, obj)
+                        {
+                            layer.parallax = p;
+                        }
                         r.order.push(ObjRef::Layer(r.layers.len()));
                         r.layers.push(layer);
                     }
@@ -899,6 +908,12 @@ impl SceneRenderer {
                     .ok_or("material has no passes")?;
                 (image.to_string(), model, pass)
             }
+            // `"shape": "quad"`: no model nor material, the DIRECTDRAW effect
+            // below becomes the material (see `direct_draw_material`)
+            None if is_shape_quad(obj) => {
+                let id = obj.get("id").and_then(|i| i.as_i64()).unwrap_or(0);
+                (format!("shape #{id}"), Value::Null, Value::Null)
+            }
             // text objects: a plain image material over the rasterized text
             // (VERSION 2 = tinted by the object's color + alpha)
             None => {
@@ -991,7 +1006,8 @@ impl SceneRenderer {
             .get("colorBlendMode")
             .and_then(|v| value::plain(v).as_i64())
             .unwrap_or(0);
-        let via_target = !effects.is_empty() || matches!(kind, LayerKind::Passthrough { .. });
+        let via_target = (!effects.is_empty() && !is_shape_quad(obj))
+            || matches!(kind, LayerKind::Passthrough { .. });
         let mut composite = None;
         if blend_mode != 0 {
             if via_target {
@@ -1011,7 +1027,13 @@ impl SceneRenderer {
         // Man 3577990983's dock icons are solid layers whose `instance`
         // texture is the icon: without it they drew as white squares.
         let instance = obj.get("instance").filter(|i| i.is_object());
-        let material = self.resolve_pass(gl, pass_json, instance, &[], &extra_combos, false)?;
+        let shape = is_shape_quad(obj);
+        let material = if shape {
+            self.direct_draw_material(&mut effects)
+                .ok_or("shape quad without a DIRECTDRAW effect")?
+        } else {
+            self.resolve_pass(gl, pass_json, instance, &[], &extra_combos, false)?
+        };
         let flipbook = self.load_flipbook(gl, pass_json);
 
         let (w, h) = (self.width as f32, self.height as f32);
@@ -1023,6 +1045,15 @@ impl SceneRenderer {
         });
         let size = match kind {
             LayerKind::Passthrough { fullscreen: true } => [w, h],
+            _ if shape => value::get_floats(obj, "size")
+                .filter(|s| s.len() >= 2 && s[0] > 0.0 && s[1] > 0.0)
+                .map(|s| [s[0], s[1]])
+                // WE's default quad is a square the scene's height on a
+                // side (no corpus quad stores a `size`): 3288381550 (5824x3264)
+                // fits WE's shafts best at 3264 (correlation 0.909 / 0.975 /
+                // 0.931 at 3150 / 3264 / 3380); the editor presets agree (a
+                // 256-high preview scene, quads scaled ~2 to cover it).
+                .unwrap_or([h, h]),
             _ => value::get_floats(obj, "size")
                 .filter(|s| s.len() >= 2 && s[0] > 0.0 && s[1] > 0.0)
                 .map(|s| [s[0], s[1]])
@@ -1040,6 +1071,7 @@ impl SceneRenderer {
                 .to_string(),
             visible: object_visible(obj),
             kind,
+            shape_quad: shape,
             world: match kind {
                 LayerKind::Passthrough { fullscreen: true } => {
                     math::model([w / 2.0, h / 2.0, 0.0], 0.0, [1.0; 3])
@@ -1066,6 +1098,30 @@ impl SceneRenderer {
             effects,
             parked,
         })
+    }
+
+    /// Takes the first effect whose pass is compiled with `DIRECTDRAW=1` out
+    /// of `effects` and returns that pass as a shape quad's material.
+    fn direct_draw_material(&self, effects: &mut Vec<Effect>) -> Option<Pass> {
+        let k = effects.iter().position(|e| {
+            e.passes.first().is_some_and(|p| {
+                self.combos_by_key
+                    .get(&p.pass.program_key)
+                    .and_then(|(_, c)| c.get("DIRECTDRAW"))
+                    .is_some_and(|v| *v != 0)
+            })
+        })?;
+        let mut pass = effects.remove(k).passes.swap_remove(0).pass;
+        // The material says `"blending": "normal"` (opaque for an image
+        // layer), but a direct draw ADDS its light: the shader leaves
+        // rgb = color * intensity * fx, alpha = fx over a black albedo, and
+        // WE composites it as src * alpha + dst. 3288381550's corner shafts
+        // over a flat gray scene (beam region, 5 stills vs WE's mean):
+        // correlation 0.975 and energy ratio 1.06 with SRC_ALPHA/ONE, energy
+        // 3.8 with ONE/ONE; translucent blending darkens the gray around the
+        // rays (negative correlation) where WE only brightens it.
+        pass.blend = Blend::Additive;
+        Some(pass)
     }
 
     fn load_effect(&mut self, gl: &glow::Context, fx: &Value) -> Result<Effect, String> {
@@ -3145,6 +3201,7 @@ impl SceneRenderer {
                     l.name.chars().take(28).collect::<String>(),
                     if l.visible { "shown" } else { "HIDDEN" },
                     match l.kind {
+                        LayerKind::Image if l.shape_quad => "shape quad",
                         LayerKind::Image => "image",
                         LayerKind::Passthrough { fullscreen: true } => "fullscreen",
                         LayerKind::Passthrough { .. } => "compose",
@@ -3251,6 +3308,35 @@ fn shader_name(key: &str) -> &str {
 /// Frame rate whose per-frame effects Rustpaper reproduces: the harness pins
 /// WE's frame-rate limit to 60 (`WE_FPS`), the default most users keep.
 const WE_REFERENCE_FPS: f32 = 60.0;
+
+/// `"shape": "quad"` objects (the editor's light shafts presets): no image,
+/// no model, just a quad an effect with `DIRECTDRAW=1` draws itself onto.
+fn is_shape_quad(obj: &Value) -> bool {
+    obj.get("image").and_then(|i| i.as_str()).is_none()
+        && obj.get("shape").and_then(|s| s.as_str()) == Some("quad")
+}
+
+/// `parallaxDepth` of the nearest ancestor that sets one. Shape quads are
+/// always children in the corpus and never set their own: Lucy 3521337568's
+/// light shafts hang from group 2065 (depth 0.12) and, with the pointer WE
+/// saw (0, 0), only the parent's depth puts the glow where WE has it (sky
+/// left of the planet: |diff| 26.4 -> 16.6, region SSIM 0.814 -> 0.834;
+/// depth 0 gives 17.8 / 0.831).
+fn inherited_parallax(objects: &[Value], obj: &Value) -> Option<[f32; 2]> {
+    let by_id: HashMap<i64, &Value> = objects
+        .iter()
+        .filter_map(|o| Some((o.get("id")?.as_i64()?, o)))
+        .collect();
+    let mut cur = obj.get("parent").and_then(|p| p.as_i64());
+    for _ in 0..64 {
+        let p = by_id.get(&cur?)?;
+        if p.get("parallaxDepth").is_some() {
+            return Some(value::get_vec2(p, "parallaxDepth", [1.0, 1.0]));
+        }
+        cur = p.get("parent").and_then(|p| p.as_i64());
+    }
+    None
+}
 
 /// `visible` of an object, honoring user properties; objects whose visibility
 /// is driven by a script that spawns layer clones (`createLayer`, e.g. audio
@@ -3655,6 +3741,29 @@ fn step_systems(systems: &mut [SystemRt], dt: f32, pointer: [f32; 3]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shape_quads_inherit_the_nearest_ancestor_parallax() {
+        let objects: Vec<Value> = serde_json::from_str(
+            r#"[
+                {"id": 1, "parallaxDepth": "0.12000 0.12000"},
+                {"id": 2, "parent": 1},
+                {"id": 3, "parent": 2, "shape": "quad"},
+                {"id": 4, "shape": "quad"},
+                {"id": 5, "image": "models/x.json", "shape": "quad"}
+            ]"#,
+        )
+        .unwrap();
+        assert!(is_shape_quad(&objects[2]));
+        assert!(!is_shape_quad(&objects[1]));
+        // an image wins over `shape`
+        assert!(!is_shape_quad(&objects[4]));
+        assert_eq!(
+            inherited_parallax(&objects, &objects[2]),
+            Some([0.12, 0.12])
+        );
+        assert_eq!(inherited_parallax(&objects, &objects[3]), None);
+    }
 
     #[test]
     fn parses_texture_units_and_composite_refs() {
