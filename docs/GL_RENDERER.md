@@ -825,8 +825,20 @@ even in `--describe`). Now they are layers listed as `"shape quad"`:
   with depth 1 (our default) the glow was too bright on the left
   (sky left of the planet, x 0..650: |diff| 26.4, region SSIM 0.814), with
   the parent's 0.12 the region's mean color matches WE's (62/72/82 vs
-  62/72/83, |diff| 16.6, SSIM 0.834; depth 0 gives 17.8 / 0.831). Only
-  quads inherit it: image children keep the default 1 (see Known gaps).
+  62/72/83, |diff| 16.6, SSIM 0.834; depth 0 gives 17.8 / 0.831).
+- **Image children inherit it too.** Chainsaw Man 3577990983 hangs its sky
+  (3840x2160, scale 1.05), clouds and five fireworks from group 35, depth
+  0; the children store no `parallaxDepth`. WE saw the pointer at (0, 0)
+  and its background covers the screen; with depth 1 ours slid ~100 px
+  right and down and left black bands along the top and left edges. With
+  the parent's depth (2026-11-22, against the existing captures,
+  texture-animation fix in both runs):
+  Chainsaw Man 0.660 -> 0.859 (energy ratio 0.70 -> 1.11), Camellya
+  3366882745 0.829 -> 0.936 (ratio 2.10 -> 0.95), 3233141951 0.62635 ->
+  0.62642; 3195212886 and Lucy 3521337568 identical (their affected
+  children are quads or sit still). No other corpus scene has an image or
+  particle child without a depth under a parent with one != 1 and camera
+  parallax on.
 
 Harness, against the existing WE captures (2026-11-22): Lucy 3521337568
 0.611 -> 0.710 (beam region |diff| 50.0 -> 18.9, SSIM 0.42 -> 0.86; still
@@ -931,10 +943,9 @@ customization panel (`docs/SELECTOR.md`).
 - Shape quads: the default size (scene height) is measured on landscape
   scenes only; a portrait scene could use its width (min side) instead.
   Shapes other than `quad`, and quads without a `DIRECTDRAW` effect, are
-  skipped with a warning (none in the corpus). Image CHILDREN without
-  `parallaxDepth` still use depth 1; inheriting the parent's, as quads do,
-  is likely right for them too but changes non-quad scenes and needs its
-  own gate.
+  skipped with a warning (none in the corpus). Particle CHILDREN without
+  `parallaxDepth` still use depth 1 (images and quads inherit the
+  parent's): not measured.
 - Particles: **the prewarm (`starttime`) runs in real time**: it ignores
   `instanceoverride.rate`. In `make_particles.py pre_rate001` (rate 0.01,
   starttime 10, emission 2/s, life 12), WE shows 0.82x the dots of rate 1
