@@ -9,10 +9,112 @@ wallpaper still differed somewhere and the long tail never ended, so it was
 replaced by this (the old code is in git history before the migration
 commit).
 
-## How it works
+## Architecture: one core, desktop adapters
 
-For each real monitor (`main.rs`) there is ONE long-lived WE window, shared by
-every engine instance:
+```
+            core (identical on every desktop)                 adapters (desktop/)
+ ┌──────────────────────────────────────────────────┐   ┌─────────────────────────────┐
+ │ we.rs      WE under Proton: start, -control,     │   │ trait Desktop               │
+ │            config.json, applyProperties          │   │   outputs()   real monitors │
+ │ config.rs  CLI / state.json (--service, SIGHUP)  │◀──│   coverage()  Playback info │
+ │ main.rs    targets, reload, watchdog, Playback   │   │   stage()                   │
+ │ mirror.rs  capture WE's windows -> layer-shell   │   │ trait Stage                 │
+ │            (standard Wayland protocols only)     │   │   prepare() hide_we_ui()    │
+ └──────────────────────────────────────────────────┘   │   tend()                    │
+                                                        │ hyprland.rs  sway.rs  ...   │
+                                                        └─────────────────────────────┘
+```
+
+The core never talks to a compositor. Everything desktop-specific sits
+behind two traits (`desktop/mod.rs`):
+- **`Desktop`**: the real monitors and their pixel sizes, and what covers
+  each one (fullscreen, maximized or tiled, focused, asleep), for the
+  Playback rules.
+- **`Stage`**: a place where WE's windows live out of the user's sight but
+  rendered, because compositors only render (and so only let us capture)
+  windows they consider visible. It must:
+  - prepare it once per monitor;
+  - keep WE's own UI hidden;
+  - repair it every 2 s (`tend`).
+
+Supporting a desktop = one adapter implementing both traits.
+`desktop::detect()` picks it from the session (`HYPRLAND_INSTANCE_SIGNATURE`,
+`SWAYSOCK`). An unsupported session gets an error naming exactly what is
+missing.
+
+| Desktop | Adapter | Stage | Status |
+|---|---|---|---|
+| any with layer-shell | the private stage (below) hosts WE; the adapter only reports monitors and coverage | private | verified on Hyprland (with WE, 4K + 1080p at 60 fps) and on a nested Sway 1.12 (test X client) |
+| Hyprland 0.56+ | `desktop/hyprland.rs` | private, or headless outputs `RP-<output>` + window rules | both stages verified with WE |
+| Sway 1.11+ | `desktop/sway.rs` | private, or `create_output` + `workspace ... output` + `for_window` | both stages verified on a nested Sway 1.12 with a test X client (class `steam_app_431960`); not yet with WE on a real Sway session |
+| KDE, niri, others | `desktop/generic.rs` (monitors from `wl_output`, no coverage) | private only | not run yet |
+| GNOME | none | none | no layer-shell: needs a Shell extension to show the wallpaper |
+
+What every adapter can rely on: `zwlr-layer-shell` to show the wallpaper
+and `ext-image-copy-capture` + `ext-foreign-toplevel-list` to capture WE's
+windows. The mirror uses only these.
+
+### The private stage (`stage.rs`)
+
+The desktop stages borrow the user's compositor: headless outputs, rules,
+and constant repairs. The private stage is Rustpaper's own instead:
+- **What it is.** A headless Smithay compositor on its own thread, with its
+  own XWayland. WE opens its windows there.
+- **Monitors.** Each monitor is a `wl_output` of ours, so WE sees the real
+  monitors.
+- **Windows.** The X11 window manager gives `rustpaper-<output>` its
+  monitor's exact geometry. WE's other windows (UI, dialogs) are mapped
+  and shown nowhere. Nothing needs hiding, rules or repairs: Hyprland sees
+  no WE window at all.
+- **Buffers.** Each commit of a wallpaper window hands its dmabuf to the
+  main thread, which attaches it as-is to the monitor's layer-shell surface
+  on the user's compositor: no capture, no copy. The client buffer goes
+  back to WE once the user's compositor released it, and shm buffers are
+  copied.
+- **Formats.** Our XWayland is offered exactly the dmabuf layouts the
+  user's compositor imports, read from its `zwp_linux_dmabuf_v1` default
+  feedback (Hyprland's main device gave XWayland glamor).
+- **Measured.** WE on the private stage drew 60.0 fps on both monitors (4K
+  and 1080p), with no WE window in Hyprland (2026-11-22).
+
+Choosing it: `state.json` `stage` (`auto`, `desktop` or `private`), or
+`--stage`. `auto` picks the private stage once WE's launch option is set
+up, or when the desktop adapter has no stage of its own.
+
+**Pointing WE at our display.** WE inherits Steam's environment. Its Steam
+launch option `"<rustpaper>" we-launch %command%` (`launch.rs`) runs us
+first:
+- with a private stage up (its display in
+  `$XDG_RUNTIME_DIR/rustpaper/stage-display`), we set `DISPLAY` to it,
+  drop `WAYLAND_DISPLAY` and `exec` Steam's command;
+- otherwise we change nothing. Verified: WE launched through the wrapper
+  with no stage behaves as before.
+
+`rustpaper setup-steam` writes that option into every account's
+`localconfig.vdf` (`rustpaper_core::steam`, a KeyValues reader/writer whose
+output reproduced the user's real file byte for byte). Steam keeps that
+file in memory and rewrites it on exit, so the command closes Steam
+(`steam -shutdown`), writes the option with a one-time backup, and starts
+Steam again. When WE runs on another display at engine start, the engine
+restarts it so Steam relaunches it onto the stage.
+
+Not yet: explicit sync (`wp_linux_drm_syncobj`) is not offered. XWayland
+then uses implicit sync, which showed no corruption on the NVIDIA driver in
+the tests. Cursor injection into our XWayland (eye tracking, parallax) is
+now possible, but not done yet.
+
+**Stopping WE cleanly** (`we::restart`). Killing only `wallpaper64.exe`
+left Wine's helpers (`wineserver`, `winedevice.exe`, ...) and the embedded
+Chromium's `CrGpuMain` alive in WE's Steam container. Steam then refused
+every new launch: `WaitingPrevProcess` -> `AppError_16` in
+`~/.local/share/Steam/logs/console_log.txt`, until those processes were
+gone. The engine now stops every process carrying `SteamAppId=431960` or
+WE's Wine prefix in its environment (SIGTERM, then SIGKILL after 10 s).
+
+## How it works (Hyprland stage)
+
+For each real monitor there is ONE long-lived WE window, shared by every
+engine instance:
 
 1. **Headless output.** A headless Hyprland output `RP-<output>` is created
    at the monitor's pixel size, scale 1. A workspace rule pins workspace
@@ -68,6 +170,20 @@ one. When it is the last `rustpaper` running, it sends `-control stop` so WE
 renders nothing while no wallpaper is shown. (Without systemd, the selector
 starts the next engine before stopping the old one, so for 2.5 s both mirror
 the same window.)
+
+**Config reloads.** A Hyprland config reload drops every rule added at
+runtime: window rules, workspace pins, headless output modes. Omarchy
+reloads on every theme switch, which "Theme from wallpaper" triggers. The
+adapter listens on Hyprland's event socket (`.socket2.sock`,
+`configreloaded>>`) and re-applies the stage.
+- Verified with `hyprctl reload`: the stage was restored and ended at the
+  right sizes.
+- Hyprland animates WE's windows in the instant of the reload, before any
+  client can react: a 1-2 s zoom (7680x4320 down to 3840x2160 in the
+  capture).
+- The fix is to put the same rules in the Hyprland config, where reloads
+  keep them, through a file that `hyprland.lua` would `require`. That means
+  editing the user's config, so it is not done automatically.
 
 A **watchdog** runs every 2 s. It restores the workspace and fullscreen
 state, and asks WE again for a window that is missing after 40 s. After two
@@ -162,7 +278,7 @@ on DP-1 (1920x1080), 20 s averages:
   needs a manual restart (`kill` wallpaper64.exe; the engine restarts it).
 - **Leftovers**: the headless outputs and WE's windows stay after the last
   engine exits (stopped, so they cost nothing). The next engine reuses them.
-- **Hyprland only** (0.56+ for the Lua dispatchers). Rules and workspace
-  rules added at runtime stay until the next Hyprland config reload.
+- **Desktops:** Hyprland (0.56+, in use) and Sway (1.11+, not yet run
+  live); others need an adapter or the private stage (see Architecture).
 - **Untrusted code.** SceneScript and web wallpapers run inside WE as they do
   on Windows, with no sandbox, and Proton maps the host root as `Z:`.

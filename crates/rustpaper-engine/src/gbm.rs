@@ -45,6 +45,8 @@ unsafe extern "C" {
 const USE_RENDERING: u32 = 1 << 2;
 /// DRM_FORMAT_MOD_INVALID: "implicit modifier" in the dmabuf protocol.
 pub const MOD_INVALID: u64 = 0x00ff_ffff_ffff_ffff;
+/// DRM_FORMAT_MOD_LINEAR.
+const MOD_LINEAR: u64 = 0;
 
 pub struct Device {
     _file: File,
@@ -105,25 +107,46 @@ impl Device {
         Ok(Device { _file: file, dev })
     }
 
+    /// A buffer the compositor can copy into: with the compositor's
+    /// explicit modifiers, else (when the compositor accepts them) an
+    /// implicit-modifier or a linear buffer. NVIDIA's GBM refused the
+    /// explicit list for some sizes (even 1920x1080, right after a burst of
+    /// resizes) while simpler layouts could still work. Only layouts the
+    /// compositor advertised are tried: importing another one is a
+    /// protocol error that ends the connection. None when all fail (the
+    /// caller falls back to shm).
     pub fn alloc(&self, w: u32, h: u32, fourcc: u32, modifiers: &[u64]) -> Option<Bo> {
         let explicit: Vec<u64> = modifiers
             .iter()
             .copied()
             .filter(|&m| m != MOD_INVALID)
             .collect();
+        let implicit_ok = explicit.is_empty() || modifiers.contains(&MOD_INVALID);
         // SAFETY: plain allocation calls; null checked.
-        let bo = unsafe {
-            if explicit.is_empty() {
-                gbm_bo_create(self.dev, w, h, fourcc, USE_RENDERING)
-            } else {
-                gbm_bo_create_with_modifiers(
+        let (bo, modifier_known) = unsafe {
+            let mut bo = std::ptr::null_mut();
+            if !explicit.is_empty() {
+                bo = gbm_bo_create_with_modifiers(
                     self.dev,
                     w,
                     h,
                     fourcc,
                     explicit.as_ptr(),
                     explicit.len() as u32,
+                );
+            }
+            if !bo.is_null() {
+                (bo, true)
+            } else if implicit_ok {
+                (gbm_bo_create(self.dev, w, h, fourcc, USE_RENDERING), false)
+            } else if explicit.contains(&MOD_LINEAR) {
+                let linear = [MOD_LINEAR];
+                (
+                    gbm_bo_create_with_modifiers(self.dev, w, h, fourcc, linear.as_ptr(), 1),
+                    true,
                 )
+            } else {
+                (std::ptr::null_mut(), false)
             }
         };
         if bo.is_null() {
@@ -131,10 +154,10 @@ impl Device {
         }
         // SAFETY: bo valid; each fd returned is a new fd we own.
         unsafe {
-            let modifier = if explicit.is_empty() {
-                MOD_INVALID
-            } else {
+            let modifier = if modifier_known {
                 gbm_bo_get_modifier(bo)
+            } else {
+                MOD_INVALID
             };
             let planes = (0..gbm_bo_get_plane_count(bo))
                 .map(|p| Plane {

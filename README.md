@@ -41,8 +41,9 @@ To use it you need:
    purchased and installed through Steam, **running under Proton** (Steam ->
    Wallpaper Engine -> Properties -> Compatibility);
 2. wallpapers subscribed from its Workshop;
-3. **Hyprland 0.56+** (headless outputs, window rules and Lua dispatchers are
-   used to keep WE's windows out of sight).
+3. **Hyprland 0.56+** (or Sway 1.11+, adapter not yet tested live). Each
+   desktop is an adapter (`crates/rustpaper-engine/src/desktop/`); see
+   [`docs/ENGINE.md`](./docs/ENGINE.md) for adding one.
 
 ---
 
