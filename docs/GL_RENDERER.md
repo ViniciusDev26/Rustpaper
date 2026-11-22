@@ -545,7 +545,9 @@ Chainsaw Man 0.656 -> 0.786 (ratio 1.54 -> 1.55), 3233141951 0.6275 ->
 0.6276, 3195212886 unchanged.
 
 `general.zoom` zooms the camera around the scene center (CITRUS 2704773569,
-zoom 1.1: mean SSIM 0.43 -> 0.98).
+zoom 1.1: mean SSIM 0.43 -> 0.98). A script's `setCameraTransforms`
+zoom is a second factor on top (Persona 3 3151551777, see
+docs/SCENESCRIPT.md).
 
 ## Text (`text.rs`)
 
