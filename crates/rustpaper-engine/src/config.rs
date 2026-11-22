@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use rustpaper_core::performance;
-use rustpaper_core::state::{self, Playback};
+use rustpaper_core::state::{self, Playback, StageChoice};
 use serde_json::{Map, Value};
 
 /// What to show and how.
@@ -18,19 +18,21 @@ pub struct Config {
     pub playback: Playback,
     /// WE quality settings (sanitized); empty = leave WE's as they are.
     pub performance: Map<String, Value>,
+    pub stage: StageChoice,
 }
 
 /// Where the Config comes from.
 pub enum Source {
     /// `rustpaper <dir> [...]`: fixed.
     Args(Config),
-    /// `rustpaper --service`: the selector's state.json, re-read on SIGHUP.
-    Service,
+    /// `rustpaper --service`: the selector's state.json, re-read on SIGHUP
+    /// (an explicit `--stage` wins over its stage choice).
+    Service(Option<StageChoice>),
 }
 
 fn usage() -> ! {
     eprintln!(
-        "usage: rustpaper <wallpaper folder> [--props properties.json] [--mute] [--volume 0..100] [--output NAME]\n       rustpaper --service [--output NAME]   (the selector's choice; SIGHUP re-reads it)"
+        "usage: rustpaper <wallpaper folder> [--props properties.json] [--mute] [--volume 0..100] [--output NAME] [--stage auto|desktop|private]\n       rustpaper --service [--output NAME] [--stage ...]   (the selector's choice; SIGHUP re-reads it)\n       rustpaper setup-steam                                (WE's launch option, for the private stage)\n       rustpaper we-launch <command>                        (that launch option)"
     );
     std::process::exit(2);
 }
@@ -42,8 +44,17 @@ pub fn parse_args() -> (Source, Option<String>) {
     let mut mute = false;
     let mut output = None;
     let mut service = false;
+    let mut stage = None;
     while let Some(a) = args.next() {
         match a.as_str() {
+            "--stage" => {
+                stage = match args.next().as_deref() {
+                    Some("auto") => Some(StageChoice::Auto),
+                    Some("desktop") => Some(StageChoice::Desktop),
+                    Some("private") => Some(StageChoice::Private),
+                    _ => usage(),
+                }
+            }
             "--service" => service = true,
             "--props" => props_file = args.next().map(PathBuf::from),
             "--mute" | "--no-audio" => mute = true,
@@ -63,7 +74,7 @@ pub fn parse_args() -> (Source, Option<String>) {
         }
     }
     if service {
-        return (Source::Service, output);
+        return (Source::Service(stage), output);
     }
     let Some(dir) = dir else { usage() };
     let properties = props_file
@@ -81,6 +92,7 @@ pub fn parse_args() -> (Source, Option<String>) {
         mute,
         playback: Playback::default(),
         performance: Map::new(),
+        stage: stage.unwrap_or_default(),
     };
     (Source::Args(config), output)
 }
@@ -108,5 +120,6 @@ pub fn service_config() -> Result<Config, String> {
         mute: st.volume == 0,
         playback: st.playback,
         performance: performance::sanitize(&st.performance),
+        stage: st.stage,
     })
 }

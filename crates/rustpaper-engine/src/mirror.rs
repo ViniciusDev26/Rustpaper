@@ -7,6 +7,10 @@
 //! `ext-foreign-toplevel-list-v1`). The compositor copies the window into our
 //! buffers and answers only when it has new content, so WE paces us.
 //!
+//! With the private stage (stage.rs) there is no capture: WE's own buffers
+//! arrive through [`Mirrors::show`] and are attached as they are; the
+//! capture protocols are then not needed at all.
+//!
 //! Buffers are GBM dmabufs on the compositor's GPU, attached to our surface
 //! as-is: no GL context here, and no CPU copy. With wl_shm the compositor
 //! read every frame back to RAM: one 1080p60 mirror took Hyprland from 2.8%
@@ -44,6 +48,7 @@ use wayland_protocols::ext::image_copy_capture::v1::client::{
 };
 use wayland_protocols::wp::linux_dmabuf::zv1::client::{
     zwp_linux_buffer_params_v1::{self, ZwpLinuxBufferParamsV1},
+    zwp_linux_dmabuf_feedback_v1::{self, ZwpLinuxDmabufFeedbackV1},
     zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1,
 };
 use wayland_protocols::wp::viewporter::client::{
@@ -55,6 +60,7 @@ use wayland_protocols_wlr::layer_shell::v1::client::{
 };
 
 use crate::gbm;
+use crate::stage::{Frame, FramePixels, HostDmabuf};
 
 /// Buffers per output: one shown, one being captured into, one spare (the
 /// shown one is reusable only after the compositor releases it).
@@ -101,6 +107,35 @@ pub struct Mirror {
     dmabuf_formats: Vec<(u32, Vec<u64>)>,
     buffers: Vec<Buf>,
     frame: Option<(ExtImageCopyCaptureFrameV1, u64)>,
+    /// Frames come from the user's compositor (capture) or from the
+    /// private stage (`show`).
+    capture: bool,
+    /// Buffers shown for the private stage.
+    external: Vec<ExtBuf>,
+}
+
+/// A buffer of the private stage's frames on the user's compositor.
+struct ExtBuf {
+    id: u64,
+    buffer: WlBuffer,
+    size: (u32, u32),
+    /// The stage's buffer key (dmabuf frames; None for our shm copies).
+    key: Option<u64>,
+    on_screen: bool,
+    /// The stage's buffer was destroyed: drop this one once released.
+    gone: bool,
+    /// shm copies: our mapping (pointer, length, stride, wl_shm format).
+    shm: Option<(*mut u8, usize, u32, u32)>,
+}
+
+impl ExtBuf {
+    fn destroy(&self) {
+        self.buffer.destroy();
+        if let Some((ptr, len, ..)) = self.shm {
+            // SAFETY: the mapping we created for this buffer, unmapped once.
+            unsafe { libc::munmap(ptr.cast(), len) };
+        }
+    }
 }
 
 pub struct Mirrors {
@@ -109,12 +144,20 @@ pub struct Mirrors {
     shm: WlShm,
     layer_shell: ZwlrLayerShellV1,
     viewporter: WpViewporter,
-    source_mgr: ExtForeignToplevelImageCaptureSourceManagerV1,
-    copy_mgr: ExtImageCopyCaptureManagerV1,
+    source_mgr: Option<ExtForeignToplevelImageCaptureSourceManagerV1>,
+    copy_mgr: Option<ExtImageCopyCaptureManagerV1>,
     dmabuf: Option<ZwpLinuxDmabufV1>,
+    /// What the compositor imports (its default dmabuf feedback).
+    pub host_dmabuf: HostDmabuf,
+    /// Format table of the feedback being received.
+    feedback_table: Vec<(u32, u64)>,
+    /// Stage buffer keys the compositor released since the last call to
+    /// `take_released`.
+    released: Vec<u64>,
     gbm: Option<gbm::Device>,
     gbm_broken: bool,
-    outputs: Vec<(WlOutput, String)>,
+    /// The compositor's outputs: object, name, current mode in pixels.
+    outputs: Vec<(WlOutput, String, (u32, u32))>,
     toplevels: Vec<Toplevel>,
     next_id: u64,
 }
@@ -138,27 +181,28 @@ impl Mirrors {
             viewporter: globals
                 .bind(&qh, 1..=1, ())
                 .map_err(|_| lacks("wp_viewporter"))?,
-            source_mgr: globals
-                .bind(&qh, 1..=1, ())
-                .map_err(|_| lacks("ext_foreign_toplevel_image_capture_source_manager_v1"))?,
-            copy_mgr: globals
-                .bind(&qh, 1..=1, ())
-                .map_err(|_| lacks("ext_image_copy_capture_manager_v1"))?,
+            // capture protocols: only needed by desktop stages
+            source_mgr: globals.bind(&qh, 1..=1, ()).ok(),
+            copy_mgr: globals.bind(&qh, 1..=1, ()).ok(),
             dmabuf: globals.bind(&qh, 4..=5, ()).ok(),
+            host_dmabuf: HostDmabuf::default(),
+            feedback_table: Vec::new(),
+            released: Vec::new(),
             gbm: None,
             gbm_broken: false,
             outputs: Vec::new(),
             toplevels: Vec::new(),
             next_id: 0,
         };
-        let _list: ExtForeignToplevelListV1 = globals
-            .bind(&qh, 1..=1, ())
-            .map_err(|_| lacks("ext_foreign_toplevel_list_v1"))?;
+        let _list: Option<ExtForeignToplevelListV1> = globals.bind(&qh, 1..=1, ()).ok();
+        if let Some(d) = &m.dmabuf {
+            d.get_default_feedback(&qh, ());
+        }
         for g in globals.contents().clone_list() {
             if g.interface == WlOutput::interface().name {
                 let idx = m.outputs.len();
                 let o: WlOutput = globals.registry().bind(g.name, g.version.min(4), &qh, idx);
-                m.outputs.push((o, String::new()));
+                m.outputs.push((o, String::new(), (0, 0)));
             }
         }
         // output names, then the toplevel list
@@ -167,13 +211,33 @@ impl Mirrors {
         Ok((m, queue, conn))
     }
 
-    /// Starts the wallpaper surface of `output`, showing window `title`.
-    pub fn add(&mut self, qh: &QueueHandle<Self>, output: &str, title: &str) -> Result<(), String> {
+    /// The compositor's outputs as (name, pixel size): what the generic
+    /// desktop adapter offers when no compositor-specific one exists.
+    pub fn wl_outputs(&self) -> Vec<(String, (u32, u32))> {
+        self.outputs
+            .iter()
+            .map(|(_, n, sz)| (n.clone(), *sz))
+            .collect()
+    }
+
+    /// Starts the wallpaper surface of `output`, showing window `title`:
+    /// captured from the user's compositor (`capture`), or fed by the
+    /// private stage through `show`.
+    pub fn add(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        output: &str,
+        title: &str,
+        capture: bool,
+    ) -> Result<(), String> {
+        if capture && (self.copy_mgr.is_none() || self.source_mgr.is_none()) {
+            return Err("the compositor lacks ext-image-copy-capture (window capture)".into());
+        }
         let wl_output = self
             .outputs
             .iter()
-            .find(|(_, n)| n == output)
-            .map(|(o, _)| o.clone())
+            .find(|(_, n, _)| n == output)
+            .map(|(o, _, _)| o.clone())
             .ok_or_else(|| format!("output {output} not found"))?;
         let idx = self.list.len();
         let surface = self.compositor.create_surface(qh, ());
@@ -211,19 +275,204 @@ impl Mirrors {
             dmabuf_formats: Vec::new(),
             buffers: Vec::new(),
             frame: None,
+            capture,
+            external: Vec::new(),
         });
         Ok(())
     }
 
+    /// Shows a frame of the private stage on its monitor. A dmabuf frame is
+    /// attached as it is (its host buffer cached by key); an shm frame is
+    /// copied into one of our buffers. Paused monitors drop the frame (the
+    /// buffer goes straight back to WE).
+    pub fn show(&mut self, qh: &QueueHandle<Self>, frame: Frame) {
+        let release_now = |s: &mut Self, frame: &Frame| {
+            if matches!(frame.pixels, FramePixels::Dmabuf { .. }) {
+                s.released.push(frame.key);
+            }
+        };
+        let Some(i) = self.list.iter().position(|m| m.output == frame.output) else {
+            return release_now(self, &frame);
+        };
+        if self.list[i].paused || !self.list[i].configured {
+            return release_now(self, &frame);
+        }
+        let size = frame.size;
+        let id = match frame.pixels {
+            FramePixels::Dmabuf {
+                fourcc,
+                modifier,
+                planes,
+            } => {
+                let cached = self.list[i]
+                    .external
+                    .iter()
+                    .find(|e| e.key == Some(frame.key) && e.size == size && !e.gone)
+                    .map(|e| e.id);
+                match cached {
+                    Some(id) => id,
+                    None => {
+                        let Some(dmabuf) = self.dmabuf.clone() else {
+                            return self.released.push(frame.key);
+                        };
+                        let params = dmabuf.create_params(qh, ());
+                        for (n, p) in planes.iter().enumerate() {
+                            params.add(
+                                p.fd.as_fd(),
+                                n as u32,
+                                p.offset,
+                                p.stride,
+                                (modifier >> 32) as u32,
+                                modifier as u32,
+                            );
+                        }
+                        let id = self.take_id();
+                        let buffer = params.create_immed(
+                            size.0 as i32,
+                            size.1 as i32,
+                            fourcc,
+                            zwp_linux_buffer_params_v1::Flags::empty(),
+                            qh,
+                            (i, id),
+                        );
+                        params.destroy();
+                        self.list[i].external.push(ExtBuf {
+                            id,
+                            buffer,
+                            size,
+                            key: Some(frame.key),
+                            on_screen: false,
+                            gone: false,
+                            shm: None,
+                        });
+                        id
+                    }
+                }
+            }
+            FramePixels::Shm {
+                format,
+                stride,
+                data,
+            } => {
+                let free = self.list[i].external.iter().find(|e| {
+                    e.key.is_none()
+                        && !e.on_screen
+                        && e.size == size
+                        && e.shm
+                            .is_some_and(|(_, _, st, f)| st == stride && f == format)
+                });
+                let id = match free.map(|e| e.id) {
+                    Some(id) => id,
+                    None => {
+                        let len = (stride * size.1) as usize;
+                        let Some(fd) = memfd(len) else { return };
+                        // SAFETY: mapping our own fresh memfd of `len` bytes.
+                        let ptr = unsafe {
+                            libc::mmap(
+                                std::ptr::null_mut(),
+                                len,
+                                libc::PROT_READ | libc::PROT_WRITE,
+                                libc::MAP_SHARED,
+                                fd.as_raw_fd(),
+                                0,
+                            )
+                        };
+                        if ptr == libc::MAP_FAILED {
+                            return;
+                        }
+                        let Ok(wl_format) = wl_shm::Format::try_from(format) else {
+                            return;
+                        };
+                        let pool: WlShmPool = self.shm.create_pool(fd.as_fd(), len as i32, qh, ());
+                        let id = self.take_id();
+                        let buffer = pool.create_buffer(
+                            0,
+                            size.0 as i32,
+                            size.1 as i32,
+                            stride as i32,
+                            wl_format,
+                            qh,
+                            (i, id),
+                        );
+                        pool.destroy();
+                        self.list[i].external.push(ExtBuf {
+                            id,
+                            buffer,
+                            size,
+                            key: None,
+                            on_screen: false,
+                            gone: false,
+                            shm: Some((ptr.cast(), len, stride, format)),
+                        });
+                        id
+                    }
+                };
+                if let Some(e) = self.list[i].external.iter().find(|e| e.id == id)
+                    && let Some((ptr, len, ..)) = e.shm
+                {
+                    let n = len.min(data.len());
+                    // SAFETY: copying into our own mapping of `len` bytes.
+                    unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, n) };
+                }
+                id
+            }
+        };
+        let m = &mut self.list[i];
+        let Some(e) = m.external.iter_mut().find(|e| e.id == id) else {
+            return;
+        };
+        m.surface.attach(Some(&e.buffer), 0, 0);
+        m.viewport
+            .set_destination(m.logical.0 as i32, m.logical.1 as i32);
+        m.surface.damage_buffer(0, 0, size.0 as i32, size.1 as i32);
+        m.surface.commit();
+        e.on_screen = true;
+        m.frames += 1;
+    }
+
+    /// The private stage destroyed its buffer `key`.
+    pub fn forget(&mut self, key: u64) {
+        for m in &mut self.list {
+            m.external.retain_mut(|e| {
+                if e.key != Some(key) {
+                    return true;
+                }
+                if e.on_screen {
+                    e.gone = true;
+                    return true;
+                }
+                e.destroy();
+                false
+            });
+        }
+    }
+
+    /// Stage buffer keys the compositor released (WE may reuse them).
+    pub fn take_released(&mut self) -> Vec<u64> {
+        std::mem::take(&mut self.released)
+    }
+
     /// Whether the window of mirror `i` is being captured.
     pub fn capturing(&self, i: usize) -> bool {
-        self.list[i].session.is_some()
+        let m = &self.list[i];
+        if m.capture {
+            m.session.is_some()
+        } else {
+            !m.external.is_empty()
+        }
     }
 
     /// Starts sessions for windows that appeared and the next capture of
     /// every idle mirror. Call after each dispatch.
     pub fn pump(&mut self, qh: &QueueHandle<Self>) {
+        let (Some(source_mgr), Some(copy_mgr)) = (self.source_mgr.clone(), self.copy_mgr.clone())
+        else {
+            return;
+        };
         for i in 0..self.list.len() {
+            if !self.list[i].capture {
+                continue;
+            }
             if self.list[i].session.is_none() {
                 let handle = self
                     .toplevels
@@ -235,13 +484,10 @@ impl Mirrors {
                         "{}: capturing window {}",
                         self.list[i].output, self.list[i].title
                     );
-                    let source = self.source_mgr.create_source(&handle, qh, ());
+                    let source = source_mgr.create_source(&handle, qh, ());
                     // no cursor painted into the frames: it is the user's own cursor
                     self.list[i].session =
-                        Some(
-                            self.copy_mgr
-                                .create_session(&source, Options::empty(), qh, i),
-                        );
+                        Some(copy_mgr.create_session(&source, Options::empty(), qh, i));
                     source.destroy();
                 }
             }
@@ -485,8 +731,17 @@ impl Dispatch<WlOutput, usize> for Mirrors {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let wl_output::Event::Name { name } = e {
-            s.outputs[*idx].1 = name;
+        match e {
+            wl_output::Event::Name { name } => s.outputs[*idx].1 = name,
+            wl_output::Event::Mode {
+                flags: WEnum::Value(f),
+                width,
+                height,
+                ..
+            } if f.contains(wl_output::Mode::Current) => {
+                s.outputs[*idx].2 = (width as u32, height as u32);
+            }
+            _ => {}
         }
     }
 }
@@ -503,8 +758,85 @@ impl Dispatch<WlBuffer, (usize, u64)> for Mirrors {
         if let wl_buffer::Event::Release = e {
             if let Some(b) = s.list[i].buffers.iter_mut().find(|b| b.id == id) {
                 b.on_screen = false;
+                s.reap(i, id);
+                return;
             }
-            s.reap(i, id);
+            let m = &mut s.list[i];
+            if let Some(pos) = m.external.iter().position(|e| e.id == id) {
+                let e = &mut m.external[pos];
+                e.on_screen = false;
+                if let Some(key) = e.key {
+                    s.released.push(key);
+                }
+                let m = &mut s.list[i];
+                if m.external[pos].gone {
+                    m.external[pos].destroy();
+                    m.external.remove(pos);
+                }
+            }
+        }
+    }
+}
+
+impl Dispatch<ZwpLinuxDmabufFeedbackV1, ()> for Mirrors {
+    fn event(
+        s: &mut Self,
+        _: &ZwpLinuxDmabufFeedbackV1,
+        e: zwp_linux_dmabuf_feedback_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        use zwp_linux_dmabuf_feedback_v1::Event;
+        match e {
+            // 16-byte entries: u32 format, u32 padding, u64 modifier
+            Event::FormatTable { fd, size } => {
+                let len = size as usize;
+                // SAFETY: read-only private mapping of the table fd we were sent.
+                let ptr = unsafe {
+                    libc::mmap(
+                        std::ptr::null_mut(),
+                        len,
+                        libc::PROT_READ,
+                        libc::MAP_PRIVATE,
+                        fd.as_raw_fd(),
+                        0,
+                    )
+                };
+                if ptr == libc::MAP_FAILED {
+                    return;
+                }
+                // SAFETY: the mapping is `len` bytes long.
+                let bytes = unsafe { std::slice::from_raw_parts(ptr.cast::<u8>(), len) };
+                s.feedback_table = bytes
+                    .as_chunks::<16>()
+                    .0
+                    .iter()
+                    .map(|c| {
+                        let f = u32::from_ne_bytes([c[0], c[1], c[2], c[3]]);
+                        let m = u64::from_ne_bytes([
+                            c[8], c[9], c[10], c[11], c[12], c[13], c[14], c[15],
+                        ]);
+                        (f, m)
+                    })
+                    .collect();
+                // SAFETY: unmapping what we mapped above.
+                unsafe { libc::munmap(ptr, len) };
+            }
+            Event::MainDevice { device } => {
+                s.host_dmabuf.main_device = device.try_into().map(u64::from_ne_bytes).unwrap_or(0);
+            }
+            Event::TrancheFormats { indices } => {
+                for idx in indices.as_chunks::<2>().0 {
+                    let i = u16::from_ne_bytes(*idx) as usize;
+                    if let Some(&pair) = s.feedback_table.get(i)
+                        && !s.host_dmabuf.formats.contains(&pair)
+                    {
+                        s.host_dmabuf.formats.push(pair);
+                    }
+                }
+            }
+            _ => {}
         }
     }
 }

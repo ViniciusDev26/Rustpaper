@@ -56,6 +56,20 @@ impl Default for Playback {
     }
 }
 
+/// Where Wallpaper Engine's windows live (see rustpaper-engine docs/ENGINE.md).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum StageChoice {
+    /// The private stage when WE's Steam launch option is set up, else the
+    /// desktop adapter's stage.
+    #[default]
+    Auto,
+    /// Inside the user's compositor (desktop adapter: headless outputs...).
+    Desktop,
+    /// Rustpaper's own compositor and XWayland.
+    Private,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
 pub struct State {
@@ -72,6 +86,7 @@ pub struct State {
     /// runs, WE would overwrite them on exit.
     pub performance: Map<String, Value>,
     pub playback: Playback,
+    pub stage: StageChoice,
 }
 
 impl Default for State {
@@ -82,6 +97,7 @@ impl Default for State {
             wallpaper_theme: false,
             performance: Map::new(),
             playback: Playback::default(),
+            stage: StageChoice::Auto,
         }
     }
 }

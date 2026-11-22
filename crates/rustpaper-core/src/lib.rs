@@ -6,3 +6,4 @@ pub mod paths;
 pub mod performance;
 pub mod project;
 pub mod state;
+pub mod steam;

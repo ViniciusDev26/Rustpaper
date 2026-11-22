@@ -15,9 +15,10 @@
 //! |---|---|---|
 //! | Hyprland 0.56+ | [`hyprland`] | headless outputs + window rules |
 //! | Sway 1.11+ | [`sway`] | headless outputs (`create_output`) + `for_window` |
-//! | others (KDE, niri, ...) | none yet | a private stage (our own nested compositor) is the planned general answer, see docs/ENGINE.md |
+//! | others with layer-shell (KDE, niri, ...) | [`generic`] (`wl_output`s only) | the private stage (stage.rs) |
 //! | GNOME | none | no layer-shell: needs a Shell extension |
 
+pub mod generic;
 pub mod hyprland;
 pub mod sway;
 
@@ -92,18 +93,14 @@ pub trait Stage {
     fn tend(&self, out: &Output) -> bool;
 }
 
-/// The adapter for the running session.
-pub fn detect() -> Result<Box<dyn Desktop>, String> {
+/// The adapter for the running session; `wl_outputs` (name, pixel size)
+/// feed the generic one when the compositor has no specific adapter.
+pub fn detect(wl_outputs: Vec<(String, (u32, u32))>) -> Result<Box<dyn Desktop>, String> {
     if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
         return hyprland::Hyprland::connect().map(|d| Box::new(d) as Box<dyn Desktop>);
     }
     if std::env::var_os("SWAYSOCK").is_some() {
         return sway::Sway::connect().map(|d| Box::new(d) as Box<dyn Desktop>);
     }
-    let session = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_else(|_| "unknown".into());
-    Err(format!(
-        "no desktop adapter for this session ({session}). Rustpaper supports Hyprland and \
-         Sway; another desktop needs an adapter implementing desktop::Desktop and \
-         desktop::Stage (see docs/ENGINE.md)"
-    ))
+    Ok(Box::new(generic::Generic::new(wl_outputs)))
 }
