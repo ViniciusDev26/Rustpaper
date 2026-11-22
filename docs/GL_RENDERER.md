@@ -780,6 +780,11 @@ unchanged WE material shader draws it.
   SEVERAL images of the .tex (atlases). `TEXS0001` stores the rectangle as
   integers, 0002/0003 as floats. Each frame sets `g_Texture0Translation` /
   `g_Texture0Rotation` and binds its image.
+- The flipbook follows the scene clock, looping, until a SceneScript takes
+  it over with `getTextureAnimation()` (stop / play / setFrame, see
+  docs/SCENESCRIPT.md): then the layer's own `anim_time` from the worker.
+  Chainsaw Man 3577990983's fireworks are idle (frame 0 is empty) most of
+  the time in WE; looping, they covered the sky (energy ratio 1.45 -> 0.70).
 - Pixel art (`flags & 1`, no interpolation) is scaled to the screen with
   nearest filtering, as WE draws it at screen resolution (Aesthetic City
   843532366: mean SSIM 0.91 -> 0.9997).

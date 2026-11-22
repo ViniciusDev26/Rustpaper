@@ -67,6 +67,10 @@ pub struct LayerState {
     pub brightness: f32,
     pub visible: bool,
     pub text: Option<String>,
+    /// Texture animation (sprite sheet / GIF flipbook): each frame's
+    /// duration in seconds. Empty when the layer has none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub frames: Vec<f32>,
 }
 
 /// Host -> worker, once, before any frame.
@@ -134,6 +138,11 @@ pub struct LayerUpdate {
     /// Sound objects: play() (true) / stop() (false).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub playing: Option<bool>,
+    /// Texture animation clock (seconds into the sheet) once a script
+    /// controls it (`getTextureAnimation()`): replaces the scene clock for
+    /// that layer's flipbook.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anim_time: Option<f32>,
 }
 
 /// A layer a script created (`thisScene.createLayer`).
