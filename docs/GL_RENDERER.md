@@ -1017,12 +1017,20 @@ customization panel (`docs/SELECTOR.md`).
 
 - **SceneScript** runs sandboxed (`docs/SCENESCRIPT.md`). **`web`
   wallpapers** are not supported.
-- Chainsaw Man 3577990983, after the 2026-11-22 fixes (0.856..0.860,
-  energy ratio 0.86..0.91; fireworks replay after random delays, so runs
-  differ by ~0.004): the two hands in the foreground (`左` / `右`, depths
-  0.12 / -0.11) sit a few px off WE's in the mean (the camera parallax
-  model; letting the follow catch up from t = 0 on the first frame did not
-  change the score: 0.856).
+- Chainsaw Man 3577990983 (0.889 after alignment; fireworks replay after
+  random delays, so runs differ by ~0.004). The two foreground hands are
+  the largest gap: the four worst of 48 mean-|diff| tiles are the right
+  hand (x 1440..1920, 26% of the total). Measured against a render with
+  the parallax off (pointer at the center), WE moves the layers by
+  (x right, y down, px): right hand `右` (depth -0.11) -82 / 0, left hand
+  `左` (0.12) -31 / +50, the girl `sl` (-0.05 / 0.04) -14 / +8. Our model,
+  fully converged at pointer (0, 0): -41 / -23, +45 / +25, -19 / +8. The
+  girl agrees; both hands are off by roughly (-40..-76, +24), which no
+  depth-linear rule fits (and their effects, shake at strength^2 = 0.016,
+  waterwaves and twirl, move them by ~10 px at most). Letting the follow
+  catch up from t = 0 on the first frame did not change the score
+  (0.856). Unexplained; next step would be a calibration scene with two
+  layers at opposite depths and `cameraparallax` on.
 - Lucy 3521337568 (mean SSIM 0.790, above WE's own WE-vs-WE floor of
   0.778, energy ratio 1.05): what is left is noise-level. Its fullscreen
   `filmgrain` (#1937) matches WE on average: one-frame high-pass
