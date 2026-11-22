@@ -7,6 +7,7 @@ import type { PropertiesView, Wallpaper } from "../api/schemas";
 import { api, fileUrl } from "../api/tauri";
 import { evalCondition, sameValue } from "../lib/properties";
 import { useLibrary } from "../store/library";
+import { useSettings } from "../store/settings";
 import { errorText, toast } from "../store/toast";
 import { Badge, Button, ConfirmButton } from "./common";
 import { PropertyControl } from "./PropertyControl";
@@ -74,6 +75,30 @@ export function PropertiesPanel({ wallpaper: w }: { wallpaper: Wallpaper }) {
     [view, values],
   );
 
+  const omarchy = useSettings((s) => s.omarchy);
+  const [theming, setTheming] = useState(false);
+  const themeButton = omarchy && w.preview && (
+    <Button
+      variant="secondary"
+      disabled={theming}
+      title="Generate an Omarchy theme from this wallpaper's colors and apply it to the desktop"
+      onClick={async () => {
+        setTheming(true);
+        toast("Theming the desktop from the wallpaper…");
+        try {
+          await api.themeFromWallpaper(w.id);
+          toast("Desktop theme updated");
+        } catch (e) {
+          toast(`Theme: ${errorText(e)}`);
+        } finally {
+          setTheming(false);
+        }
+      }}
+    >
+      {theming ? "Theming…" : "Use as theme"}
+    </Button>
+  );
+
   const unsubscribeButton = w.workshop && (
     <ConfirmButton label="Unsubscribe" busyLabel="Unsubscribing…" onConfirm={() => unsubscribe(w)} />
   );
@@ -87,7 +112,12 @@ export function PropertiesPanel({ wallpaper: w }: { wallpaper: Wallpaper }) {
       </div>
       {!w.supported ? (
         <>
-          {unsubscribeButton && <div className="flex gap-2 px-4 pb-3">{unsubscribeButton}</div>}
+          {(unsubscribeButton || themeButton) && (
+            <div className="flex flex-wrap gap-2 px-4 pb-3">
+              {themeButton}
+              {unsubscribeButton}
+            </div>
+          )}
           <div className="px-4 pb-4 text-sm text-muted">
             {w.kind === "web"
               ? "Web wallpapers run the author's JavaScript and are not supported."
@@ -96,11 +126,12 @@ export function PropertiesPanel({ wallpaper: w }: { wallpaper: Wallpaper }) {
         </>
       ) : (
         <>
-          <div className="flex gap-2 px-4 pb-3">
+          <div className="flex flex-wrap gap-2 px-4 pb-3">
             <Button onClick={() => apply(w)}>Apply</Button>
             <Button variant="secondary" onClick={reset} disabled={!view}>
               Reset
             </Button>
+            {themeButton}
             {unsubscribeButton}
           </div>
           <div className="px-4 pt-1 pb-5" key={generation}>

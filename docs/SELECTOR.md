@@ -37,6 +37,55 @@ build. `RUSTPAPER_UI_DIST=<dir>` uses a prebuilt bundle. Working on the UI
 alone: `cd ui && npm run dev` (the Tauri commands need the real app; the
 page loads, but the API calls fail outside it).
 
+## Desktop look (Hyprland / Omarchy)
+
+- **No title bar under Hyprland**, like Omarchy's own apps: tauri.conf.json
+  opens the window with `decorations: false`, so Hyprland's border,
+  rounding, shadow and opacity apply and the UI header is the top of the
+  window (`data-tauri-drag-region` on its empty parts drags a floating
+  window; capability `core:window:allow-start-dragging`). Outside Hyprland
+  (no `HYPRLAND_INSTANCE_SIGNATURE`) setup turns the toolkit decorations
+  back on, so GNOME & co. keep their title bar and buttons.
+- Window class `rustpaper-selector`, title `Rustpaper`: what Hyprland
+  window rules match, e.g. in Lua
+  `o.window({ class = "^rustpaper-selector$" }, { float = true })`.
+- **Colors follow the active Omarchy theme** (`src/omarchy.rs`): it reads
+  `$XDG_STATE_HOME/omarchy/current/theme/colors.toml` (Omarchy's semantic
+  palette + `mode`), keeps only hex colors (they become CSS custom
+  properties), and polls `current/theme.generation` every 2 s to emit
+  `theme-changed` on a switch. The UI maps the palette onto its tokens
+  (`ui/src/lib/theme.ts`; colors Omarchy has no match for are mixed from
+  background/foreground, so light themes stay readable) and falls back to
+  the built-in Catppuccin palette outside Omarchy.
+
+## Desktop theme from the wallpaper (like Aether)
+
+With **Theme from wallpaper** on (header, Omarchy only, off by default), every
+applied wallpaper also themes the whole desktop; **Use as theme** in the
+panel does it once.
+
+- `src/palette.rs` (pure, unit-tested): the preview image (downscaled to
+  160 px) -> dominant colors by k-means in OKLab -> an Omarchy v4 palette in
+  OKLCH. Backgrounds take the darkest significant color's hue (chroma kept
+  subtle), foregrounds the same tint at high lightness; the accent is the
+  most vivid color (chroma² × √share, so a small vivid spot beats a large
+  dull area); each ANSI color takes the image's hue when a vivid color lies
+  within 35° of the canonical one (pulled halfway back so red stays red),
+  else the canonical hue, at a lightness that keeps it readable (tests
+  check WCAG contrast > 7 for text, > 4.5 for accent/ANSI). Light theme
+  only for mostly very light images. Out-of-gamut colors lose chroma, not
+  hue. Icon theme: the Yaru variant nearest the accent's hue.
+- `src/omarchy.rs`: writes `~/.config/omarchy/themes/rustpaper/`
+  (colors.toml with Aether's keys, icons.theme, the preview as background
+  and theme preview, GIF previews converted to PNG) and runs
+  `omarchy-theme-set rustpaper`. Omarchy itself then generates every app's
+  config from colors.toml (verified: hyprland.lua's border took the
+  accent) and sets the background, shown under the live wallpaper. One
+  folder rewritten each time, like Aether's `aether`; a `rustpaper` folder
+  whose colors.toml lacks Rustpaper's marker line is never overwritten.
+- The selector's own colors follow (see above), since they come from the
+  active Omarchy theme.
+
 The selector starts the engine binary found next to itself
 (`target/release/rustpaper`, or the install prefix), else `rustpaper` from
 `PATH`.
