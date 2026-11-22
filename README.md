@@ -3,7 +3,7 @@
 </p>
 
 <h1 align="center">Rustpaper</h1>
-<p align="center"><i>Wallpaper Engine, rebuilt from scratch in Rust — for your Linux box.</i></p>
+<p align="center"><i>Your Wallpaper Engine wallpapers on your Linux desktop.</i></p>
 
 <p align="center">
   <a href="https://github.com/ViniciusDev26/Rustpaper/actions/workflows/ci.yml">
@@ -17,12 +17,13 @@
 
 ---
 
-**Rustpaper** is a from-scratch reimplementation, in Rust, of a **Wallpaper
-Engine for Linux**: an *engine* that renders Wallpaper Engine (Steam)
-**scenes** with OpenGL — through the wallpapers' own shaders — and video
-wallpapers, straight onto the Wayland desktop (wlr-layer-shell, one surface
-per monitor), plus a *selector* to browse your library, **customize each
-wallpaper's properties like Wallpaper Engine does**, and apply it.
+**Rustpaper** puts **Wallpaper Engine** (Steam) wallpapers on the Wayland
+desktop. The wallpaper is rendered by the **real Wallpaper Engine**, running
+under Proton, so it looks and behaves exactly like on Windows (scenes,
+SceneScript, audio visualizers, videos, web wallpapers); Rustpaper mirrors it
+onto the desktop of each monitor and gives you a *selector* to browse your
+library, **customize each wallpaper's properties**, browse the Workshop and
+apply wallpapers.
 
 Personal project for learning Rust and low-level graphics programming — not
 an official product, and not affiliated with Valve or Wallpaper Engine.
@@ -31,18 +32,17 @@ an official product, and not affiliated with Valve or Wallpaper Engine.
 
 ## ⚠️ Hard requirement: you need Wallpaper Engine
 
-This project **does not ship any wallpaper content**. It only reads and
-renders the files (`project.json`, `.pkg`, `.tex`, `scene.json`, etc.) that
-already exist in your local **Wallpaper Engine** library, purchased on Steam.
+This project **does not ship any wallpaper content or renderer**: it drives
+your own copy of **Wallpaper Engine**, purchased on Steam.
 
-In other words, to use it you need:
+To use it you need:
 
 1. [Wallpaper Engine](https://store.steampowered.com/app/431960/Wallpaper_Engine/)
-   purchased and installed (via Steam);
-2. Downloaded/subscribed wallpapers from its Workshop — which creates the
-   content folders (`project.json` + assets) this engine knows how to read.
-
-Without that, there's nothing for this project to render.
+   purchased and installed through Steam, **running under Proton** (Steam ->
+   Wallpaper Engine -> Properties -> Compatibility);
+2. wallpapers subscribed from its Workshop;
+3. **Hyprland 0.56+** (headless outputs, window rules and Lua dispatchers are
+   used to keep WE's windows out of sight).
 
 ---
 
@@ -66,45 +66,31 @@ rustpaper-selector            # or "Rustpaper" in your app launcher
 ```
 
 Needs a Rust toolchain (pinned in `mise.toml`), Node.js 20+ with npm (the
-selector's UI is built by its build.rs), OpenGL/EGL, Wayland with
-wlr-layer-shell (Hyprland, Sway, KDE...), `ffmpeg` for video wallpapers and,
-optionally, PipeWire's `pw-record` for audio-reactive ones. Wallpaper
-Engine's files are found in your Steam library automatically
-(`WE_ASSETS_DIR` / `WE_WORKSHOP_DIR` override it).
+selector's UI is built by its build.rs), libgbm (mesa), `nsenter`
+(util-linux), Steam with Wallpaper Engine, and Hyprland 0.56+. Wallpaper
+Engine is found in your Steam library automatically (`WE_DIR` /
+`WE_WORKSHOP_DIR` override it).
 
 ---
 
 ## ✨ What works
 
-Fidelity is **measured against the real Wallpaper Engine** (running under
-Proton) by an automated harness, not judged by eye: every scene in the
-library is captured from WE and rendered by Rustpaper, and compared on its
-average image (SSIM) and on how much it moves
-([`docs/HARNESS.md`](./docs/HARNESS.md)).
-
-- **Scenes**: layers, blend modes, effects (multi-pass, named render
-  targets, masks), particle systems (emitters, operators, sprite sheets,
-  trails, ropes, child systems), text layers (clocks/dates), puppet warp
-  (skeletal animation), audio-reactive spectrum, bloom/HDR, camera parallax.
-- **Videos**: loop, cover, multi-monitor.
+- **Every wallpaper type WE plays**: scenes, videos, web and application
+  wallpapers, pixel-identical to WE because WE renders them.
+- **Multi-monitor**, each at its native resolution (fractional scaling too),
+  60 fps; frames go from WE's window to the desktop without leaving the GPU.
 - **Customization**: the selector shows each wallpaper's properties
-  (sliders, colors, toggles, dropdowns, text) like WE; changes are saved
-  per wallpaper and applied to the running wallpaper within a few seconds.
+  (sliders, colors, toggles, dropdowns, text) like WE and sends them to WE.
 - **Workshop store**: browse, search and subscribe to Workshop wallpapers
-  from the selector (through your running Steam client; Steam downloads
-  them, the gallery picks them up).
-- **Desktop integration**: physical-resolution rendering under fractional
-  scaling, pauses while a fullscreen window covers the monitor (Hyprland),
-  autostart.
+  from the selector (through your running Steam client).
+- **Desktop integration**: pauses while a fullscreen window covers the
+  monitors, autostart, Omarchy theme from the wallpaper's colors.
 
-**SceneScript** (the author's JavaScript) runs in a separate, locked-down
-process (seccomp allowlist, no files/network/exec, memory and time limits):
-see [`docs/SCENESCRIPT.md`](./docs/SCENESCRIPT.md). `--no-scripts` (or
-**Run scripts** off in the selector) keeps scripted properties at their
-static values. Not supported yet: **web
-wallpapers**.
+Not yet: cursor interaction (eye tracking, parallax, clicks), per-wallpaper
+volume (only mute). Workshop JavaScript (SceneScript, web wallpapers) runs
+inside Wallpaper Engine as it does on Windows: **not sandboxed**.
 
-Details and known gaps: [`docs/GL_RENDERER.md`](./docs/GL_RENDERER.md),
+How it works, measurements and known gaps: [`docs/ENGINE.md`](./docs/ENGINE.md),
 [`docs/SELECTOR.md`](./docs/SELECTOR.md).
 
 ---
@@ -113,11 +99,10 @@ Details and known gaps: [`docs/GL_RENDERER.md`](./docs/GL_RENDERER.md),
 
 Cargo workspace under `crates/`:
 
-- **`rustpaper-core`** — Wallpaper Engine formats (project, pkg, tex,
-  scene, particles, effects, puppet models, shader dialect), no GPU/UI.
-- **`rustpaper-gl`** — the OpenGL scene renderer (+ `rustpaper-render`, an
-  offline renderer to PNG/MP4 used by the harness).
-- **`rustpaper-engine`** — the live wallpaper: `rustpaper` binary.
+- **`rustpaper-core`** — where Wallpaper Engine's files live, what a
+  `project.json` says.
+- **`rustpaper-engine`** — the live wallpaper (`rustpaper` binary): drives
+  Wallpaper Engine under Proton and mirrors its windows onto the desktop.
 - **`rustpaper-selector`** — Tauri desktop app (gallery + properties +
   Workshop store).
 - **`rustpaper-workshop`** — the store's bridge to the Steam client

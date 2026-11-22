@@ -5,7 +5,7 @@
 //   apply(id)            -> (re)starts the engine on that wallpaper
 //   get_properties(id)   -> the wallpaper's customizable properties + saved values
 //   save_properties(id, values) -> persists them and hot-swaps the running engine
-//   get_settings / set_autostart / set_scripts / set_volume
+//   get_settings / set_autostart / set_volume
 //   workshop_query / workshop_subscribe / workshop_unsubscribe / workshop_status /
 //   workshop_subscriptions
 //   get_theme            -> the active Omarchy theme (omarchy.rs), + `theme-changed` events
@@ -92,11 +92,12 @@ fn list_wallpapers() -> Vec<WallpaperEntry> {
             let Ok(project) = Project::load(&dir) else {
                 continue;
             };
+            // the real Wallpaper Engine plays them all
             let (kind, supported) = match project.kind {
                 WallpaperKind::Video => ("video", true),
                 WallpaperKind::Scene => ("scene", true),
-                WallpaperKind::Web => ("web", false),
-                WallpaperKind::Unknown(_) => ("unknown", false),
+                WallpaperKind::Web => ("web", true),
+                WallpaperKind::Unknown(_) => ("unknown", true),
             };
             out.push(WallpaperEntry {
                 id,
@@ -131,9 +132,6 @@ fn engine_args(id: &str, dir: &Path) -> Vec<String> {
         args.push(p.to_string_lossy().into_owned());
     }
     let s = settings::load();
-    if s.no_scripts {
-        args.push("--no-scripts".into());
-    }
     match s.volume {
         0 => args.push("--mute".into()),
         100.. => {}
@@ -157,13 +155,27 @@ fn start_engine(id: &str, state: &EngineState) -> Result<(), String> {
     let previous = state.0.lock().unwrap().replace((id.to_string(), child));
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(2500));
-        if let Some((_, mut old)) = previous {
-            let _ = old.kill();
-            let _ = old.wait();
+        if let Some((_, old)) = previous {
+            stop_engine(old);
         }
         kill_stray_engines();
     });
     Ok(())
+}
+
+/// Stops an engine we started: SIGTERM first, so it exits cleanly (the last
+/// engine out stops Wallpaper Engine's wallpapers); SIGKILL if it hangs.
+fn stop_engine(mut child: std::process::Child) {
+    // SAFETY: plain kill(2) on our own child's pid.
+    unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+    for _ in 0..50 {
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// Kills the `rustpaper` engines of this user that this selector did not
@@ -187,8 +199,9 @@ fn kill_stray_engines() {
             continue;
         }
         eprintln!("stopping engine {pid} (not started by this selector)");
+        // SIGTERM: a clean exit (see stop_engine).
         // SAFETY: plain kill(2) on a pid that was just read from /proc.
-        unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+        unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
     }
 }
 
@@ -376,17 +389,8 @@ fn set_autostart(enabled: bool) -> Result<(), String> {
     settings::write_autostart(&engine_path(), &args).map_err(|e| e.to_string())
 }
 
-/// "Run scripts" checkbox: saves the preference, restarts the running
-/// wallpaper with it and refreshes the autostart entry.
-#[tauri::command]
-fn set_scripts(enabled: bool, state: tauri::State<EngineState>) -> Result<(), String> {
-    let mut s = settings::load();
-    s.no_scripts = !enabled;
-    settings::save(&s);
-    restart_with_settings(&s, &state)
-}
-
-/// Volume slider (0..100, 0 = mute): same as `set_scripts`.
+/// Volume slider (0..100, 0 = mute): saved, then the running wallpaper is
+/// restarted with it and the autostart entry refreshed.
 #[tauri::command]
 fn set_volume(volume: u8, state: tauri::State<EngineState>) -> Result<(), String> {
     let mut s = settings::load();
@@ -511,7 +515,6 @@ fn main() {
             save_properties,
             get_settings,
             set_autostart,
-            set_scripts,
             set_volume,
             workshop_query,
             workshop_subscribe,

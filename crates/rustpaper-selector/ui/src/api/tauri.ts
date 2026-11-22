@@ -53,7 +53,6 @@ export const api = {
     run("save_properties", { id, values }),
   getSettings: () => call(Settings, "get_settings"),
   setAutostart: (enabled: boolean) => run("set_autostart", { enabled }),
-  setScripts: (enabled: boolean) => run("set_scripts", { enabled }),
   setVolume: (volume: number) => run("set_volume", { volume }),
   workshopQuery: (query: WorkshopQuery) => call(WorkshopPage, "workshop_query", { query }),
   workshopSubscribe: (id: string) => run("workshop_subscribe", { id }),

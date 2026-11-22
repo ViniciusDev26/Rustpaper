@@ -11,12 +11,9 @@ use serde_json::{Map, Value};
 pub struct Settings {
     pub last_id: Option<String>,
     pub autostart: bool,
-    /// Don't run SceneScripts (`rustpaper --no-scripts`). They run sandboxed
-    /// by default; this is for users who want no Workshop code at all.
-    #[serde(default)]
-    pub no_scripts: bool,
     /// Master volume (0..100) of the wallpapers' own sounds
-    /// (`rustpaper --volume`); 0 mutes them.
+    /// (`rustpaper --volume`); 0 mutes them. Wallpaper Engine has no volume
+    /// command, so anything above 0 plays at WE's own volume.
     #[serde(default = "full_volume")]
     pub volume: u8,
     /// Generate and apply an Omarchy theme from each applied wallpaper's
@@ -35,7 +32,6 @@ impl Default for Settings {
         Settings {
             last_id: None,
             autostart: false,
-            no_scripts: false,
             volume: full_volume(),
             wallpaper_theme: false,
         }
@@ -159,9 +155,10 @@ mod tests {
     }
 
     #[test]
-    fn old_state_files_keep_scripts_on_and_full_volume() {
-        let s: Settings = serde_json::from_str(r#"{"last_id":"1","autostart":true}"#).unwrap();
-        assert!(!s.no_scripts);
+    fn old_state_files_get_full_volume() {
+        // (no_scripts came from the native renderer: ignored now)
+        let s: Settings =
+            serde_json::from_str(r#"{"last_id":"1","autostart":true,"no_scripts":true}"#).unwrap();
         assert_eq!(s.volume, 100);
         assert_eq!(Settings::default().volume, 100);
     }

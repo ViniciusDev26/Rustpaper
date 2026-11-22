@@ -18,7 +18,7 @@ stores, every command reply validated with Zod.
   `src/api/tauri.ts`: typed wrappers of the commands, which reject with
   the Rust error string or on a reply that doesn't match its schema.
 - `src/store/`: `library` (wallpapers, selection, search, order,
-  unsubscribe), `settings` (scripts, volume, autostart), `workshop`
+  unsubscribe), `settings` (volume, autostart), `workshop`
   (queries, subscriptions, download polling), `toast`.
 - `src/components/`: `LibraryView`, `PropertiesPanel` + `PropertyControl`
   (one control per WE property type), `WorkshopView`, shared pieces in
@@ -96,9 +96,8 @@ The selector starts the engine binary found next to itself
   test corpus (`rustpaper_core::paths::wallpaper_dirs`), sorted by title, with
   a search box. Previews are served through Tauri's asset protocol; the
   allowed scope is set at startup to exactly those folders.
-- Clicking a supported card (scene, video) applies it and opens its panel.
-  `web` cards open a panel explaining they are not supported (they run the
-  author's JavaScript).
+- Clicking a card applies it and opens its panel. Every type is supported:
+  the real Wallpaper Engine plays it (docs/ENGINE.md).
 
 ## Customization panel
 
@@ -127,31 +126,30 @@ Built from `general.properties` of project.json, in WE's `order`:
   `~/.config/rustpaper/properties/<id>.json` — only values that differ from
   the defaults; **Reset** deletes the file.
 - If that wallpaper is on screen, the engine is restarted with
-  `--props <file>`. The new engine starts first and the old one is killed
-  2.5 s later, so the desktop never flashes between them.
+  `--props <file>`, which it hands to WE (`-control applyProperties`). The
+  new engine starts first and the old one is stopped 2.5 s later, so the
+  desktop never flashes between them.
 
 ## Persistence
 
 - `~/.config/rustpaper/state.json`: last applied wallpaper, the autostart
-  flag, `no_scripts` and `volume`; the panel reopens the last wallpaper at startup.
+  flag and `volume`; the panel reopens the last wallpaper at startup.
 - One engine at a time: applying a wallpaper starts the new engine, and
-  2.5 s later (after its first frame, so the desktop never flashes) kills
-  the previous one and every `rustpaper` process of the user this selector
+  2.5 s later (after its first frame, so the desktop never flashes) stops
+  (SIGTERM, so the last engine out can stop WE's wallpapers; SIGKILL after
+  5 s) the previous one and every `rustpaper` process of the user this selector
   did not start (not its child), e.g. the engine a closed selector session
   left running. Its own children are only stopped by the handover: keeping
   "the newest engine" instead raced when applying twice within 2.5 s.
 - Autostart: `~/.config/autostart/rustpaper.desktop` runs the engine with the
   last wallpaper and its `--props` file (arguments quoted per the Desktop Entry
   spec).
-- **Run scripts** (header checkbox, on by default): off adds `--no-scripts`
-  to every engine start; toggling restarts the wallpaper on screen and
-  rewrites the autostart entry. State files from before the option keep
-  scripts on (`no_scripts` defaults to false).
-- **Volume** (header slider, 0..100, default 100): master volume of the
-  wallpapers' own music/sounds. The engine gets `--volume N` (`--mute` at 0,
-  nothing at 100); it scales every sound object, including volumes a
-  SceneScript sets. Applied on release of the slider, restarting the
-  wallpaper like the scripts checkbox. Older state files load as 100.
+- **Volume** (header slider, 0..100, default 100): the engine gets
+  `--volume N` (`--mute` at 0, nothing at 100). Wallpaper Engine has no
+  volume command, so for now 0 mutes WE and anything else unmutes it (WE's
+  own volume setting applies). Applied on release of the slider, restarting
+  the wallpaper and rewriting the autostart entry. Older state files load as
+  100; their `no_scripts` (native renderer era) is ignored.
 
 ## Workshop tab (store)
 
