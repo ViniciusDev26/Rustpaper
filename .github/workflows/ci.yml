@@ -36,6 +36,25 @@ jobs:
           fetch-depth: 0
       - uses: wagoid/commitlint-github-action@v6
 
+  # The selector's React UI on its own: typecheck (tsc) and unit tests
+  # (vitest). The Rust jobs build it too, through the selector's build.rs.
+  ui:
+    name: UI
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crates/rustpaper-selector/ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: crates/rustpaper-selector/ui/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm test
+
   # Builds/publishes the CI image (docker/ci/Dockerfile: Ubuntu 24.04 + Rust
   # toolchain + the workspace's system deps) BEFORE the other jobs, so the tag
   # used below always matches this commit's Dockerfile. When the Dockerfile
