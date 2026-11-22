@@ -63,13 +63,13 @@ your own copy of **Wallpaper Engine**, purchased on Steam.
 
    ```sh
    mkdir rustpaper && cd rustpaper
-   gh release download -R ViniciusDev26/Rustpaper -p 'rustpaper-bin.PKGBUILD' -p '*.tar.gz'
+   curl -LO https://github.com/ViniciusDev26/Rustpaper/releases/latest/download/rustpaper-bin.PKGBUILD
    mv rustpaper-bin.PKGBUILD PKGBUILD && makepkg -si
    ```
 
-   (`gh` because the repository is private for now: a plain `curl` of the
-   release URL gets a "Not Found" page. AUR packages `rustpaper-bin` /
-   `rustpaper` will follow; their PKGBUILDs are in `packaging/aur/`.)
+   (makepkg downloads the release tarball itself. AUR packages
+   `rustpaper-bin` / `rustpaper` will follow; their PKGBUILDs are in
+   `packaging/aur/`.)
 
    **From source**, for your user: `./scripts/install.sh` (needs a Rust
    toolchain, pinned in `mise.toml`, and Node.js 20+ with npm for the
