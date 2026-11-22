@@ -65,7 +65,8 @@ in `packaging/aur/`.) **From source**, for your user:
 rustpaper-selector            # or "Rustpaper" in your app launcher
 ```
 
-Needs a Rust toolchain (pinned in `mise.toml`), OpenGL/EGL, Wayland with
+Needs a Rust toolchain (pinned in `mise.toml`), Node.js 20+ with npm (the
+selector's UI is built by its build.rs), OpenGL/EGL, Wayland with
 wlr-layer-shell (Hyprland, Sway, KDE...), `ffmpeg` for video wallpapers and,
 optionally, PipeWire's `pw-record` for audio-reactive ones. Wallpaper
 Engine's files are found in your Steam library automatically
