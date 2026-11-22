@@ -31,14 +31,18 @@ build() {
     export RUSTUP_TOOLCHAIN=stable
     export CARGO_TARGET_DIR=target
     cargo build --frozen --release \
-        -p rustpaper-engine -p rustpaper-selector -p rustpaper-gl -p rustpaper-script --bins
+        -p rustpaper-engine -p rustpaper-selector -p rustpaper-gl -p rustpaper-script \
+        -p rustpaper-workshop --bins
 }
 
 package() {
     cd "Rustpaper-$pkgver"
-    for b in rustpaper rustpaper-selector rustpaper-render rustpaper-script-worker; do
+    for b in rustpaper rustpaper-selector rustpaper-render rustpaper-script-worker rustpaper-workshop; do
         install -Dm755 "target/release/$b" "$pkgdir/usr/bin/$b"
     done
+    # Steamworks client library (bundled by steamworks-sys, copied by the
+    # workshop crate's build.rs) for rustpaper-workshop: RUNPATH ../lib/rustpaper
+    install -Dm755 target/release/libsteam_api.so "$pkgdir/usr/lib/rustpaper/libsteam_api.so"
     install -Dm644 packaging/rustpaper.desktop "$pkgdir/usr/share/applications/rustpaper.desktop"
     install -Dm644 crates/rustpaper-selector/icons/128x128.png \
         "$pkgdir/usr/share/icons/hicolor/128x128/apps/rustpaper.png"
