@@ -1150,6 +1150,18 @@ customization panel (`docs/SELECTOR.md`).
   redraw the scene behind them and must move with it (2617953025's plant
   compose doubled the plant, tile SSIM 0.934 -> 0.842, fixed -> 0.957
   overall).
+- A child that takes its ancestor's `parallaxDepth` also takes the
+  ancestor's ORIGIN for the shift: WE moves the ancestor and the children
+  follow rigidly (`Renderer::anchor_world`). Chainsaw Man 3577990983 hangs
+  its railing (origin y 392) and clock (y 640) from group 5365 (depth
+  0.09, origin y 861, scripted sway). With the probe-measured cursor
+  (0.452, 0.433), shifting each child from its own origin put the railing
+  17 px and the clock 7 px below WE's. The earlier capture (cursor at the
+  top edge) hid it: both models agree there to within 1 px. From the
+  group's origin the railing's mean-image rows match WE's to 0-2 px.
+  Chainsaw Man 0.939 -> 0.959 (PASS), Lucy 3521337568 0.962 -> 0.967,
+  3233141951 0.815 -> 0.824, 3195212886 0.934 -> 0.936, the other six
+  camera-parallax scenes within 0.0001.
 - WE's cursor relative to its window changes between captures because
   every capture opens a new WE window and its position on RPREF varies
   (fitted cursor x alternated ~0.25 / ~0.45 with the mouse untouched);
