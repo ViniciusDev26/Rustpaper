@@ -47,4 +47,4 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && rm -rf /var/lib/apt/lists/*
 
 RUN rustc --version && cargo --version && cargo clippy --version && cargo fmt --version \
-    && glslangValidator --version && node --version && npm --version
+    && node --version && npm --version
