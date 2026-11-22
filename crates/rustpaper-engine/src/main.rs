@@ -43,6 +43,11 @@ fn main() {
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
         .and_then(|v| v.as_object().cloned())
         .unwrap_or_default();
+    // before the first layer surface exists (both renderers use namespace
+    // `rustpaper`): no compositor fade when wallpapers are switched
+    if rustpaper_engine::hyprland::disable_layer_animations() {
+        println!("hyprland: layer animations off for namespace rustpaper");
+    }
     // Scenes run on the OpenGL renderer (rustpaper-gl). The previous wgpu
     // compositor stays reachable with RUSTPAPER_LEGACY_SCENE=1 for comparison;
     // videos keep using the wgpu path.
