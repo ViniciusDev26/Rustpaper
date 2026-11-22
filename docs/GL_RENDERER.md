@@ -1116,19 +1116,19 @@ customization panel (`docs/SELECTOR.md`).
 - Camera parallax strength vs `mouseinfluence`, measured (2026-11-22,
   `harness/calibration/make_depths.py` with amount 0.5 and influence
   -0.07 / 0.07 / 0.25 / 0.5 / 0.75 / 1.0, fitted by `fit_cursor.py`): the
-  slope `k` was 0.500 / 0.498 / 0.507 / 0.498 / 0.498 / 0.501, i.e. the
-  strength is `amount` whatever the influence; the influence seems to
-  scale how far the effective cursor reaches from the center instead. The
-  model `k = amount`, cursor = center + offset x clamp(2 x influence, -1,
-  1), scored on the probe-bracketed recaptures (`capture_parallax.sh`):
-  Lucy 3521337568 0.877 -> 0.940, Chainsaw Man 3577990983 0.858 -> 0.880,
-  3233141951 0.626 -> 0.732, 3195212886 0.819 -> 0.862, but 3835761947
-  0.951 -> 0.802 and 2617953025 0.954 -> 0.879 (2224061441 -0.005), so it
-  is NOT adopted. 3835761947's loss is not a position change (no shift or
-  zoom between the two renders, the content differs): its only image uses
-  `genericimage4` with FOG, whose fog uses the view distance, a suspect
-  for a parallax leak. 2617953025 (depth "0 1", amount 0.06) moves by
-  only ~2 px between the models yet loses 0.017 still-SSIM: unexplained.
+  slope `k` was 0.500 / 0.498 / 0.507 / 0.498 / 0.498 / 0.501, so the
+  strength is `amount` whatever the influence; the influence scales how far
+  the effective cursor reaches from the center (`Parallax::shift`). The
+  old `amount x influence` matched only for centered objects. Harness on
+  the 10 camera-parallax scenes, recaptured with probe-measured cursors:
+  Lucy 3521337568 0.877 -> 0.962 (PASS), 3835761947 0.951 -> 0.985,
+  2224061441 0.940 -> 0.951 (PASS), 3233141951 0.626 -> 0.815,
+  3195212886 0.819 -> 0.934, Chainsaw Man 3577990983 0.858 -> 0.878,
+  2617953025 0.954 -> 0.957, the rest equal. Compose / passthrough layers
+  take their shift from the scene center, not their own origin: they
+  redraw the scene behind them and must move with it (2617953025's plant
+  compose doubled the plant, tile SSIM 0.934 -> 0.842, fixed -> 0.957
+  overall).
 - WE's cursor relative to its window changes between captures because
   every capture opens a new WE window and its position on RPREF varies
   (fitted cursor x alternated ~0.25 / ~0.45 with the mouse untouched);
