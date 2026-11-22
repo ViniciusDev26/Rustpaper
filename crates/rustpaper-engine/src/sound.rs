@@ -32,11 +32,14 @@ pub struct SoundPlayer {
     paused: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     dir: PathBuf,
+    /// The user's master volume (0..1, `--volume`): scales every sound,
+    /// including the volumes a SceneScript sets.
+    master: f32,
 }
 
 impl SoundPlayer {
     /// Starts every playable sound; None when there is nothing to play.
-    pub fn start(sounds: &[SceneSound]) -> Option<SoundPlayer> {
+    pub fn start(sounds: &[SceneSound], master: f32) -> Option<SoundPlayer> {
         let playable: Vec<&SceneSound> = sounds
             .iter()
             // `startsilent` sounds are loaded too, held until a SceneScript
@@ -71,12 +74,12 @@ impl SoundPlayer {
             let (mode, volume) = (s.mode.clone(), s.volume);
             let (min_t, max_t) = (s.min_time, s.max_time.max(s.min_time));
             let (paused, stop) = (paused.clone(), stop.clone());
-            let vol = Arc::new(AtomicU32::new(volume.to_bits()));
+            let vol = Arc::new(AtomicU32::new((volume * master).to_bits()));
             volumes.push((s.id, vol.clone()));
             let hold = Arc::new(AtomicBool::new(s.start_silent));
             held.push((s.id, hold.clone()));
             println!(
-                "sound {:?}: {} file(s), {mode}, volume {volume:.2}",
+                "sound {:?}: {} file(s), {mode}, volume {volume:.2} (master {master:.2})",
                 s.name,
                 files.len()
             );
@@ -90,6 +93,7 @@ impl SoundPlayer {
             paused,
             stop,
             dir,
+            master,
         })
     }
 
@@ -103,7 +107,8 @@ impl SoundPlayer {
     /// A sound object's volume (0..1) changed (SceneScript `volume`).
     pub fn set_volume(&self, id: i64, volume: f32) {
         for (_, v) in self.volumes.iter().filter(|(i, _)| *i == id) {
-            v.store(volume.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+            let volume = volume.clamp(0.0, 1.0) * self.master;
+            v.store(volume.to_bits(), Ordering::Relaxed);
         }
     }
 

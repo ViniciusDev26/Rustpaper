@@ -52,8 +52,9 @@ pub struct Options {
     pub properties: serde_json::Map<String, serde_json::Value>,
     /// Capture system audio for audio-reactive wallpapers.
     pub audio: bool,
-    /// Play the scene's own sound objects (music); `--mute` turns it off.
-    pub sound: bool,
+    /// Master volume (0..1) of the scene's own sound objects (music):
+    /// `--volume 0..100`, `--mute` = 0 (nothing is played).
+    pub volume: f32,
     /// Run the scene's SceneScripts (sandboxed); `--no-scripts` turns it off.
     pub scripts: bool,
     /// Draw only on this output (`--output DP-1`); None: every output.
@@ -162,8 +163,8 @@ pub fn run(dir: &Path, opts: Options) {
         },
         sound: None,
     };
-    if opts.sound {
-        state.sound = crate::sound::SoundPlayer::start(&state.scene.sounds);
+    if opts.volume > 0.0 {
+        state.sound = crate::sound::SoundPlayer::start(&state.scene.sounds, opts.volume);
     }
     let interval = Duration::from_secs_f64(1.0 / opts.fps.clamp(1, 240) as f64);
 

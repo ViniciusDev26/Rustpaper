@@ -5,7 +5,7 @@
 //   apply(id)            -> (re)starts the engine on that wallpaper
 //   get_properties(id)   -> the wallpaper's customizable properties + saved values
 //   save_properties(id, values) -> persists them and hot-swaps the running engine
-//   get_settings / set_autostart / set_scripts
+//   get_settings / set_autostart / set_scripts / set_volume
 
 mod settings;
 
@@ -101,8 +101,17 @@ fn engine_args(id: &str, dir: &Path) -> Vec<String> {
         args.push("--props".into());
         args.push(p.to_string_lossy().into_owned());
     }
-    if settings::load().no_scripts {
+    let s = settings::load();
+    if s.no_scripts {
         args.push("--no-scripts".into());
+    }
+    match s.volume {
+        0 => args.push("--mute".into()),
+        100.. => {}
+        v => {
+            args.push("--volume".into());
+            args.push(v.to_string());
+        }
     }
     args
 }
@@ -234,9 +243,24 @@ fn set_scripts(enabled: bool, state: tauri::State<EngineState>) -> Result<(), St
     let mut s = settings::load();
     s.no_scripts = !enabled;
     settings::save(&s);
+    restart_with_settings(&s, &state)
+}
+
+/// Volume slider (0..100, 0 = mute): same as `set_scripts`.
+#[tauri::command]
+fn set_volume(volume: u8, state: tauri::State<EngineState>) -> Result<(), String> {
+    let mut s = settings::load();
+    s.volume = volume.min(100);
+    settings::save(&s);
+    restart_with_settings(&s, &state)
+}
+
+/// After an engine-wide setting changed: restarts the running wallpaper
+/// (its command line carries the setting) and refreshes the autostart entry.
+fn restart_with_settings(s: &settings::Settings, state: &EngineState) -> Result<(), String> {
     let running = state.0.lock().unwrap().as_ref().map(|(id, _)| id.clone());
     if let Some(id) = running {
-        start_engine(&id, &state)?;
+        start_engine(&id, state)?;
     }
     if s.autostart
         && let Some(id) = &s.last_id
@@ -268,7 +292,8 @@ fn main() {
             save_properties,
             get_settings,
             set_autostart,
-            set_scripts
+            set_scripts,
+            set_volume
         ])
         // Closing the selector leaves the wallpaper running (dropping a
         // `Child` doesn't kill it).

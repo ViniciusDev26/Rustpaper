@@ -55,7 +55,7 @@ Built from `general.properties` of project.json, in WE's `order`:
 ## Persistence
 
 - `~/.config/rustpaper/state.json`: last applied wallpaper, the autostart
-  flag and `no_scripts`; the panel reopens the last wallpaper at startup.
+  flag, `no_scripts` and `volume`; the panel reopens the last wallpaper at startup.
 - Autostart: `~/.config/autostart/rustpaper.desktop` runs the engine with the
   last wallpaper and its `--props` file (arguments quoted per the Desktop Entry
   spec).
@@ -63,10 +63,15 @@ Built from `general.properties` of project.json, in WE's `order`:
   to every engine start; toggling restarts the wallpaper on screen and
   rewrites the autostart entry. State files from before the option keep
   scripts on (`no_scripts` defaults to false).
+- **Volume** (header slider, 0..100, default 100): master volume of the
+  wallpapers' own music/sounds. The engine gets `--volume N` (`--mute` at 0,
+  nothing at 100); it scales every sound object, including volumes a
+  SceneScript sets. Applied on release of the slider, restarting the
+  wallpaper like the scripts checkbox. Older state files load as 100.
 
 ## Commands (Rust -> UI)
 
 `list_wallpapers`, `apply(id)`, `get_properties(id)` (definitions + saved
 values), `save_properties(id, values)`, `get_settings`,
-`set_autostart(enabled)`, `set_scripts(enabled)`. Ids are validated as plain folder names before any
+`set_autostart(enabled)`, `set_scripts(enabled)`, `set_volume(volume)`. Ids are validated as plain folder names before any
 path is built.
