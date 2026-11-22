@@ -201,10 +201,52 @@ fn edit_config(performance: &Map<String, Value>, write: bool) -> bool {
     changed
 }
 
-fn kill_named(name: &str) {
-    for pid in pids_named(name) {
-        // SAFETY: plain kill(2) on a pid just read from /proc.
-        unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+/// Every process of WE's launch: they carry Steam's `SteamAppId=431960` (or
+/// WE's Wine prefix) in their environment. That includes what dies with WE
+/// only eventually or not at all: Wine's `wineserver`, `winedevice.exe`,
+/// `services.exe`..., and the embedded Chromium's `CrGpuMain`.
+fn we_processes() -> Vec<u32> {
+    let me = std::process::id();
+    let Ok(rd) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    rd.flatten()
+        .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
+        .filter(|&pid| pid != me)
+        .filter(|pid| {
+            std::fs::read(format!("/proc/{pid}/environ")).is_ok_and(|env| {
+                env.split(|&b| b == 0).any(|e| {
+                    e == b"SteamAppId=431960"
+                        || (e.starts_with(b"WINEPREFIX=")
+                            && e.windows(18).any(|w| w == b"compatdata/431960"))
+                })
+            })
+        })
+        .collect()
+}
+
+fn signal_all(pids: &[u32], sig: libc::c_int) {
+    for &pid in pids {
+        // SAFETY: plain kill(2) on pids just read from /proc.
+        unsafe { libc::kill(pid as libc::pid_t, sig) };
+    }
+}
+
+/// Stops WE's whole launch, not just its renderer. Killing only
+/// wallpaper64.exe left Wine's helpers and a Chromium GPU process running
+/// in its Steam container; Steam then refused every new launch
+/// ("WaitingPrevProcess" -> AppError_16 in its console log) until they were
+/// gone (2026-11-22). SIGTERM first, SIGKILL after 10 s.
+fn stop_all() {
+    let t = Instant::now();
+    signal_all(&we_processes(), libc::SIGTERM);
+    while !we_processes().is_empty() {
+        if t.elapsed() > Duration::from_secs(10) {
+            signal_all(&we_processes(), libc::SIGKILL);
+            std::thread::sleep(Duration::from_millis(500));
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(250));
     }
 }
 
@@ -227,13 +269,7 @@ pub fn ensure_running(performance: &Map<String, Value>) -> bool {
 /// for a degraded WE: after dozens of wallpaper windows opened and closed it
 /// rendered new ones black or pixelated, at ~3 fps, until restarted.
 pub fn restart(performance: &Map<String, Value>) -> bool {
-    for n in ["launcher.exe", "wallpaperui.exe", WE_COMM] {
-        kill_named(n);
-    }
-    let t = Instant::now();
-    while pid().is_some() && t.elapsed() < Duration::from_secs(30) {
-        std::thread::sleep(Duration::from_millis(250));
-    }
+    stop_all();
     // written while WE is stopped: a running WE rewrites its config on exit
     prepare_config(performance);
     start()
