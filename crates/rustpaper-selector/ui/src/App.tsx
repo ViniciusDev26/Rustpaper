@@ -5,7 +5,7 @@ import { WorkshopView } from "./components/WorkshopView";
 import { useLibrary, visibleWallpapers, type SortMode } from "./store/library";
 import { useSettings, volumeText } from "./store/settings";
 import { errorText, toast } from "./store/toast";
-import { api, onThemeChanged } from "./api/tauri";
+import { api, onThemeChanged, onWallpaperTheme } from "./api/tauri";
 import { applyTheme } from "./lib/theme";
 
 type Tab = "library" | "store";
@@ -85,6 +85,16 @@ function Header({ tab, setTab }: { tab: Tab; setTab: (t: Tab) => void }) {
         Run scripts
       </label>
       <VolumeSlider />
+      {settings.omarchy && (
+        <label className={check} title="Generate an Omarchy theme from each applied wallpaper's colors (like Aether) and apply it to the whole desktop">
+          <input
+            type="checkbox"
+            checked={settings.wallpaperTheme}
+            onChange={(e) => settings.setWallpaperTheme(e.currentTarget.checked)}
+          />
+          Theme from wallpaper
+        </label>
+      )}
       <label className={check}>
         <input type="checkbox" checked={settings.autostart} onChange={(e) => settings.setAutostart(e.currentTarget.checked)} />
         Start on login
@@ -100,8 +110,10 @@ export function App() {
     // follow the Omarchy theme (and its switches); defaults elsewhere
     api.getTheme().then(applyTheme, () => {});
     const unlisten = onThemeChanged(applyTheme);
+    const unlistenWallpaper = onWallpaperTheme((err) => toast(err ? `Theme: ${err}` : "Desktop theme updated"));
     return () => {
       void unlisten.then((f) => f());
+      void unlistenWallpaper.then((f) => f());
     };
   }, []);
 

@@ -26,6 +26,7 @@ export const Settings = z.object({
   autostart: z.boolean(),
   no_scripts: z.boolean(),
   volume: z.number().int().min(0).max(100),
+  wallpaper_theme: z.boolean().default(false),
 });
 export type Settings = z.infer<typeof Settings>;
 
@@ -106,6 +107,10 @@ export const Theme = z.object({
 });
 export type Theme = z.infer<typeof Theme>;
 export const MaybeTheme = Theme.nullable();
+
+/// desktop_info
+export const DesktopInfo = z.object({ hyprland: z.boolean(), omarchy: z.boolean() });
+export type DesktopInfo = z.infer<typeof DesktopInfo>;
 
 export const StatusMap = z.record(ItemState);
 export const Subscriptions = z.record(z.number());

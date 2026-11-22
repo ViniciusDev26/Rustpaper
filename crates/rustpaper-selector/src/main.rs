@@ -9,9 +9,12 @@
 //   workshop_query / workshop_subscribe / workshop_unsubscribe / workshop_status /
 //   workshop_subscriptions
 //   get_theme            -> the active Omarchy theme (omarchy.rs), + `theme-changed` events
+//   theme_from_wallpaper(id) / set_wallpaper_theme(enabled) / desktop_info
+//                        -> an Omarchy theme from the wallpaper's colors (palette.rs)
 //                        -> the Steam Workshop store (workshop.rs)
 
 mod omarchy;
+mod palette;
 mod settings;
 mod workshop;
 
@@ -23,7 +26,7 @@ use std::time::Duration;
 use rustpaper_core::project::{Project, WallpaperKind};
 use serde::Serialize;
 use serde_json::{Map, Value};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 /// The running engine and the wallpaper it shows (killed when switching).
 struct EngineState(Mutex<Option<(String, Child)>>);
@@ -211,7 +214,11 @@ fn is_engine(proc_dir: &Path, uid: libc::uid_t) -> bool {
 }
 
 #[tauri::command]
-fn apply(id: String, state: tauri::State<EngineState>) -> Result<(), String> {
+fn apply(
+    app: tauri::AppHandle,
+    id: String,
+    state: tauri::State<EngineState>,
+) -> Result<(), String> {
     start_engine(&id, &state)?;
     // Remember the wallpaper; with autostart on, point the .desktop at it.
     let mut s = settings::load();
@@ -220,7 +227,66 @@ fn apply(id: String, state: tauri::State<EngineState>) -> Result<(), String> {
         let _ = settings::write_autostart(&engine_path(), &engine_args(&id, &wallpaper_dir(&id)?));
     }
     settings::save(&s);
+    if s.wallpaper_theme && omarchy::available() {
+        // seconds of work (omarchy-theme-set retints every app): off the
+        // command, reported through `wallpaper-theme` events
+        std::thread::spawn(move || {
+            let res = wallpaper_theme(&id);
+            let _ = app.emit("wallpaper-theme", res.err());
+        });
+    }
     Ok(())
+}
+
+/// Generates and applies the Omarchy theme of wallpaper `id` (its preview's
+/// colors). Blocking.
+fn wallpaper_theme(id: &str) -> Result<(), String> {
+    let dir = wallpaper_dir(id)?;
+    let preview = find_preview(&dir).ok_or("this wallpaper has no preview image")?;
+    let title = Project::load(&dir).map(|p| p.title).unwrap_or_default();
+    omarchy::apply_wallpaper_theme(id, &title, &preview)
+}
+
+/// "Use as theme" in the panel: the Omarchy theme from this wallpaper, now.
+#[tauri::command]
+async fn theme_from_wallpaper(id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || wallpaper_theme(&id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// "Theme from wallpaper" in the header: saved; turning it on themes the
+/// desktop from the wallpaper on screen right away (if any).
+#[tauri::command]
+async fn set_wallpaper_theme(
+    enabled: bool,
+    state: tauri::State<'_, EngineState>,
+) -> Result<(), String> {
+    let mut s = settings::load();
+    s.wallpaper_theme = enabled;
+    settings::save(&s);
+    let running = state.0.lock().unwrap().as_ref().map(|(id, _)| id.clone());
+    match running {
+        Some(id) if enabled => tauri::async_runtime::spawn_blocking(move || wallpaper_theme(&id))
+            .await
+            .map_err(|e| e.to_string())?,
+        _ => Ok(()),
+    }
+}
+
+/// What the desktop offers: Hyprland (undecorated window), Omarchy (themes).
+#[derive(Serialize)]
+struct DesktopInfo {
+    hyprland: bool,
+    omarchy: bool,
+}
+
+#[tauri::command]
+fn desktop_info() -> DesktopInfo {
+    DesktopInfo {
+        hyprland: omarchy::is_hyprland(),
+        omarchy: omarchy::available(),
+    }
 }
 
 /// What the customization panel needs: the property definitions of
@@ -452,7 +518,10 @@ fn main() {
             workshop_unsubscribe,
             workshop_subscriptions,
             workshop_status,
-            get_theme
+            get_theme,
+            theme_from_wallpaper,
+            set_wallpaper_theme,
+            desktop_info
         ])
         // Closing the selector leaves the wallpaper running (dropping a
         // `Child` doesn't kill it); the next selector replaces it on apply

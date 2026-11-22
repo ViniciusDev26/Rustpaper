@@ -58,6 +58,34 @@ page loads, but the API calls fail outside it).
   background/foreground, so light themes stay readable) and falls back to
   the built-in Catppuccin palette outside Omarchy.
 
+## Desktop theme from the wallpaper (like Aether)
+
+With **Theme from wallpaper** on (header, Omarchy only, off by default), every
+applied wallpaper also themes the whole desktop; **Use as theme** in the
+panel does it once.
+
+- `src/palette.rs` (pure, unit-tested): the preview image (downscaled to
+  160 px) -> dominant colors by k-means in OKLab -> an Omarchy v4 palette in
+  OKLCH. Backgrounds take the darkest significant color's hue (chroma kept
+  subtle), foregrounds the same tint at high lightness; the accent is the
+  most vivid color (chroma² × √share, so a small vivid spot beats a large
+  dull area); each ANSI color takes the image's hue when a vivid color lies
+  within 35° of the canonical one (pulled halfway back so red stays red),
+  else the canonical hue, at a lightness that keeps it readable (tests
+  check WCAG contrast > 7 for text, > 4.5 for accent/ANSI). Light theme
+  only for mostly very light images. Out-of-gamut colors lose chroma, not
+  hue. Icon theme: the Yaru variant nearest the accent's hue.
+- `src/omarchy.rs`: writes `~/.config/omarchy/themes/rustpaper/`
+  (colors.toml with Aether's keys, icons.theme, the preview as background
+  and theme preview, GIF previews converted to PNG) and runs
+  `omarchy-theme-set rustpaper`. Omarchy itself then generates every app's
+  config from colors.toml (verified: hyprland.lua's border took the
+  accent) and sets the background, shown under the live wallpaper. One
+  folder rewritten each time, like Aether's `aether`; a `rustpaper` folder
+  whose colors.toml lacks Rustpaper's marker line is never overwritten.
+- The selector's own colors follow (see above), since they come from the
+  active Omarchy theme.
+
 The selector starts the engine binary found next to itself
 (`target/release/rustpaper`, or the install prefix), else `rustpaper` from
 `PATH`.
