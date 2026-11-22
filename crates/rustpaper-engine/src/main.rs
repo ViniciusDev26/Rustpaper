@@ -3,13 +3,13 @@ use rustpaper_engine::{gl_wallpaper, wallpaper};
 use std::path::PathBuf;
 
 fn main() {
-    // rustpaper <wallpaper folder> [--fps N] [--props properties.json] [--no-audio] [--mute] [--no-scripts] [--output NAME]
+    // rustpaper <wallpaper folder> [--fps N] [--props properties.json] [--no-audio] [--mute] [--volume 0..100] [--no-scripts] [--output NAME]
     let mut args = std::env::args().skip(1);
     let mut dir = None;
     let mut fps = 30;
     let mut props_file: Option<PathBuf> = None;
     let mut audio = true;
-    let mut sound = true;
+    let mut volume = 1.0f32;
     let mut scripts = true;
     let mut output = None;
     while let Some(a) = args.next() {
@@ -17,7 +17,11 @@ fn main() {
             "--fps" => fps = args.next().and_then(|v| v.parse().ok()).unwrap_or(30),
             "--props" => props_file = args.next().map(PathBuf::from),
             "--no-audio" => audio = false,
-            "--mute" => sound = false,
+            "--mute" => volume = 0.0,
+            "--volume" => {
+                let v = args.next().and_then(|v| v.parse::<f32>().ok());
+                volume = (v.unwrap_or(100.0) / 100.0).clamp(0.0, 1.0);
+            }
             "--no-scripts" => scripts = false,
             "--output" => output = args.next(),
             _ => dir = Some(PathBuf::from(a)),
@@ -25,7 +29,7 @@ fn main() {
     }
     let Some(dir) = dir else {
         eprintln!(
-            "usage: rustpaper <wallpaper folder> [--fps N] [--props properties.json] [--no-audio] [--mute] [--no-scripts] [--output NAME]"
+            "usage: rustpaper <wallpaper folder> [--fps N] [--props properties.json] [--no-audio] [--mute] [--volume 0..100] [--no-scripts] [--output NAME]"
         );
         std::process::exit(2);
     };
@@ -49,7 +53,7 @@ fn main() {
                 fps,
                 properties,
                 audio,
-                sound,
+                volume,
                 scripts,
                 output,
             },
