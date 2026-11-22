@@ -51,30 +51,63 @@ within minutes:
 - later `closeWallpaper` did nothing at all;
 - new windows came up black, or pixelated with a wrong clock, at ~3 fps.
 
-The selector's handover starts the new engine before stopping the old one,
-so for 2.5 s both mirror the same window. An engine that exits leaves the
-windows and headless outputs for the next one. When it is the last
-`rustpaper` running, it sends `-control stop` so WE renders nothing while no
-wallpaper is shown.
+**Service mode.** `rustpaper --service` (the systemd user service the
+selector manages, docs/SELECTOR.md) shows what `~/.config/rustpaper/state.json`
+says (`rustpaper_core::state`). It re-reads it on SIGHUP
+(`systemctl --user reload rustpaper`) and applies the change in place:
+- a new wallpaper or new property values load into the same windows;
+- new quality settings restart WE (see below);
+- a mute change is sent to WE.
+
+The process never restarts, so the desktop never shows the plain
+background. With nothing chosen yet it exits 0, so the service does not
+loop. `rustpaper <dir> [...]` still works for manual runs.
+
+An engine that exits leaves the windows and headless outputs for the next
+one. When it is the last `rustpaper` running, it sends `-control stop` so WE
+renders nothing while no wallpaper is shown. (Without systemd, the selector
+starts the next engine before stopping the old one, so for 2.5 s both mirror
+the same window.)
 
 A **watchdog** runs every 2 s. It restores the workspace and fullscreen
 state, and asks WE again for a window that is missing after 40 s. After two
 unanswered requests it restarts WE, which is also the cure for the degraded
-state above. It pauses capture on monitors covered by a fullscreen window,
-and when that is every monitor it also sends `-control pause` to WE (and
-`play` when one is uncovered).
+state above. It also applies the **Playback rules** (state.json, the
+selector's Performance tab).
+- **Conditions**, per monitor (`hyprland::monitors`, `power::on_battery`):
+  - a fullscreen window;
+  - a maximized or tiled window on the active workspace (Hyprland tiles by
+    default, so the wallpaper only shows in the gaps);
+  - the focused window on that monitor;
+  - display off (DPMS);
+  - running on battery (a Mains adapter offline).
+- **Actions.** Each condition is Keep running or Pause. A paused monitor
+  stops capturing; when every monitor is paused, the engine sends
+  `-control pause` to WE (and `play` when one resumes).
+- **Defaults:** pause under fullscreen windows and when the display sleeps,
+  like WE.
 
 ### WE's configuration
 
 `we::prepare_config` edits WE's `config.json` (one-time backup:
-`config.json.rustpaper-backup`) and restarts WE when something changed:
+`config.json.rustpaper-backup`) and restarts WE when something changed. The
+edit happens while WE is stopped, because a running WE rewrites its config
+on exit:
 
 - `safemode: false`. WE sets it while running and clears it on a clean exit;
   after a crash, the next start shows a "Safe Start" dialog that blocks every
   `-control` command.
-- `playbackfullscreen` and `playbackmaximized: run`. Every wallpaper window
-  is a fullscreen app to WE, so with two monitors each one paused the other
-  (DP-1 went 60 -> 29 -> 0 fps). Pausing is decided by the engine instead.
+- `playbackfullscreen`, `playbackmaximized` and `playbackfocus: run`. Every
+  wallpaper window is a fullscreen app to WE, so with two monitors each one
+  paused the other (DP-1 went 60 -> 29 -> 0 fps). The engine applies the
+  user's Playback rules itself.
+- The user's **quality settings** (the Performance tab: fps, msaa,
+  resolution, postprocessing, shadows, volumetrics, reflection, preset;
+  `rustpaper_core::performance`, sanitized to WE's own values). On reload,
+  `we::needs_restart` compares them with WE's config and restarts WE when
+  they differ.
+  - Verified: FPS 24 saved -> reload -> WE restarted with `fps: 24`,
+    `preset: custom`, windows back in ~30 s.
 
 WE's own windows (UI, dialogs) are moved to `special:rustpaper-we` and never
 take focus.
