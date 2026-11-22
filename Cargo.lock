@@ -3130,7 +3130,7 @@ dependencies = [
 
 [[package]]
 name = "rustpaper-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "image",
  "lz4_flex",
@@ -3142,7 +3142,7 @@ dependencies = [
 
 [[package]]
 name = "rustpaper-engine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytemuck",
  "calloop 0.14.4",
@@ -3165,7 +3165,7 @@ dependencies = [
 
 [[package]]
 name = "rustpaper-gl"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ab_glyph",
  "chrono",
@@ -3180,7 +3180,7 @@ dependencies = [
 
 [[package]]
 name = "rustpaper-script"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libc",
  "rquickjs",
@@ -3191,7 +3191,7 @@ dependencies = [
 
 [[package]]
 name = "rustpaper-selector"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libc",
  "rustpaper-core",
@@ -3203,7 +3203,7 @@ dependencies = [
 
 [[package]]
 name = "rustpaper-workshop"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
