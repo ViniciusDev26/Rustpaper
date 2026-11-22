@@ -147,6 +147,9 @@ struct Layer {
     anim: Option<LayerAnim>,
     /// Animated image (GIF scenes, `spritesheet` combo): frames over images.
     flipbook: Option<Flipbook>,
+    /// The flipbook's own clock once a SceneScript controls it
+    /// (`getTextureAnimation()`: play / stop / setFrame); None: scene time.
+    anim_time: Option<f32>,
     /// `"attachment": name` with a puppet `parent`: (parent id, name, local).
     attach: Option<(i64, String, Mat4)>,
     material: Pass,
@@ -618,7 +621,17 @@ impl SceneRenderer {
             return 0;
         };
         let canvas = [self.width as f32, self.height as f32];
-        match crate::scripting::Scripts::load(&objects, &general, &props, canvas, screen) {
+        let flipbooks: HashMap<i64, Vec<f32>> = self
+            .layers
+            .iter()
+            .filter_map(|l| {
+                let fb = l.flipbook.as_ref()?;
+                Some((l.id, fb.frames.iter().map(|f| f.duration).collect()))
+            })
+            .collect();
+        match crate::scripting::Scripts::load(
+            &objects, &general, &props, canvas, screen, &flipbooks,
+        ) {
             Ok(Some(s)) => {
                 let n = s.count();
                 self.scripts = Some(s);
@@ -803,6 +816,9 @@ impl SceneRenderer {
             if let Some(b) = ch.brightness.get(&l.id) {
                 l.brightness = *b;
                 l.own_brightness = true;
+            }
+            if let Some(t) = ch.anim_time.get(&l.id) {
+                l.anim_time = Some(*t);
             }
         }
         for (id, s) in ch.text {
@@ -1086,6 +1102,7 @@ impl SceneRenderer {
                 || obj.pointer("/brightness/animation").is_some(),
             anim: LayerAnim::parse(obj, self.world_of(obj)),
             flipbook,
+            anim_time: None,
             attach: obj
                 .get("attachment")
                 .and_then(|a| a.as_str())
@@ -2549,10 +2566,11 @@ impl SceneRenderer {
         prog.set(gl, "g_EyePosition", &[sw / 2.0, sh / 2.0, 1.0]);
         prog.set(gl, "g_LightAmbientColor", &self.ambient);
         prog.set(gl, "g_LightSkylightColor", &self.skylight);
+        let anim_time = self.layers[call.layer].anim_time.unwrap_or(f.time);
         let flip = is_material
             .then(|| self.layers[call.layer].flipbook.as_ref())
             .flatten()
-            .and_then(|fb| fb.at(f.time));
+            .and_then(|fb| fb.at(anim_time));
         match flip {
             Some((tex, rot, tr)) => {
                 prog.set(gl, "g_Texture0Rotation", &rot);
