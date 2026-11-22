@@ -76,6 +76,25 @@ keep its rounded box in pixels; unset it was zero, `v_Size` went negative
 and Chainsaw Man 3577990983's dock backdrop drew nothing. Only that scene
 uses it in the corpus.
 
+**Image-layer `alignment`** (`bottom`, `topleft`, `right`...) names the
+point of the quad that sits at the layer's origin: a `bottom` quad is drawn
+above its origin (solid layers use it for audio bars that grow upward and
+for window frames placed by a corner). Only the layer's own quad moves
+(`Layer::quad_world`, also used for cursor hit tests); children keep the
+plain world matrix. Text objects have their own alignment. Chainsaw Man
+3577990983's dock icons (y 36.8 in the 4K scene, 102 high) have their
+centers 43 px above the bottom of WE's 1080p capture = (36.8 + 102 / 2) / 2;
+centered quads put them at 18 px and half the dock backdrop under the
+edge. Persona 3 3151551777's bars stand on the window's lower edge in WE;
+centered, ours were hidden behind the seats. Harness (2026-11-22, existing
+captures; Persona with the camera-zoom fix in both runs): Chainsaw Man
+0.865 -> 0.889, Persona 3 0.944 -> 0.960 (PASS), Jinx 3078285611 0.980 ->
+0.983, 3448290956 0.892 -> 0.897, 3830708962 and 2902406982 identical.
+(Rejected once alone: without the zoom fix Persona's bars, ~1% too
+narrow, came out as stripes in antiphase with WE's and it dropped 0.848
+-> 0.825.) Scripts also write `layer.alignment` (the dock does every
+frame); the prelude does not forward it.
+
 **Vector strings may use commas.** Workshop effects store `"0.0, 1.0"`
 (material constants and shader annotation defaults). Read on whitespace only
 it was `[1.0]`: 3195212886's audio bars (`u_BarBounds`) stood at full height
@@ -545,7 +564,9 @@ Chainsaw Man 0.656 -> 0.786 (ratio 1.54 -> 1.55), 3233141951 0.6275 ->
 0.6276, 3195212886 unchanged.
 
 `general.zoom` zooms the camera around the scene center (CITRUS 2704773569,
-zoom 1.1: mean SSIM 0.43 -> 0.98).
+zoom 1.1: mean SSIM 0.43 -> 0.98). A script's `setCameraTransforms`
+zoom is a second factor on top (Persona 3 3151551777, see
+docs/SCENESCRIPT.md).
 
 ## Text (`text.rs`)
 
@@ -996,26 +1017,20 @@ customization panel (`docs/SELECTOR.md`).
 
 - **SceneScript** runs sandboxed (`docs/SCENESCRIPT.md`). **`web`
   wallpapers** are not supported.
-- **Image-layer `alignment`** (`bottom`, `topleft`, ...: which point of
-  the quad sits at the origin) is ignored; quads stay centered. Chainsaw
-  Man 3577990983's dock icons (y 36.8 in the 4K scene, 102 high,
-  `bottom`) have their centers 43 px above the bottom of WE's 1080p capture
-  = 36.8 + 102 / 2 scene units, ours at 18 px, and half of the dock
-  backdrop is under the screen edge. Shifting the quad (scene y up, by
-  half its size) gave Chainsaw Man 0.8718 -> 0.8839, Jinx 3078285611
-  +0.003, 3448290956 +0.005, 3830708962 / 2902406982 identical, but
-  Persona 3 3151551777 0.848 -> 0.825: its bottom-aligned audio bars
-  (`Simple_Audio_Bars`, bounds set by a script) moved where WE draws bars,
-  yet with a different pattern. Rejected until Persona's bars are
-  understood; the patch is a `Layer::quad_world` used by the draw and
-  hover paths. Scripts also write `layer.alignment` (the dock does every
-  frame); the prelude does not forward it.
-- Chainsaw Man 3577990983, after the 2026-11-22 fixes (0.856..0.860,
-  energy ratio 0.86..0.91; fireworks replay after random delays, so runs
-  differ by ~0.004): the two hands in the foreground (`左` / `右`, depths
-  0.12 / -0.11) sit a few px off WE's in the mean (the camera parallax
-  model; letting the follow catch up from t = 0 on the first frame did not
-  change the score: 0.856), and the dock alignment above.
+- Chainsaw Man 3577990983 (0.889 after alignment; fireworks replay after
+  random delays, so runs differ by ~0.004). The two foreground hands are
+  the largest gap: the four worst of 48 mean-|diff| tiles are the right
+  hand (x 1440..1920, 26% of the total). Measured against a render with
+  the parallax off (pointer at the center), WE moves the layers by
+  (x right, y down, px): right hand `右` (depth -0.11) -82 / 0, left hand
+  `左` (0.12) -31 / +50, the girl `sl` (-0.05 / 0.04) -14 / +8. Our model,
+  fully converged at pointer (0, 0): -41 / -23, +45 / +25, -19 / +8. The
+  girl agrees; both hands are off by roughly (-40..-76, +24), which no
+  depth-linear rule fits (and their effects, shake at strength^2 = 0.016,
+  waterwaves and twirl, move them by ~10 px at most). Letting the follow
+  catch up from t = 0 on the first frame did not change the score
+  (0.856). Unexplained; next step would be a calibration scene with two
+  layers at opposite depths and `cameraparallax` on.
 - Lucy 3521337568 (mean SSIM 0.790, above WE's own WE-vs-WE floor of
   0.778, energy ratio 1.05): what is left is noise-level. Its fullscreen
   `filmgrain` (#1937) matches WE on average: one-frame high-pass

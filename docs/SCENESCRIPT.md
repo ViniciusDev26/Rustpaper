@@ -73,9 +73,15 @@ Everything a script can reach is defined in `prelude.js`:
   stubs (`play`/`stop`), `getTextureAnimation()` (flipbook control, see
   below).
 - `thisScene.getCameraTransforms()` / `setCameraTransforms({zoom})`: the
-  camera zoom (`general.zoom`) reaches the renderer; eye / center / up are
-  read-only placeholders. Persona 3 3151551777 zooms from a user property
-  (it threw "not a function" before).
+  camera transform's zoom reaches the renderer, where it MULTIPLIES
+  `general.zoom` (it starts at 1); eye / center / up are read-only
+  placeholders. Persona 3 3151551777 (`general.zoom` 1.01, and a script
+  that sets the camera zoom to 1.01 from a user property): WE's image is
+  1.01 x 1.01 = ~2% larger than unzoomed; with the script's 1.01
+  replacing the scene's, the whole frame was ~1% too small (its 128
+  audio-bar stripes +9 px off at x 200 and -8 px at x 1715 against WE's
+  mean, the window frame the same). Mean SSIM 0.848 -> 0.944. It is the
+  only corpus scene calling setCameraTransforms.
 - `thisScene.createLayer(path | config)` + `sortLayer(layer, index)`.
 - `Date` and `engine.timeOfDay`: the renderer's clock (`text::clock_now`,
   pinned by `RUSTPAPER_CLOCK` in the harness to the capture's start), so
