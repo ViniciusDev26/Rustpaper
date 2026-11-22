@@ -14,11 +14,16 @@
       body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--fg); height: 100vh; display: flex; flex-direction: column; }
       header { padding: 12px 20px; background: var(--bar); border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 12px; }
       header h1 { font-size: 1rem; margin: 0; font-weight: 600; }
-      header .count { color: var(--muted); font-size: .85rem; }
+      header .count { color: var(--muted); font-size: .85rem; white-space: nowrap; }
+      header { flex-wrap: wrap; row-gap: 8px; }
+      header input[type=search]#search { width: 180px; }
       header .spacer { flex: 1; }
+      header select { background: var(--card); border: 1px solid #45475a; color: var(--fg); border-radius: 6px; padding: 5px 7px; }
+      button.danger { background: #45475a; color: #f38ba8; }
+      button.danger.confirm { background: #f38ba8; color: #11111b; }
       header input[type=search] { background: var(--card); border: 1px solid #45475a; color: var(--fg); border-radius: 6px; padding: 5px 9px; width: 220px; }
       #volume { width: 90px; accent-color: var(--accent); }
-      label.check { font-size: .85rem; color: var(--sub); display: flex; align-items: center; gap: 6px; cursor: pointer; }
+      label.check { white-space: nowrap; font-size: .85rem; color: var(--sub); display: flex; align-items: center; gap: 6px; cursor: pointer; }
       main { flex: 1; display: flex; min-height: 0; }
       #gallery { flex: 1; overflow-y: auto; }
       #status { padding: 20px; color: var(--sub); }
@@ -55,6 +60,26 @@
       .prop.group { font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; color: var(--accent); padding-top: 14px; border-bottom: 1px solid var(--line); }
       .prop.note { font-size: .78rem; color: var(--muted); }
       .empty { color: var(--muted); font-size: .85rem; padding: 4px 16px 16px; }
+      /* tabs + Workshop store */
+      .tabs { display: flex; gap: 4px; }
+      .tab { background: transparent; color: var(--sub); padding: 5px 10px; font-weight: 500; }
+      .tab.active { background: var(--card); color: var(--fg); }
+      #store { flex: 1; overflow-y: auto; display: none; }
+      body.store #store { display: block; }
+      body.store #gallery, body.store #panel, body.store .library-only { display: none !important; }
+      .store-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 14px 20px 0; }
+      .store-bar input[type=search] { width: 260px; }
+      .store-bar select, .store-bar input[type=search] { background: var(--card); border: 1px solid #45475a; color: var(--fg); border-radius: 6px; padding: 5px 9px; }
+      #store-status { padding: 10px 20px 0; color: var(--sub); font-size: .85rem; }
+      .store-card { cursor: default; }
+      .store-card:hover { transform: none; border-color: transparent; }
+      .store-card .stats { color: var(--muted); font-size: .72rem; margin-top: 4px; display: flex; justify-content: space-between; gap: 6px; }
+      .store-card .row { display: flex; gap: 6px; margin-top: 8px; }
+      .store-card .row button { flex: 1; padding: 5px 6px; font-size: .78rem; }
+      .store-card .note { color: #f9e2af; font-size: .7rem; margin-top: 4px; }
+      .badge.web { background: #f9e2af; color: #11111b; }
+      .badge.rating { background: #f38ba8; color: #11111b; margin-left: 4px; }
+      #store-more { display: block; margin: 0 auto 24px; }
       .toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--accent); color: #11111b; padding: 8px 16px; border-radius: 8px; font-size: .85rem; opacity: 0; transition: opacity .2s; pointer-events: none; }
       .toast.show { opacity: 1; }
     </style>
@@ -62,9 +87,17 @@
   <body>
     <header>
       <h1>Rustpaper</h1>
-      <span class="count" id="count"></span>
+      <nav class="tabs">
+        <button class="tab active" id="tab-library">Library</button>
+        <button class="tab" id="tab-store" title="Browse and subscribe on the Steam Workshop (needs Steam running)">Workshop</button>
+      </nav>
+      <span class="count library-only" id="count"></span>
       <span class="spacer"></span>
-      <input type="search" id="search" placeholder="Search" />
+      <input type="search" id="search" class="library-only" placeholder="Search" />
+      <select id="lib-sort" class="library-only" title="Order of the library">
+        <option value="title">Title (A–Z)</option>
+        <option value="subscribed">Recently subscribed</option>
+      </select>
       <label class="check" title="SceneScripts run in a sandbox (no files, network or processes)"><input type="checkbox" id="scripts" /> Run scripts</label>
       <label class="check" title="Volume of the wallpapers' own music and sounds (0 = muted)"><span id="volume-label">Volume</span> <input type="range" id="volume" min="0" max="100" step="5" /></label>
       <label class="check"><input type="checkbox" id="autostart" /> Start on login</label>
@@ -75,10 +108,34 @@
         <div class="grid" id="grid"></div>
       </div>
       <aside id="panel"></aside>
+      <div id="store">
+        <div class="store-bar">
+          <input type="search" id="ws-search" placeholder="Search the Workshop (Enter)" />
+          <select id="ws-sort">
+            <option value="trend">Trending this week</option>
+            <option value="top">Most popular</option>
+            <option value="subscriptions">Most subscribed</option>
+            <option value="recent">Most recent</option>
+            <option value="updated">Recently updated</option>
+            <option value="subscribed">My subscriptions</option>
+          </select>
+          <select id="ws-kind">
+            <option value="all">All types</option>
+            <option value="scene">Scene</option>
+            <option value="video">Video</option>
+            <option value="web">Web (not supported yet)</option>
+          </select>
+          <label class="check" title="Also show items rated Questionable or Mature"><input type="checkbox" id="ws-mature" /> Mature</label>
+        </div>
+        <div id="store-status"></div>
+        <div class="grid" id="store-grid"></div>
+        <button class="secondary" id="store-more" hidden>Load more</button>
+      </div>
     </main>
     <div class="toast" id="toast"></div>
 
     <script src="properties.js"></script>
+    <script src="workshop.js"></script>
     <script>
       const { invoke, convertFileSrc } = window.__TAURI__.core;
       const $ = (id) => document.getElementById(id);
@@ -124,9 +181,35 @@
         return node;
       }
 
+      // Library order: title, or most recently subscribed first. Steam's
+      // subscription times come from the Workshop helper (Steam running);
+      // without it, the folder's creation time (the download) stands in.
+      let sortMode = "title";
+      try { sortMode = localStorage.getItem("rp-lib-sort") || "title"; } catch {}
+      let subTimes = null; // { id: unix seconds } once fetched
+
+      async function ensureSubTimes() {
+        if (sortMode !== "subscribed" || subTimes) return;
+        try {
+          subTimes = await invoke("workshop_subscriptions");
+        } catch (e) {
+          subTimes = {};
+          showToast("Steam unavailable: sorting by download date");
+        }
+      }
+
+      function sorted(list) {
+        if (sortMode !== "subscribed") return list; // backend sends title order
+        // Steam's subscriptions first (by subscription time), then folders
+        // without an active subscription (old installs) by download date
+        const sub = (w) => (subTimes && subTimes[w.id]) || 0;
+        return [...list].sort((a, b) =>
+          (sub(b) > 0) - (sub(a) > 0) || sub(b) - sub(a) || (b.added || 0) - (a.added || 0));
+      }
+
       function renderGrid() {
         const q = $("search").value.trim().toLowerCase();
-        const shown = wallpapers.filter((w) => !q || (w.title || "").toLowerCase().includes(q) || w.id.includes(q));
+        const shown = sorted(wallpapers.filter((w) => !q || (w.title || "").toLowerCase().includes(q) || w.id.includes(q)));
         $("grid").replaceChildren(...shown.map(card));
         $("count").textContent = `${shown.length} wallpapers`;
         markSelected();
@@ -134,6 +217,40 @@
 
       function markSelected() {
         for (const c of $("grid").children) c.classList.toggle("selected", c.dataset.id === selected?.id);
+      }
+
+      // Unsubscribe from the panel: two clicks (the folder is deleted), the
+      // second within 4 s.
+      function unsubscribeButton(w) {
+        const b = el("button", { className: "danger", textContent: "Unsubscribe" });
+        let armed = null;
+        b.addEventListener("click", async () => {
+          if (!armed) {
+            b.textContent = "Click to confirm";
+            b.classList.add("confirm");
+            armed = setTimeout(() => {
+              armed = null;
+              b.textContent = "Unsubscribe";
+              b.classList.remove("confirm");
+            }, 4000);
+            return;
+          }
+          clearTimeout(armed);
+          b.disabled = true;
+          b.textContent = "Unsubscribing…";
+          try {
+            await invoke("workshop_unsubscribe", { id: w.id });
+            showToast(`Unsubscribed: ${w.title || w.id}`);
+            await reloadLibrary();
+          } catch (e) {
+            showToast(`${e}`);
+            armed = null;
+            b.disabled = false;
+            b.textContent = "Unsubscribe";
+            b.classList.remove("confirm");
+          }
+        });
+        return b;
       }
 
       // ---- customization panel ------------------------------------------
@@ -147,6 +264,7 @@
         const preview = w.preview ? el("img", { className: "preview", src: convertFileSrc(w.preview) }) : "";
         panel.replaceChildren(preview, head);
         if (!w.supported) {
+          if (w.workshop) panel.append(el("div", { className: "actions" }, unsubscribeButton(w)));
           panel.append(el("div", { className: "empty", textContent: w.kind === "web"
             ? "Web wallpapers run the author's JavaScript and are not supported."
             : "This wallpaper type is not supported." }));
@@ -169,7 +287,9 @@
         const props = el("div", { className: "props" });
         const reset = el("button", { className: "secondary", textContent: "Reset" });
         const applyBtn = el("button", { textContent: "Apply" });
-        panel.append(el("div", { className: "actions" }, applyBtn, reset), props);
+        const actions = el("div", { className: "actions" }, applyBtn, reset);
+        if (w.workshop) actions.append(unsubscribeButton(w));
+        panel.append(actions, props);
         applyBtn.addEventListener("click", () => apply(w));
 
         // Saving restarts the engine on the new values; debounce so dragging
@@ -202,7 +322,46 @@
         return JSON.stringify(a) === JSON.stringify(b);
       }
 
+      // Re-scans the Workshop folders (after a download or unsubscribe in the
+      // store); keeps the panel when its wallpaper is still there.
+      async function reloadLibrary() {
+        wallpapers = await invoke("list_wallpapers");
+        if (sortMode === "subscribed") {
+          subTimes = null; // a store (un)subscribe changed the list
+          await ensureSubTimes();
+        }
+        if (selected && !wallpapers.some((w) => w.id === selected.id)) {
+          selected = null;
+          $("panel").classList.remove("open");
+        }
+        renderGrid();
+      }
+
+      function showTab(store) {
+        document.body.classList.toggle("store", store);
+        $("tab-library").classList.toggle("active", !store);
+        $("tab-store").classList.toggle("active", store);
+        if (store) RpStore.open();
+        else reloadLibrary().catch((e) => showToast(`${e}`));
+      }
+      $("tab-library").addEventListener("click", () => showTab(false));
+      $("tab-store").addEventListener("click", () => showTab(true));
+      RpStore.init({ invoke, el, $, showToast, reloadLibrary,
+        applyInstalled: (id) => {
+          const w = wallpapers.find((x) => x.id === id);
+          if (!w) return showToast("Not in the library yet");
+          showTab(false);
+          apply(w);
+        } });
+
       $("search").addEventListener("input", renderGrid);
+      $("lib-sort").value = sortMode;
+      $("lib-sort").addEventListener("change", async (ev) => {
+        sortMode = ev.target.value;
+        try { localStorage.setItem("rp-lib-sort", sortMode); } catch {}
+        await ensureSubTimes();
+        renderGrid();
+      });
       $("autostart").addEventListener("change", async (ev) => {
         try {
           await invoke("set_autostart", { enabled: ev.target.checked });
@@ -245,6 +404,7 @@
           $("autostart").checked = settings.autostart;
           $("scripts").checked = !settings.no_scripts;
           wallpapers = await invoke("list_wallpapers");
+          await ensureSubTimes();
           $("status").style.display = "none";
           renderGrid();
           const last = wallpapers.find((w) => w.id === settings.last_id);

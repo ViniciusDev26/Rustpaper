@@ -6,8 +6,12 @@
 //   get_properties(id)   -> the wallpaper's customizable properties + saved values
 //   save_properties(id, values) -> persists them and hot-swaps the running engine
 //   get_settings / set_autostart / set_scripts / set_volume
+//   workshop_query / workshop_subscribe / workshop_unsubscribe / workshop_status /
+//   workshop_subscriptions
+//                        -> the Steam Workshop store (workshop.rs)
 
 mod settings;
+mod workshop;
 
 use std::path::{Path, PathBuf};
 use std::process::Child;
@@ -29,6 +33,22 @@ struct WallpaperEntry {
     kind: String,            // "video" | "scene" | "web" | "unknown"
     preview: Option<String>, // absolute path of the preview image
     supported: bool,         // can the engine play it?
+    /// In Steam's Workshop folder (can be unsubscribed), not the test corpus.
+    workshop: bool,
+    /// When the folder appeared (Unix seconds): the download right after
+    /// subscribing. Fallback for "recently subscribed" when Steam is not
+    /// running (Steam keeps no subscription time locally: appworkshop's
+    /// `timetouched` changes on every update check).
+    added: u64,
+}
+
+/// Creation time of a folder (statx birth time; mtime where unsupported).
+fn folder_added(dir: &Path) -> u64 {
+    std::fs::metadata(dir)
+        .and_then(|m| m.created().or_else(|_| m.modified()))
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs())
 }
 
 /// Preview file of a wallpaper folder (static images first, gif last).
@@ -52,7 +72,9 @@ fn wallpaper_dir(id: &str) -> Result<PathBuf, String> {
 #[tauri::command]
 fn list_wallpapers() -> Vec<WallpaperEntry> {
     let mut out: Vec<WallpaperEntry> = Vec::new();
+    let workshop = rustpaper_core::paths::workshop_dir();
     for base in rustpaper_core::paths::wallpaper_dirs() {
+        let in_workshop = workshop.as_ref() == Some(&base);
         let Ok(entries) = std::fs::read_dir(&base) else {
             continue;
         };
@@ -77,6 +99,8 @@ fn list_wallpapers() -> Vec<WallpaperEntry> {
                 kind: kind.to_string(),
                 preview: find_preview(&dir).map(|p| p.to_string_lossy().into_owned()),
                 supported,
+                workshop: in_workshop,
+                added: folder_added(&dir),
             });
         }
     }
@@ -319,11 +343,73 @@ fn restart_with_settings(s: &settings::Settings, state: &EngineState) -> Result<
     Ok(())
 }
 
+/// Runs a Workshop request on a blocking thread (the helper answers in
+/// seconds; Tauri commands must not block the UI).
+async fn workshop_call(app: tauri::AppHandle, cmd: Value) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || app.state::<workshop::Workshop>().request(cmd))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// One page of the Workshop: `{sort, kind, search, page, mature}` ->
+/// `{total, page, items: [...]}`.
+#[tauri::command]
+async fn workshop_query(app: tauri::AppHandle, query: Value) -> Result<Value, String> {
+    let mut cmd = match query {
+        Value::Object(m) => Value::Object(m),
+        _ => return Err("query must be an object".into()),
+    };
+    cmd["cmd"] = Value::from("query");
+    workshop_call(app, cmd).await
+}
+
+#[tauri::command]
+async fn workshop_subscribe(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    workshop_call(app, serde_json::json!({ "cmd": "subscribe", "item": id }))
+        .await
+        .map(|_| ())
+}
+
+/// Unsubscribes and removes the downloaded folder right away (Steam keeps
+/// it until a later cleanup, so it would stay in the gallery). Refused for
+/// the wallpaper on screen: the engine may still read its files (videos
+/// stream from disk).
+#[tauri::command]
+async fn workshop_unsubscribe(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let running = app
+        .state::<EngineState>()
+        .0
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|(r, _)| r.clone());
+    if running.as_deref() == Some(id.as_str()) {
+        return Err("This wallpaper is on screen: apply another one before unsubscribing.".into());
+    }
+    workshop_call(app, serde_json::json!({ "cmd": "unsubscribe", "item": id })).await?;
+    workshop::remove_unsubscribed(&id)
+}
+
+/// When the user subscribed to each item: `{id: unix seconds}` (Steam's
+/// subscriptions list, every page).
+#[tauri::command]
+async fn workshop_subscriptions(app: tauri::AppHandle) -> Result<Value, String> {
+    workshop_call(app, serde_json::json!({ "cmd": "subscriptions" })).await
+}
+
+/// Local state of items: `{id: {subscribed, installed, downloading,
+/// downloaded, total, needs_update}}`.
+#[tauri::command]
+async fn workshop_status(app: tauri::AppHandle, ids: Vec<String>) -> Result<Value, String> {
+    workshop_call(app, serde_json::json!({ "cmd": "status", "items": ids })).await
+}
+
 fn main() {
     setup_linux_env();
 
     tauri::Builder::default()
         .manage(EngineState(Mutex::new(None)))
+        .manage(workshop::Workshop::default())
         .setup(|app| {
             // Previews are served by the asset protocol: allow exactly the
             // folders wallpapers come from (they vary per Steam library).
@@ -341,7 +427,12 @@ fn main() {
             get_settings,
             set_autostart,
             set_scripts,
-            set_volume
+            set_volume,
+            workshop_query,
+            workshop_subscribe,
+            workshop_unsubscribe,
+            workshop_subscriptions,
+            workshop_status
         ])
         // Closing the selector leaves the wallpaper running (dropping a
         // `Child` doesn't kill it); the next selector replaces it on apply
