@@ -556,6 +556,15 @@ drawn by a synthetic image layer (so effects and blend modes apply).
 - Font: the object's font from the pkg, else a system font through
   `fc-match`.
 - The canvas grows to fit the text (WE never clips).
+- **Transparent texels are black** (rgb 0, alpha 0), glyphs white with
+  coverage as alpha. Lucy 3521337568's clock runs `shine`, whose combine
+  pass blends the rays over the raw texture's rgb: we wrote white with
+  alpha 0 over each glyph's whole box and every glyph sat in a white box;
+  WE shows none. Clock region (260x110) SSIM against WE's mean: 0.762 with
+  the boxes, 0.765 black, 0.711 with an all-white canvas (a white haze
+  around the text). Harness on all 38 scored scenes with text: every mean
+  SSIM change within +-0.0006 (largest drop 3195212886 0.8226 -> 0.8219,
+  below the 0.005 gate threshold), no verdict change.
 - `horizontalalign` left/right puts the text's start/end AT the object's
   origin (center: centered on it), not at the edge of the `size` box
   (Toyota 3560329032's right-aligned clock; Asuna 3239767814).
