@@ -1,21 +1,25 @@
 // Selector: Tauri desktop app to browse and apply wallpapers. The Rust backend
 // scans the Workshop folders with rustpaper-core and exposes commands to the
-// static web frontend in `ui/`:
-//   list_wallpapers      -> [{id, title, kind, preview, supported}]
-//   apply(id)            -> (re)starts the engine on that wallpaper
+// web frontend in `ui/`:
+//   list_wallpapers      -> [{id, title, kind, preview, workshop, added}]
+//   apply(id)            -> shows that wallpaper (engine service, service.rs)
 //   get_properties(id)   -> the wallpaper's customizable properties + saved values
-//   save_properties(id, values) -> persists them and hot-swaps the running engine
+//   save_properties(id, values) -> persists them; the engine reloads them
+//   wallpaper_colors(id) -> dominant colors of its preview (color suggestions)
 //   get_settings / set_autostart / set_volume
+//   get_performance / set_performance / set_playback -> the Performance tab
 //   workshop_query / workshop_subscribe / workshop_unsubscribe / workshop_status /
-//   workshop_subscriptions
+//   workshop_subscriptions -> the Steam Workshop store (workshop.rs)
 //   get_theme            -> the active Omarchy theme (omarchy.rs), + `theme-changed` events
 //   theme_from_wallpaper(id) / set_wallpaper_theme(enabled) / desktop_info
 //                        -> an Omarchy theme from the wallpaper's colors (palette.rs)
-//                        -> the Steam Workshop store (workshop.rs)
+//
+// What is shown, and how, lives in rustpaper-core's state.json; the engine
+// (`rustpaper --service`) reads it and re-reads it on reload.
 
 mod omarchy;
 mod palette;
-mod settings;
+mod service;
 mod workshop;
 
 use std::path::{Path, PathBuf};
@@ -23,13 +27,16 @@ use std::process::Child;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use rustpaper_core::performance;
 use rustpaper_core::project::{Project, WallpaperKind};
+use rustpaper_core::state::{self, Playback};
 use serde::Serialize;
 use serde_json::{Map, Value};
 use tauri::{Emitter, Manager};
 
-/// The running engine and the wallpaper it shows (killed when switching).
-struct EngineState(Mutex<Option<(String, Child)>>);
+/// The engine started as our own child, only when there is no systemd user
+/// manager (otherwise systemd runs it: service.rs).
+struct EngineState(Mutex<Option<Child>>);
 
 #[derive(Serialize)]
 struct WallpaperEntry {
@@ -37,7 +44,6 @@ struct WallpaperEntry {
     title: String,
     kind: String,            // "video" | "scene" | "web" | "unknown"
     preview: Option<String>, // absolute path of the preview image
-    supported: bool,         // can the engine play it?
     /// In Steam's Workshop folder (can be unsubscribed), not the test corpus.
     workshop: bool,
     /// When the folder appeared (Unix seconds): the download right after
@@ -92,19 +98,18 @@ fn list_wallpapers() -> Vec<WallpaperEntry> {
             let Ok(project) = Project::load(&dir) else {
                 continue;
             };
-            // the real Wallpaper Engine plays them all
-            let (kind, supported) = match project.kind {
-                WallpaperKind::Video => ("video", true),
-                WallpaperKind::Scene => ("scene", true),
-                WallpaperKind::Web => ("web", true),
-                WallpaperKind::Unknown(_) => ("unknown", true),
+            // all of them play: the real Wallpaper Engine renders them
+            let kind = match project.kind {
+                WallpaperKind::Video => "video",
+                WallpaperKind::Scene => "scene",
+                WallpaperKind::Web => "web",
+                WallpaperKind::Unknown(_) => "unknown",
             };
             out.push(WallpaperEntry {
                 id,
                 title: project.title,
                 kind: kind.to_string(),
                 preview: find_preview(&dir).map(|p| p.to_string_lossy().into_owned()),
-                supported,
                 workshop: in_workshop,
                 added: folder_added(&dir),
             });
@@ -115,51 +120,75 @@ fn list_wallpapers() -> Vec<WallpaperEntry> {
 }
 
 /// Engine binary: next to the selector (target/{debug,release}/ or the
-/// install prefix), else `rustpaper` from PATH.
+/// install prefix), else `rustpaper` from PATH. Absolute: it goes into the
+/// systemd unit.
 fn engine_path() -> PathBuf {
-    std::env::current_exe()
+    let beside = std::env::current_exe()
         .ok()
         .and_then(|exe| Some(exe.parent()?.join("rustpaper")))
-        .filter(|p| p.exists())
+        .filter(|p| p.exists());
+    beside
+        .or_else(|| {
+            std::env::split_paths(&std::env::var_os("PATH")?)
+                .map(|d| d.join("rustpaper"))
+                .find(|p| p.is_file())
+        })
         .unwrap_or_else(|| PathBuf::from("rustpaper"))
 }
 
-/// Engine command line for a wallpaper, with its saved property values.
-fn engine_args(id: &str, dir: &Path) -> Vec<String> {
-    let mut args = vec![dir.to_string_lossy().into_owned()];
-    if let Some(p) = settings::properties_file(id).filter(|p| p.exists()) {
-        args.push("--props".into());
-        args.push(p.to_string_lossy().into_owned());
+/// Makes the engine show what state.json says (a new wallpaper, or changed
+/// properties/settings). Through systemd: the running engine reloads in
+/// place, or the service starts. Without systemd: a new child engine, the
+/// previous one stopped 2.5 s later, after the new one drew its first frame
+/// (so the desktop never flashes in between).
+fn refresh_engine(state: &EngineState) -> Result<(), String> {
+    let engine = engine_path();
+    if service::available() {
+        service::install(&engine)?;
+        service::apply()?;
+        // engines systemd does not run (older selectors, started by hand)
+        std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_millis(2500));
+            kill_stray_engines(service::main_pid());
+        });
+        return Ok(());
     }
-    let s = settings::load();
-    match s.volume {
-        0 => args.push("--mute".into()),
-        100.. => {}
-        v => {
-            args.push("--volume".into());
-            args.push(v.to_string());
-        }
-    }
-    args
-}
-
-/// Starts the engine on `id`. The previous engine is killed only after the
-/// new one had time to load and draw its first frame, so switching (or
-/// tweaking a property) never flashes the desktop background in between.
-fn start_engine(id: &str, state: &EngineState) -> Result<(), String> {
-    let dir = wallpaper_dir(id)?;
-    let child = std::process::Command::new(engine_path())
-        .args(engine_args(id, &dir))
+    let child = std::process::Command::new(&engine)
+        .arg("--service")
         .spawn()
-        .map_err(|e| format!("failed to start the engine: {e}"))?;
-    let previous = state.0.lock().unwrap().replace((id.to_string(), child));
+        .map_err(|e| format!("failed to start the engine ({}): {e}", engine.display()))?;
+    let previous = state.0.lock().unwrap().replace(child);
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(2500));
-        if let Some((_, old)) = previous {
+        if let Some(old) = previous {
             stop_engine(old);
         }
-        kill_stray_engines();
+        kill_stray_engines(None);
     });
+    Ok(())
+}
+
+/// An engine is showing a wallpaper (the service, or our child).
+fn engine_running(state: &EngineState) -> bool {
+    service::is_active()
+        || state
+            .0
+            .lock()
+            .unwrap()
+            .as_mut()
+            .is_some_and(|c| matches!(c.try_wait(), Ok(None)))
+}
+
+/// The wallpaper on screen, if any.
+fn showing(state: &EngineState) -> Option<String> {
+    state::load().last_id.filter(|_| engine_running(state))
+}
+
+/// Refreshes the engine when one is running (settings changed).
+fn refresh_if_running(state: &EngineState) -> Result<(), String> {
+    if engine_running(state) {
+        refresh_engine(state)?;
+    }
     Ok(())
 }
 
@@ -178,14 +207,14 @@ fn stop_engine(mut child: std::process::Child) {
     let _ = child.wait();
 }
 
-/// Kills the `rustpaper` engines of this user that this selector did not
-/// start: ones left by a previous selector session (closing the selector
+/// Stops the `rustpaper` engines of this user other than `keep` (the
+/// service's) that this selector did not start: ones left by a previous selector session (closing the selector
 /// leaves its wallpaper running) or started by hand / autostart. Two engines
 /// on the same layer flicker. Our own children are left alone: the handover
 /// above stops them one by one, and with quick successive applies a child
 /// may be the engine that must stay (keeping "the newest pid" instead raced:
 /// an older handover killed the newer engine).
-fn kill_stray_engines() {
+fn kill_stray_engines(keep: Option<u32>) {
     // SAFETY: getuid has no preconditions.
     let uid = unsafe { libc::getuid() };
     let Ok(procs) = std::fs::read_dir("/proc") else {
@@ -195,7 +224,7 @@ fn kill_stray_engines() {
         let Some(pid) = p.file_name().to_str().and_then(|s| s.parse::<u32>().ok()) else {
             continue;
         };
-        if !is_engine(&p.path(), uid) {
+        if Some(pid) == keep || !is_engine(&p.path(), uid) {
             continue;
         }
         eprintln!("stopping engine {pid} (not started by this selector)");
@@ -232,15 +261,12 @@ fn apply(
     id: String,
     state: tauri::State<EngineState>,
 ) -> Result<(), String> {
-    start_engine(&id, &state)?;
-    // Remember the wallpaper; with autostart on, point the .desktop at it.
-    let mut s = settings::load();
-    s.last_id = Some(id.clone());
-    if s.autostart {
-        let _ = settings::write_autostart(&engine_path(), &engine_args(&id, &wallpaper_dir(&id)?));
-    }
-    settings::save(&s);
-    if s.wallpaper_theme && omarchy::available() {
+    wallpaper_dir(&id)?;
+    let mut st = state::load();
+    st.last_id = Some(id.clone());
+    state::save(&st).map_err(|e| e.to_string())?;
+    refresh_engine(&state)?;
+    if st.wallpaper_theme && omarchy::available() {
         // seconds of work (omarchy-theme-set retints every app): off the
         // command, reported through `wallpaper-theme` events
         std::thread::spawn(move || {
@@ -275,11 +301,10 @@ async fn set_wallpaper_theme(
     enabled: bool,
     state: tauri::State<'_, EngineState>,
 ) -> Result<(), String> {
-    let mut s = settings::load();
-    s.wallpaper_theme = enabled;
-    settings::save(&s);
-    let running = state.0.lock().unwrap().as_ref().map(|(id, _)| id.clone());
-    match running {
+    let mut st = state::load();
+    st.wallpaper_theme = enabled;
+    state::save(&st).map_err(|e| e.to_string())?;
+    match showing(&state) {
         Some(id) if enabled => tauri::async_runtime::spawn_blocking(move || wallpaper_theme(&id))
             .await
             .map_err(|e| e.to_string())?,
@@ -292,6 +317,9 @@ async fn set_wallpaper_theme(
 struct DesktopInfo {
     hyprland: bool,
     omarchy: bool,
+    /// Tab to open on (`RUSTPAPER_SELECTOR_TAB`: library, store or
+    /// performance), for screenshots and launcher shortcuts.
+    start_tab: Option<String>,
 }
 
 #[tauri::command]
@@ -299,6 +327,7 @@ fn desktop_info() -> DesktopInfo {
     DesktopInfo {
         hyprland: omarchy::is_hyprland(),
         omarchy: omarchy::available(),
+        start_tab: std::env::var("RUSTPAPER_SELECTOR_TAB").ok(),
     }
 }
 
@@ -332,21 +361,16 @@ fn get_properties(id: String, state: tauri::State<EngineState>) -> Result<Proper
         })
         .collect();
     properties.sort_by_key(|p| p.get("order").and_then(|o| o.as_i64()).unwrap_or(0));
-    let applied = state
-        .0
-        .lock()
-        .unwrap()
-        .as_ref()
-        .is_some_and(|(cur, _)| *cur == id);
+    let applied = showing(&state).as_deref() == Some(id.as_str());
     Ok(PropertiesView {
         properties,
-        saved: settings::load_properties(&id),
+        saved: state::load_properties(&id),
         applied,
     })
 }
 
-/// Saves the user's values (an empty map = back to the defaults) and, when
-/// the wallpaper is on screen, restarts the engine with them.
+/// Saves the user's values (an empty map = back to the defaults); the
+/// engine reloads them when the wallpaper is on screen.
 #[tauri::command]
 fn save_properties(
     id: String,
@@ -354,65 +378,120 @@ fn save_properties(
     state: tauri::State<EngineState>,
 ) -> Result<(), String> {
     wallpaper_dir(&id)?;
-    settings::save_properties(&id, &values).map_err(|e| e.to_string())?;
-    let running = state
-        .0
-        .lock()
-        .unwrap()
-        .as_ref()
-        .is_some_and(|(cur, _)| *cur == id);
-    if running {
-        start_engine(&id, &state)?;
+    state::save_properties(&id, &values).map_err(|e| e.to_string())?;
+    if showing(&state).as_deref() == Some(id.as_str()) {
+        refresh_engine(&state)?;
     }
     Ok(())
 }
 
+/// Dominant colors of a wallpaper's preview, most common first (`#rrggbb`):
+/// suggestions for its color properties.
 #[tauri::command]
-fn get_settings() -> settings::Settings {
-    settings::load()
+async fn wallpaper_colors(id: String) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = wallpaper_dir(&id)?;
+        let preview = find_preview(&dir).ok_or("this wallpaper has no preview image")?;
+        omarchy::image_colors(&preview, 8)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
+/// The header's settings.
+#[derive(Serialize)]
+struct SettingsView {
+    last_id: Option<String>,
+    /// The engine service starts with the graphical session.
+    autostart: bool,
+    volume: u8,
+    wallpaper_theme: bool,
+}
+
+#[tauri::command]
+fn get_settings() -> SettingsView {
+    let st = state::load();
+    SettingsView {
+        last_id: st.last_id,
+        autostart: service::is_enabled(),
+        volume: st.volume,
+        wallpaper_theme: st.wallpaper_theme,
+    }
+}
+
+/// "Start on login": enables/disables the engine's systemd user service.
 #[tauri::command]
 fn set_autostart(enabled: bool) -> Result<(), String> {
-    let mut s = settings::load();
-    s.autostart = enabled;
-    settings::save(&s);
-    if !enabled {
-        settings::remove_autostart();
-        return Ok(());
+    if !service::available() {
+        return Err("no systemd user session: start on login needs systemd".into());
     }
-    // A wallpaper must have been applied to know what to restore.
-    let id = s
-        .last_id
-        .ok_or("apply a wallpaper before enabling autostart")?;
-    let args = engine_args(&id, &wallpaper_dir(&id)?);
-    settings::write_autostart(&engine_path(), &args).map_err(|e| e.to_string())
+    service::install(&engine_path())?;
+    service::set_enabled(enabled)
 }
 
-/// Volume slider (0..100, 0 = mute): saved, then the running wallpaper is
-/// restarted with it and the autostart entry refreshed.
+/// Volume slider (0..100, 0 = mute): saved, then the engine reloads.
 #[tauri::command]
 fn set_volume(volume: u8, state: tauri::State<EngineState>) -> Result<(), String> {
-    let mut s = settings::load();
-    s.volume = volume.min(100);
-    settings::save(&s);
-    restart_with_settings(&s, &state)
+    let mut st = state::load();
+    st.volume = volume.min(100);
+    state::save(&st).map_err(|e| e.to_string())?;
+    refresh_if_running(&state)
 }
 
-/// After an engine-wide setting changed: restarts the running wallpaper
-/// (its command line carries the setting) and refreshes the autostart entry.
-fn restart_with_settings(s: &settings::Settings, state: &EngineState) -> Result<(), String> {
-    let running = state.0.lock().unwrap().as_ref().map(|(id, _)| id.clone());
-    if let Some(id) = running {
-        start_engine(&id, state)?;
+/// The Performance tab: WE's quality settings (with their current values)
+/// and presets, and the Playback rules.
+#[derive(Serialize)]
+struct PerformanceView {
+    settings: Vec<performance::Setting>,
+    values: Map<String, Value>,
+    presets: Vec<PresetView>,
+    preset: &'static str,
+    playback: Playback,
+    playback_settings: Vec<performance::PlaybackSetting>,
+}
+
+#[derive(Serialize)]
+struct PresetView {
+    name: &'static str,
+    values: Map<String, Value>,
+}
+
+#[tauri::command]
+fn get_performance() -> PerformanceView {
+    let st = state::load();
+    let values = performance::current(&st.performance);
+    PerformanceView {
+        preset: performance::preset_of(&values),
+        settings: performance::settings(),
+        presets: performance::presets()
+            .into_iter()
+            .map(|(name, values)| PresetView { name, values })
+            .collect(),
+        values,
+        playback: st.playback,
+        playback_settings: performance::playback_settings(),
     }
-    if s.autostart
-        && let Some(id) = &s.last_id
-    {
-        let args = engine_args(id, &wallpaper_dir(id)?);
-        settings::write_autostart(&engine_path(), &args).map_err(|e| e.to_string())?;
-    }
-    Ok(())
+}
+
+/// Saves WE quality settings; the engine restarts WE with them (it must be
+/// stopped while its config is written).
+#[tauri::command]
+fn set_performance(
+    values: Map<String, Value>,
+    state: tauri::State<EngineState>,
+) -> Result<(), String> {
+    let mut st = state::load();
+    st.performance = performance::sanitize(&values);
+    state::save(&st).map_err(|e| e.to_string())?;
+    refresh_if_running(&state)
+}
+
+#[tauri::command]
+fn set_playback(playback: Playback, state: tauri::State<EngineState>) -> Result<(), String> {
+    let mut st = state::load();
+    st.playback = playback;
+    state::save(&st).map_err(|e| e.to_string())?;
+    refresh_if_running(&state)
 }
 
 /// The active Omarchy theme's palette, None outside Omarchy (the UI keeps its
@@ -455,13 +534,7 @@ async fn workshop_subscribe(app: tauri::AppHandle, id: String) -> Result<(), Str
 /// stream from disk).
 #[tauri::command]
 async fn workshop_unsubscribe(app: tauri::AppHandle, id: String) -> Result<(), String> {
-    let running = app
-        .state::<EngineState>()
-        .0
-        .lock()
-        .unwrap()
-        .as_ref()
-        .map(|(r, _)| r.clone());
+    let running = showing(&app.state::<EngineState>());
     if running.as_deref() == Some(id.as_str()) {
         return Err("This wallpaper is on screen: apply another one before unsubscribing.".into());
     }
@@ -513,9 +586,13 @@ fn main() {
             apply,
             get_properties,
             save_properties,
+            wallpaper_colors,
             get_settings,
             set_autostart,
             set_volume,
+            get_performance,
+            set_performance,
+            set_playback,
             workshop_query,
             workshop_subscribe,
             workshop_unsubscribe,
@@ -526,9 +603,9 @@ fn main() {
             set_wallpaper_theme,
             desktop_info
         ])
-        // Closing the selector leaves the wallpaper running (dropping a
-        // `Child` doesn't kill it); the next selector replaces it on apply
-        // (`kill_stray_engines`).
+        // Closing the selector leaves the wallpaper running: systemd runs the
+        // engine (or, without systemd, dropping a `Child` doesn't kill it and
+        // the next selector replaces it: `kill_stray_engines`).
         .run(tauri::generate_context!())
         .expect("failed to run the Tauri app");
 }

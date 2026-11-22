@@ -13,14 +13,14 @@ export const Wallpaper = z.object({
   title: z.string(),
   kind: WallpaperKind,
   preview: z.string().nullable(),
-  supported: z.boolean(),
   workshop: z.boolean(),
   added: z.number(),
 });
 export type Wallpaper = z.infer<typeof Wallpaper>;
 export const Wallpapers = z.array(Wallpaper);
 
-/// get_settings -> settings::Settings
+/// get_settings -> SettingsView (main.rs); autostart = the engine's systemd
+/// service is enabled
 export const Settings = z.object({
   last_id: z.string().nullable(),
   autostart: z.boolean(),
@@ -62,6 +62,42 @@ export const PropertiesView = z.object({
   applied: z.boolean(),
 });
 export type PropertiesView = z.infer<typeof PropertiesView>;
+
+// ---- Performance tab (main.rs PerformanceView, rustpaper-core performance) --
+
+export const SettingValue = z.union([z.string(), z.number(), z.boolean()]);
+export type SettingValue = z.infer<typeof SettingValue>;
+
+const SettingBase = { key: z.string(), label: z.string(), default: SettingValue, hint: z.string() };
+export const QualitySetting = z.discriminatedUnion("kind", [
+  z.object({ ...SettingBase, kind: z.literal("select"), options: z.array(z.tuple([z.string(), z.string()])) }),
+  z.object({ ...SettingBase, kind: z.literal("slider"), min: z.number(), max: z.number(), step: z.number() }),
+  z.object({ ...SettingBase, kind: z.literal("toggle") }),
+]);
+export type QualitySetting = z.infer<typeof QualitySetting>;
+
+export const PlaybackAction = z.enum(["run", "pause"]);
+export type PlaybackAction = z.infer<typeof PlaybackAction>;
+export const Playback = z.object({
+  fullscreen: PlaybackAction,
+  maximized: PlaybackAction,
+  focused: PlaybackAction,
+  sleep: PlaybackAction,
+  battery: PlaybackAction,
+});
+export type Playback = z.infer<typeof Playback>;
+
+export const PerformanceView = z.object({
+  settings: z.array(QualitySetting),
+  values: z.record(SettingValue),
+  presets: z.array(z.object({ name: z.string(), values: z.record(SettingValue) })),
+  preset: z.string(),
+  playback: Playback,
+  playback_settings: z.array(z.object({ key: Playback.keyof(), label: z.string(), hint: z.string() })),
+});
+export type PerformanceView = z.infer<typeof PerformanceView>;
+
+export const Colors = z.array(z.string().regex(/^#[0-9a-f]{6}$/i));
 
 // ---- Workshop (rustpaper-workshop protocol.rs) ----------------------------
 
@@ -108,7 +144,11 @@ export type Theme = z.infer<typeof Theme>;
 export const MaybeTheme = Theme.nullable();
 
 /// desktop_info
-export const DesktopInfo = z.object({ hyprland: z.boolean(), omarchy: z.boolean() });
+export const DesktopInfo = z.object({
+  hyprland: z.boolean(),
+  omarchy: z.boolean(),
+  start_tab: z.enum(["library", "store", "performance"]).nullable().catch(null),
+});
 export type DesktopInfo = z.infer<typeof DesktopInfo>;
 
 export const StatusMap = z.record(ItemState);

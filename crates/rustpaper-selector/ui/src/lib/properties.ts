@@ -69,6 +69,18 @@ export function toHex(value: unknown): string {
   );
 }
 
+export const isHex = (s: string) => /^#[0-9a-f]{6}$/i.test(s.trim());
+
+/// What a color property does, when WE's convention says: "Scheme color" is
+/// the wallpaper's theme color (WE also tints its own UI with it), used by
+/// the parts of the scene its author linked to it.
+export function colorHint(p: { name: string; text?: string | null }): string | null {
+  const scheme = p.name.toLowerCase() === "schemecolor" || p.text === "ui_browse_properties_scheme_color";
+  return scheme
+    ? "The wallpaper's theme color, chosen by its author: the parts of the scene linked to it (lights, glows, text, particles…) take this color. Pick one from the wallpaper to keep it matching."
+    : null;
+}
+
 export function fromHex(hex: string): string {
   return [1, 3, 5].map((i) => (parseInt(hex.slice(i, i + 2), 16) / 255).toFixed(5)).join(" ");
 }

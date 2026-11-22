@@ -104,20 +104,18 @@ export function Thumb({ src, className = "" }: { src: string | null; className?:
 export function Card({
   children,
   selected,
-  dimmed,
   interactive = true,
   onClick,
 }: {
   children: ReactNode;
   selected?: boolean;
-  dimmed?: boolean;
   interactive?: boolean;
   onClick?: () => void;
 }) {
   return (
     <div
       onClick={onClick}
-      className={`overflow-hidden rounded-[10px] border-2 bg-card transition ${selected ? "border-pink" : "border-transparent"} ${dimmed ? "opacity-50" : ""} ${interactive ? "cursor-pointer hover:-translate-y-0.5 hover:border-accent" : ""}`}
+      className={`overflow-hidden rounded-[10px] border-2 bg-card transition ${selected ? "border-pink" : "border-transparent"} ${interactive ? "cursor-pointer hover:-translate-y-0.5 hover:border-accent" : ""}`}
     >
       {children}
     </div>

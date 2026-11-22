@@ -1,6 +1,6 @@
-// Engine-wide settings in the header: autostart, master volume.
-// Each change is saved by the backend, which restarts the running wallpaper
-// when the setting is on its command line.
+// Engine-wide settings in the header: start on login (the engine's systemd
+// user service), master volume, theme from wallpaper. Each change is saved
+// by the backend; the running engine reloads it in place.
 import { create } from "zustand";
 import { api } from "../api/tauri";
 import { errorText, toast } from "./toast";
@@ -56,7 +56,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
     set({ autostart: on });
     try {
       await api.setAutostart(on);
-      toast(on ? "Autostart on" : "Autostart off");
+      toast(on ? "Starts on login (rustpaper.service enabled)" : "Won't start on login");
     } catch (e) {
       set({ autostart: before });
       toast(errorText(e));

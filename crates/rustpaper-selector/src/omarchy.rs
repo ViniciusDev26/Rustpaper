@@ -142,6 +142,36 @@ pub fn image_palette(image: &std::path::Path) -> Result<crate::palette::Palette,
     Ok(crate::palette::palette_from_pixels(&pixels))
 }
 
+/// The `k` dominant colors of an image, most common first, as `#rrggbb`
+/// (color suggestions in the customization panel). Near-duplicates are
+/// merged so the suggestions differ visibly.
+pub fn image_colors(image: &std::path::Path, k: usize) -> Result<Vec<String>, String> {
+    let img = image::open(image).map_err(|e| format!("{}: {e}", image.display()))?;
+    let small = img.thumbnail(160, 160).to_rgb8();
+    let pixels: Vec<[u8; 3]> = small.pixels().map(|p| p.0).collect();
+    let mut out: Vec<String> = Vec::new();
+    for s in crate::palette::dominant_colors(&pixels, k * 3) {
+        let hex = s.color.hex();
+        // (70 of 765: below that, two greens of one image looked the same)
+        let close = out.iter().any(|h| hex_distance(h, &hex) < 70);
+        if !close {
+            out.push(hex);
+        }
+        if out.len() == k {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+/// Manhattan distance between two `#rrggbb` colors (0..765).
+fn hex_distance(a: &str, b: &str) -> u32 {
+    let ch = |h: &str, i: usize| {
+        u8::from_str_radix(h.get(i..i + 2).unwrap_or("00"), 16).unwrap_or(0) as i32
+    };
+    (1..7).step_by(2).map(|i| ch(a, i).abs_diff(ch(b, i))).sum()
+}
+
 /// Writes ~/.config/omarchy/themes/rustpaper from a wallpaper's preview and
 /// applies it with `omarchy-theme-set` (which also generates every app's
 /// colors from colors.toml and sets the desktop background to the preview,
