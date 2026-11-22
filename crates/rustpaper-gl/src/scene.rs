@@ -480,8 +480,9 @@ impl SceneRenderer {
             if obj.get("image").and_then(|i| i.as_str()).is_some() || is_shape_quad(obj) {
                 match r.load_layer(gl, obj) {
                     Ok(mut layer) => {
-                        if layer.shape_quad
-                            && obj.get("parallaxDepth").is_none()
+                        // children without their own depth take their
+                        // ancestor's (see inherited_parallax)
+                        if obj.get("parallaxDepth").is_none()
                             && let Some(p) = inherited_parallax(objects, obj)
                         {
                             layer.parallax = p;
@@ -3340,6 +3341,11 @@ fn is_shape_quad(obj: &Value) -> bool {
 /// saw (0, 0), only the parent's depth puts the glow where WE has it (sky
 /// left of the planet: |diff| 26.4 -> 16.6, region SSIM 0.814 -> 0.834;
 /// depth 0 gives 17.8 / 0.831).
+/// Image children follow the same rule: Chainsaw Man 3577990983's sky,
+/// clouds and fireworks hang from group 35 (depth 0) and WE saw the pointer
+/// at (0, 0); with depth 1 the 3840x2160 background slid ~100 px right and
+/// down, uncovering black along the top and left edges (mean SSIM 0.66 ->
+/// 0.86 with the parent's depth). Camellya 3366882745 0.829 -> 0.936.
 fn inherited_parallax(objects: &[Value], obj: &Value) -> Option<[f32; 2]> {
     let by_id: HashMap<i64, &Value> = objects
         .iter()
