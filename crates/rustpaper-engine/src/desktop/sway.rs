@@ -73,6 +73,19 @@ fn is_headless(name: &str) -> bool {
     name.starts_with("HEADLESS-")
 }
 
+/// Not a monitor: a headless output, or one showing a workspace of ours.
+/// (`create_output` makes `HEADLESS-<n>` on a real session, but another
+/// output of the same backend when Sway runs nested: `WL-2` under Wayland,
+/// seen 2026-11-22.)
+fn is_hidden(o: &Value) -> bool {
+    o.get("name")
+        .and_then(|n| n.as_str())
+        .is_some_and(is_headless)
+        || o.get("current_workspace")
+            .and_then(|w| w.as_str())
+            .is_some_and(|w| w.starts_with("rustpaper-"))
+}
+
 /// Every container of the tree, depth first.
 fn walk<'a>(node: &'a Value, out: &mut Vec<&'a Value>) {
     out.push(node);
@@ -112,7 +125,7 @@ fn covering(outputs: &[Value], tree: &Value) -> Vec<Coverage> {
         .iter()
         .filter_map(|o| {
             let name = o.get("name")?.as_str()?.to_string();
-            if is_headless(&name) || o.get("active").and_then(|a| a.as_bool()) == Some(false) {
+            if is_hidden(o) || o.get("active").and_then(|a| a.as_bool()) == Some(false) {
                 return None;
             }
             let asleep = o
@@ -171,7 +184,7 @@ impl Desktop for Sway {
     fn outputs(&self) -> Vec<Output> {
         outputs_raw()
             .iter()
-            .filter(|o| o.get("active").and_then(|a| a.as_bool()) != Some(false))
+            .filter(|o| o.get("active").and_then(|a| a.as_bool()) != Some(false) && !is_hidden(o))
             .filter_map(|o| {
                 let name = o.get("name")?.as_str()?.to_string();
                 let mode = o.get("current_mode")?;
@@ -179,7 +192,7 @@ impl Desktop for Sway {
                     mode.get("width")?.as_u64()? as u32,
                     mode.get("height")?.as_u64()? as u32,
                 );
-                (!is_headless(&name)).then_some(Output { name, size })
+                Some(Output { name, size })
             })
             .collect()
     }
@@ -205,7 +218,7 @@ impl Stage for Sway {
             .into_iter()
             .find(|x| x.get("name").and_then(|n| n.as_str()) == Some(&ws))
             .and_then(|x| x.get("output")?.as_str().map(String::from))
-            .filter(|o| is_headless(o));
+            .filter(|o| *o != out.name);
         let headless = assigned.or_else(|| {
             let before: Vec<String> = outputs_raw()
                 .iter()
@@ -215,13 +228,18 @@ impl Stage for Sway {
             outputs_raw()
                 .iter()
                 .filter_map(|o| o.get("name")?.as_str().map(String::from))
-                .find(|n| is_headless(n) && !before.contains(n))
+                .find(|n| !before.contains(n))
         });
         let Some(headless) = headless else {
             eprintln!("sway: could not create a headless output for {}", out.name);
             return;
         };
-        command(&format!("output {headless} mode --custom {w}x{h}@60Hz"));
+        // Only headless outputs take an arbitrary mode. A nested Sway's
+        // created output is a window on the host, sized by the host: asking
+        // it for a mode hung Sway's IPC (2026-11-22).
+        if is_headless(&headless) {
+            command(&format!("output {headless} mode --custom {w}x{h}@60Hz"));
+        }
         command(&format!("workspace {ws} output {headless}"));
         command(&format!(
             "for_window [class=\"{WE_CLASS}\" title=\"^{ws}$\"] move container to workspace {ws}, fullscreen enable"
