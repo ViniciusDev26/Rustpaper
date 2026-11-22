@@ -35,6 +35,28 @@ fn json(cmd: &str) -> Option<serde_json::Value> {
     serde_json::from_str(&request(cmd)?).ok()
 }
 
+/// Turns off Hyprland's layer animations for our surfaces (namespace
+/// `rustpaper`), before any is created. Switching wallpapers starts the new
+/// engine and kills the old one 2.5 s later; with layersOut/fadeLayersOut
+/// on, Hyprland faded out a snapshot of the old surface and the previous
+/// wallpaper flashed over the new one (reported on Hyprland 0.56; Omarchy
+/// sets the same rule on its own background layers for that reason).
+///
+/// The rule syntax changed across Hyprland versions, so each one is tried
+/// until the compositor answers "ok": Lua config (`eval`), hyprlang rules
+/// v2 (0.53+), then the legacy `noanim`. Every engine start adds the rule
+/// again; duplicates are harmless and the set is dropped on config reload.
+pub fn disable_layer_animations() -> bool {
+    const RULES: [&str; 3] = [
+        r#"eval hl.layer_rule({ match = { namespace = "^rustpaper$" }, no_anim = true, animation = "none" })"#,
+        "keyword layerrule no_anim on, match:namespace ^rustpaper$",
+        "keyword layerrule noanim, ^rustpaper$",
+    ];
+    RULES
+        .iter()
+        .any(|r| request(r).is_some_and(|reply| reply.trim() == "ok"))
+}
+
 /// Cursor in global logical coordinates.
 pub fn cursor() -> Option<(f64, f64)> {
     let v = json("j/cursorpos")?;
