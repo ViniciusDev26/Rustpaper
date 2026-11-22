@@ -480,11 +480,7 @@ impl SceneRenderer {
             if obj.get("image").and_then(|i| i.as_str()).is_some() || is_shape_quad(obj) {
                 match r.load_layer(gl, obj) {
                     Ok(mut layer) => {
-                        // children without their own depth take their
-                        // ancestor's (see inherited_parallax)
-                        if obj.get("parallaxDepth").is_none()
-                            && let Some(p) = inherited_parallax(objects, obj)
-                        {
+                        if let Some(p) = inherited_parallax(objects, obj) {
                             layer.parallax = p;
                         }
                         r.order.push(ObjRef::Layer(r.layers.len()));
@@ -497,7 +493,10 @@ impl SceneRenderer {
                 }
             } else if obj.get("particle").and_then(|p| p.as_str()).is_some() {
                 match r.load_particles(gl, obj) {
-                    Ok(p) => {
+                    Ok(mut p) => {
+                        if let Some(d) = inherited_parallax(objects, obj) {
+                            p.parallax = d;
+                        }
                         r.order.push(ObjRef::Particles(r.particle_objs.len()));
                         r.particle_objs.push(p);
                     }
@@ -542,7 +541,10 @@ impl SceneRenderer {
                     Ok(t) => {
                         r.texts.push(t);
                         match r.load_layer(gl, obj) {
-                            Ok(layer) => {
+                            Ok(mut layer) => {
+                                if let Some(p) = inherited_parallax(objects, obj) {
+                                    layer.parallax = p;
+                                }
                                 r.order.push(ObjRef::Layer(r.layers.len()));
                                 r.layers.push(layer);
                             }
@@ -3360,11 +3362,14 @@ fn is_shape_quad(obj: &Value) -> bool {
         && obj.get("shape").and_then(|s| s.as_str()) == Some("quad")
 }
 
-/// `parallaxDepth` of the nearest ancestor that sets one. Shape quads are
-/// always children in the corpus and never set their own: Lucy 3521337568's
-/// light shafts hang from group 2065 (depth 0.12) and, with the pointer WE
-/// saw (0, 0), only the parent's depth puts the glow where WE has it (sky
-/// left of the planet: |diff| 26.4 -> 16.6, region SSIM 0.814 -> 0.834;
+/// Parallax of a child object: the `parallaxDepth` of the nearest ancestor
+/// that sets one, which overrides the child's own. Lucy 3521337568's planet
+/// (`parallaxDepth` 0.5, child of group 556 at 0, pointer at (0, 0)):
+/// planet-region SSIM against WE 0.729 at its own 0.5, 0.803 at 0, worse
+/// again at -0.1 / -0.2 in either axis. Shape quads never set one and take
+/// their parent's the same way: Lucy's light shafts hang from group 2065
+/// (depth 0.12), and only the parent's depth puts the glow where WE has it
+/// (sky left of the planet: |diff| 26.4 -> 16.6, region SSIM 0.814 -> 0.834;
 /// depth 0 gives 17.8 / 0.831).
 /// Image children follow the same rule: Chainsaw Man 3577990983's sky,
 /// clouds and fireworks hang from group 35 (depth 0) and WE saw the pointer
