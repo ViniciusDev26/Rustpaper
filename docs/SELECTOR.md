@@ -18,11 +18,11 @@ stores, every command reply validated with Zod.
   `src/api/tauri.ts`: typed wrappers of the commands, which reject with
   the Rust error string or on a reply that doesn't match its schema.
 - `src/store/`: `library` (wallpapers, selection, search, order,
-  unsubscribe), `settings` (volume, autostart), `workshop`
-  (queries, subscriptions, download polling), `toast`.
+  unsubscribe), `settings` (volume, autostart, theme from wallpaper),
+  `workshop` (queries, subscriptions, download polling), `toast`.
 - `src/components/`: `LibraryView`, `PropertiesPanel` + `PropertyControl`
-  (one control per WE property type), `WorkshopView`, shared pieces in
-  `common.tsx`.
+  (one control per WE property type), `WorkshopView`, `PerformanceView`,
+  shared pieces in `common.tsx`.
 - `src/lib/properties.ts`: labels, color conversion and the `condition`
   parser, pure and unit-tested (`npm test`, vitest). Author texts are
   rendered as React text, never HTML; conditions are parsed, never
@@ -116,7 +116,7 @@ Built from `general.properties` of project.json, in WE's `order`:
 
 - **`condition`** (e.g. `background_enable.value && background_type.value == 3`)
   hides controls exactly like WE. It is evaluated by a small parser in
-  `ui/properties.js` (`|| && ! == != < > <= >=`, parentheses, literals,
+  `ui/src/lib/properties.ts` (`|| && ! == != < > <= >=`, parentheses, literals,
   `name.value`) — **never** with `eval`/`Function`; Workshop text is never
   executed. Unparseable conditions show the control.
 - Labels: WE localization keys (`ui_browse_properties_scheme_color`) map to
@@ -140,7 +140,8 @@ Built from `general.properties` of project.json, in WE's `order`:
 
 - `~/.config/rustpaper/state.json` (`rustpaper_core::state`): the wallpaper
   on screen, volume, "Theme from wallpaper", the Performance tab's quality
-  settings and Playback rules. The selector writes it; the engine
+  settings and Playback rules, and `stage` (`auto`, `desktop` or `private`;
+  no UI yet, docs/ENGINE.md). The selector writes it; the engine
   (`rustpaper --service`) reads it and re-reads it on reload. The panel
   reopens the last wallpaper at startup. Unknown fields of older files
   (`autostart`, `no_scripts`) are ignored.
@@ -164,6 +165,10 @@ Built from `general.properties` of project.json, in WE's `order`:
   the checkbox shows `is-enabled`. The old
   `~/.config/autostart/rustpaper.desktop` is removed when the unit is
   installed.
+- WE's Steam launch option for the private stage is set with
+  `rustpaper setup-steam` (no button yet). The engine binary the service
+  runs and the one that option names should be the same install: after
+  moving from a dev build to a package, run `setup-steam` again.
 - Without a systemd user manager the selector falls back to its own child
   engine (`rustpaper --service`, handed over after 2.5 s), and "Start on
   login" reports an error.
