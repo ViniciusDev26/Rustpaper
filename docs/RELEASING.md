@@ -55,11 +55,9 @@ CI (`.github/workflows/ci.yml`, job *Conventional Commits*) runs commitlint
      (`rustpaper`, `rustpaper-selector`, `rustpaper-workshop`),
      `lib/rustpaper/libsteam_api.so`, the `.desktop` entry, the icon,
      LICENSE and README;
-   - `rustpaper-bin.PKGBUILD` with that tarball's checksum: `makepkg -si`.
-     While the repository is private, download both with
-     `gh release download` (a plain `curl` gets GitHub's "Not Found" page,
-     and makepkg cannot fetch the tarball either: it uses the local file
-     when it is next to the PKGBUILD).
+   - `rustpaper-bin.PKGBUILD` with that tarball's checksum: download it
+     (`releases/latest/download/rustpaper-bin.PKGBUILD`) and run
+     `makepkg -si`, which fetches the tarball.
 4. `aur` publishes `rustpaper-bin` (the tarball) and `rustpaper` (built from
    the tag's source) to the AUR, with checksums from `updpkgsums`. It is
    skipped (a notice in the run) while the `AUR_SSH_PRIVATE_KEY` secret is
