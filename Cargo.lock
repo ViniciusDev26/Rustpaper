@@ -2718,7 +2718,7 @@ dependencies = [
 
 [[package]]
 name = "rustpaper-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2726,7 +2726,7 @@ dependencies = [
 
 [[package]]
 name = "rustpaper-engine"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "libc",
  "rustpaper-core",
@@ -2739,7 +2739,7 @@ dependencies = [
 
 [[package]]
 name = "rustpaper-selector"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "image",
  "libc",
@@ -2752,7 +2752,7 @@ dependencies = [
 
 [[package]]
 name = "rustpaper-workshop"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",

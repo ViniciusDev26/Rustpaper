@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.0](https://github.com/ViniciusDev26/Rustpaper/compare/v0.3.0...v0.4.0) (2026-11-22)
+
+
+### Features
+
+* **engine:** private stage, Rustpaper's own compositor for WE's windows ([59d6417](https://github.com/ViniciusDev26/Rustpaper/commit/59d641750a9db01291f0e78ee32c4ff0a7b7f1b7))
+
+
+### Bug Fixes
+
+* **engine:** stop WE's whole launch on restart ([34d095e](https://github.com/ViniciusDev26/Rustpaper/commit/34d095effc64c25abd86b0512a730fcaf005fcc4))
+* **engine:** sway adapter on nested sessions, stage repairs without WE ([45f418a](https://github.com/ViniciusDev26/Rustpaper/commit/45f418a5393e97f695f95ea19a78eb5ca7a608b9))
+* **packaging:** depend on xorg-xwayland instead of hyprland ([02d5db0](https://github.com/ViniciusDev26/Rustpaper/commit/02d5db0566134e7793ff581c336815e78cdc27e8))
+
 ## [0.3.0](https://github.com/ViniciusDev26/Rustpaper/compare/v0.2.0...v0.3.0) (2026-11-22)
 
 
