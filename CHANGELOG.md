@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.3.0](https://github.com/ViniciusDev26/Rustpaper/compare/v0.2.0...v0.3.0) (2026-11-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* **selector:** "Start on login" is now a systemd user service; the old ~/.config/autostart/rustpaper.desktop is removed.
+* **engine:** Wallpaper Engine must be installed through Steam with Proton and Hyprland 0.56+ is required. rustpaper-render and rustpaper-script-worker are gone.
+
+### Features
+
+* **core:** shared selector state and WE quality settings as data ([7e4cda0](https://github.com/ViniciusDev26/Rustpaper/commit/7e4cda02c5039fdf3abc6da5e011fd4efd231573))
+* **engine:** render wallpapers with the real Wallpaper Engine under Proton ([f4bc12a](https://github.com/ViniciusDev26/Rustpaper/commit/f4bc12a17732809556a5390266a426b82fb68011))
+* **engine:** service mode, in-place reload and playback rules ([475775d](https://github.com/ViniciusDev26/Rustpaper/commit/475775daa229e50ebae1ab9e70c1710f7e9a12fc))
+* **script:** drive flipbooks from getTextureAnimation() ([d932668](https://github.com/ViniciusDev26/Rustpaper/commit/d932668631fdda230813189f14c5ee00c994e5ec))
+* **selector:** engine as a systemd service, Performance tab, every wallpaper ([31b7801](https://github.com/ViniciusDev26/Rustpaper/commit/31b7801bbc42bd13c17da843ed26ef8fcda48808))
+* **selector:** match Hyprland and follow the Omarchy theme ([fd775dd](https://github.com/ViniciusDev26/Rustpaper/commit/fd775dd367ba6469cf78f9fb454e1306826334b6))
+* **selector:** match Hyprland/Omarchy and theme the desktop from the wallpaper ([6af8526](https://github.com/ViniciusDev26/Rustpaper/commit/6af8526c0f575345ab2a275928d8defc75a49d2c))
+* **selector:** theme the desktop from the wallpaper's colors ([6b96b63](https://github.com/ViniciusDev26/Rustpaper/commit/6b96b632d053a6ca1d3066e5840419143ca8d45b))
+
+
+### Bug Fixes
+
+* **ci:** drop the glslangValidator check from the CI image ([851edf3](https://github.com/ViniciusDev26/Rustpaper/commit/851edf384e187fb8722b65a1f054dea07578089d))
+* **gl:** camera parallax moves objects away from the cursor ([91ab676](https://github.com/ViniciusDev26/Rustpaper/commit/91ab6766ba31c10401935f0196b194a830c4f678))
+* **gl:** camera parallax moves objects away from the cursor ([73469fe](https://github.com/ViniciusDev26/Rustpaper/commit/73469fe70eb30841bc08847f550a0c4737b72187))
+* **gl:** Chainsaw Man Reze fireworks, parallax and dock backdrop ([7f0566e](https://github.com/ViniciusDev26/Rustpaper/commit/7f0566ecd00d010345e8703fead995f8e876b68a))
+* **gl:** children take their ancestor's parallax depth ([214454b](https://github.com/ViniciusDev26/Rustpaper/commit/214454b37b208a5e80f719d20c8d4930602bad09))
+* **gl:** honor image layer alignment ([5039525](https://github.com/ViniciusDev26/Rustpaper/commit/503952545c174792bc6de7f8ca5c55af5bee38bf))
+* **gl:** image children inherit their ancestor's parallax depth ([826defe](https://github.com/ViniciusDev26/Rustpaper/commit/826defe563678931b05c9fd369b1ca35ffdd6c6e))
+* **gl:** inherited parallax shifts children from the ancestor's origin ([3c03091](https://github.com/ViniciusDev26/Rustpaper/commit/3c03091a5b7236825ecf917b00139118c2c93498))
+* **gl:** inherited parallax shifts children from the ancestor's origin ([959af41](https://github.com/ViniciusDev26/Rustpaper/commit/959af41a19b9d835fcdee6502c63deccbc278a47))
+* **gl:** keep text texels outside the glyphs transparent black ([6029018](https://github.com/ViniciusDev26/Rustpaper/commit/6029018da0fdf43a2c83b1c0f3bbc3f922a24dc0))
+* **gl:** layer alignment and script camera zoom (Persona 3 passes, Reze 0.889) ([15efd7e](https://github.com/ViniciusDev26/Rustpaper/commit/15efd7e32f876c032aff1f302435e1458ba8aa58))
+* **gl:** Lucy puppet effects, child parallax and text texels ([b30b3e6](https://github.com/ViniciusDev26/Rustpaper/commit/b30b3e660318d33435d471d765919ee5ae658c5a))
+* **gl:** parallax strength is amount, influence scales the cursor reach ([21c583a](https://github.com/ViniciusDev26/Rustpaper/commit/21c583a9e16988e0c777b194bf577158c6f26e2f))
+* **gl:** parallax strength is amount, influence scales the cursor reach ([35a7cb8](https://github.com/ViniciusDev26/Rustpaper/commit/35a7cb8397cbcb6ca2084a3c105d57cd07aa1acb))
+* **gl:** run puppet effects on the texture before the warp ([d27374a](https://github.com/ViniciusDev26/Rustpaper/commit/d27374a668cddcd4761df21d2cee5ec3cb113af7))
+* **gl:** set g_LayerModelMatrix in every pass ([92a6e0b](https://github.com/ViniciusDev26/Rustpaper/commit/92a6e0bb99b976f638f386cc2139c0b07ddd05a0))
+* **gl:** the script camera zoom multiplies general.zoom ([6884362](https://github.com/ViniciusDev26/Rustpaper/commit/68843628d16550780c507ec00028254da78614e6))
+
 ## [0.2.0](https://github.com/ViniciusDev26/Rustpaper/compare/v0.1.0...v0.2.0) (2026-11-22)
 
 
