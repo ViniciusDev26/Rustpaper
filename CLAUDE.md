@@ -58,7 +58,8 @@ comments, with the measurement that justified it.
 - **`rustpaper-engine`** — binary **`rustpaper`**: the live wallpaper.
   Scenes go through rustpaper-gl (`gl_wallpaper.rs`, one EGL surface per
   output, layer `Bottom`); videos use the older wgpu path (`wallpaper.rs`,
-  `gpu.rs`, `video.rs`). `hyprland.rs` (fullscreen pause, cursor),
+  `gpu.rs`, `video.rs`). `hyprland.rs` (fullscreen pause, cursor, no layer animations for
+  namespace `rustpaper`: the compositor fade flashed the previous wallpaper),
   `audio_capture.rs` (PipeWire), `sound.rs` (plays scene `sound` objects
   with ffplay, killed with the engine via PR_SET_PDEATHSIG; `--volume`,
   `--mute`). `RUSTPAPER_LEGACY_SCENE=1` = old wgpu scenes.
