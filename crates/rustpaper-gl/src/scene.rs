@@ -235,6 +235,13 @@ pub struct SceneRenderer {
     fov: f32,
     /// `general.zoom`: the camera zooms in around the scene center.
     zoom: f32,
+    /// The camera transform's own zoom (`thisScene.setCameraTransforms`),
+    /// a factor on top of `general.zoom`. Persona 3 3151551777 has
+    /// `general.zoom` 1.01 and a script that sets the camera zoom to 1.01
+    /// too: WE's whole image is ~1.1% larger than ours with 1.01 alone
+    /// (stripes of its 128 audio bars: +9 px at x 200, -8 px at x 1715
+    /// against WE's mean; the window frame the same), i.e. 1.01 x 1.01.
+    camera_zoom: f32,
     /// Attached layers (index), parents before children.
     attach_order: Vec<usize>,
     /// `general.camerashake`: (amplitude, speed, roughness).
@@ -414,6 +421,7 @@ impl SceneRenderer {
             skylight: value::get_vec3(&general, "skylightcolor", [0.3; 3]),
             fov: value::get_f32(&general, "fov", 50.0),
             zoom: value::get_f32(&general, "zoom", 1.0).max(0.01),
+            camera_zoom: 1.0,
             shake: value::get_bool(&general, "camerashake", false).then(|| {
                 (
                     value::get_f32(&general, "camerashakeamplitude", 0.5),
@@ -848,6 +856,9 @@ impl SceneRenderer {
         self.sound_playing.extend(ch.sound_playing);
         if let Some(z) = ch.zoom {
             self.zoom = z.max(0.01);
+        }
+        if let Some(z) = ch.camera_zoom {
+            self.camera_zoom = z.max(0.01);
         }
         for (key, v) in ch.general {
             if let Some(b) = &mut self.bloom {
@@ -1709,7 +1720,7 @@ impl SceneRenderer {
         }
         // (camera shake does NOT zoom: Kirito x Asuna 3463520581, amplitude
         // 0.5, fits best unzoomed)
-        let zoom_total = self.zoom;
+        let zoom_total = self.zoom * self.camera_zoom;
         if (zoom_total - 1.0).abs() < 1e-4 {
             return ortho;
         }
