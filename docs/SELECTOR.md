@@ -103,6 +103,22 @@ helper `crates/rustpaper-workshop`).
   still there 30 s after unsubscribing), so the selector deletes
   `<workshop>/<id>` itself (numeric ids only) and reloads the Library.
 - Web items can be subscribed but are marked as not running yet.
+- **Library order** (header, remembered in localStorage): title, or
+  **Recently subscribed**. Steam keeps no subscription time on disk
+  (appworkshop_431960.acf's `timetouched` changes on every update check),
+  so the times come from the helper's `subscriptions` command (Steam's
+  subscriptions list, `time_added_to_user_list`, every page). Subscribed
+  items come first by that time, then folders without an active
+  subscription (old installs) by folder creation time; without Steam,
+  everything is by folder creation time (the download).
+- **Unsubscribe in the Library**: the panel of a Workshop item has an
+  Unsubscribe button (two clicks: the folder is deleted). Refused for the
+  wallpaper on screen, whose files the engine may still read (videos
+  stream from disk).
+- Steam callbacks must not start new Steam calls (steamworks-rs holds the
+  callback registry's lock while running them: registering a call there
+  deadlocked the paged subscriptions query); the helper queues the next
+  page and its main loop sends it.
 - Privacy: the Steam API prints the user's SteamID on stderr, so the
   helper's stderr is not forwarded.
 
@@ -112,5 +128,5 @@ helper `crates/rustpaper-workshop`).
 values), `save_properties(id, values)`, `get_settings`,
 `set_autostart(enabled)`, `set_scripts(enabled)`, `set_volume(volume)`,
 `workshop_query(query)`, `workshop_subscribe(id)`, `workshop_unsubscribe(id)`,
-`workshop_status(ids)`. Ids are validated as plain folder names before any
+`workshop_status(ids)`, `workshop_subscriptions()`. Ids are validated as plain folder names before any
 path is built.

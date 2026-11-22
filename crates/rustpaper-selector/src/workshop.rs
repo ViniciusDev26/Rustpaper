@@ -192,6 +192,13 @@ mod tests {
             .request(json!({ "cmd": "status", "items": [id] }))
             .unwrap();
         assert!(st[id]["subscribed"].is_boolean());
+        let subs = w.request(json!({ "cmd": "subscriptions" })).unwrap();
+        assert!(
+            subs.as_object()
+                .unwrap()
+                .values()
+                .all(|t| t.as_u64().is_some())
+        );
         let bad = w.request(json!({ "cmd": "subscribe", "item": "../x" }));
         assert!(bad.unwrap_err().contains("invalid workshop id"));
     }
