@@ -89,6 +89,9 @@ average image (SSIM) and on how much it moves
 - **Customization**: the selector shows each wallpaper's properties
   (sliders, colors, toggles, dropdowns, text) like WE; changes are saved
   per wallpaper and applied to the running wallpaper within a few seconds.
+- **Workshop store**: browse, search and subscribe to Workshop wallpapers
+  from the selector (through your running Steam client; Steam downloads
+  them, the gallery picks them up).
 - **Desktop integration**: physical-resolution rendering under fractional
   scaling, pauses while a fullscreen window covers the monitor (Hyprland),
   autostart.
@@ -114,7 +117,10 @@ Cargo workspace under `crates/`:
 - **`rustpaper-gl`** — the OpenGL scene renderer (+ `rustpaper-render`, an
   offline renderer to PNG/MP4 used by the harness).
 - **`rustpaper-engine`** — the live wallpaper: `rustpaper` binary.
-- **`rustpaper-selector`** — Tauri desktop app (gallery + properties).
+- **`rustpaper-selector`** — Tauri desktop app (gallery + properties +
+  Workshop store).
+- **`rustpaper-workshop`** — the store's bridge to the Steam client
+  (Steamworks).
 
 Contributor notes: [`CLAUDE.md`](./CLAUDE.md).
 

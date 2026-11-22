@@ -75,9 +75,42 @@ Built from `general.properties` of project.json, in WE's `order`:
   SceneScript sets. Applied on release of the slider, restarting the
   wallpaper like the scripts checkbox. Older state files load as 100.
 
+## Workshop tab (store)
+
+Browse the Steam Workshop for Wallpaper Engine, subscribe and unsubscribe
+without leaving the selector (`ui/workshop.js`, backend `src/workshop.rs`,
+helper `crates/rustpaper-workshop`).
+
+- The helper uses the Steamworks API as Wallpaper Engine (AppID 431960),
+  the same calls WE makes, through the running Steam client: no API key, no
+  login in the app. Requirements: Steam running, signed in to an account
+  that owns WE. While it runs Steam shows the user "playing Wallpaper
+  Engine", so it is spawned on the first store request and exits after 5
+  idle minutes (or when the selector closes its stdin).
+- Queries: trending this week, most popular, most subscribed, most recent,
+  recently updated, or the user's subscriptions; text search; type filter
+  (Scene / Video / Web, never "Application"); "Questionable"/"Mature" items
+  hidden unless **Mature** is checked. 50 per page, **Load more**. Steam
+  rejects tag filters on the user-list query, so "My subscriptions" is
+  filtered on the results.
+- **Subscribe** asks Steam to download now (high priority). Steam itself
+  writes into `steamapps/workshop/content/431960`, the folder the Library
+  scans; the tab polls the item's state every second (progress from
+  GetItemDownloadInfo) and, when it is installed, reloads the Library and
+  shows a toast. Installed items get **Apply**, which switches to the
+  Library and applies it.
+- **Unsubscribe**: Steam keeps the files until a later cleanup (measured:
+  still there 30 s after unsubscribing), so the selector deletes
+  `<workshop>/<id>` itself (numeric ids only) and reloads the Library.
+- Web items can be subscribed but are marked as not running yet.
+- Privacy: the Steam API prints the user's SteamID on stderr, so the
+  helper's stderr is not forwarded.
+
 ## Commands (Rust -> UI)
 
 `list_wallpapers`, `apply(id)`, `get_properties(id)` (definitions + saved
 values), `save_properties(id, values)`, `get_settings`,
-`set_autostart(enabled)`, `set_scripts(enabled)`, `set_volume(volume)`. Ids are validated as plain folder names before any
+`set_autostart(enabled)`, `set_scripts(enabled)`, `set_volume(volume)`,
+`workshop_query(query)`, `workshop_subscribe(id)`, `workshop_unsubscribe(id)`,
+`workshop_status(ids)`. Ids are validated as plain folder names before any
 path is built.
