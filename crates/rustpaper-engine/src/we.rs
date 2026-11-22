@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use serde_json::{Map, Value};
+
 /// Process name of WE's renderer (exactly 15 chars, so `comm` holds it whole).
 const WE_COMM: &str = "wallpaper64.exe";
 
@@ -127,20 +129,31 @@ fn config_path() -> Option<PathBuf> {
 /// - `safemode: false`: WE sets it while running and clears it on a clean
 ///   exit; after a crash or kill the next start shows a "Safe Start" dialog
 ///   that blocks every `-control` command.
-/// - `playbackfullscreen` / `playbackmaximized: run`: WE pauses a wallpaper
-///   when another app is fullscreen or maximized, and every wallpaper window
-///   of ours IS a fullscreen app: with two monitors each paused the other
-///   (DP-1 went 60 -> 29 -> 0 fps, 2026-11-22). Pausing is decided here
-///   instead, from what Hyprland shows on the real monitors.
-pub fn prepare_config() -> bool {
+/// - `playbackfullscreen` / `playbackmaximized` / `playbackfocus: run`: WE
+///   pauses a wallpaper when another app is fullscreen, maximized or
+///   focused, and every wallpaper window of ours IS a fullscreen app: with
+///   two monitors each paused the other (DP-1 went 60 -> 29 -> 0 fps,
+///   2026-11-22). The engine applies the user's Playback settings itself,
+///   from what Hyprland shows on the real monitors.
+/// - the user's quality settings (`performance`, already sanitized).
+pub fn prepare_config(performance: &Map<String, Value>) -> bool {
+    edit_config(performance, true)
+}
+
+/// Whether WE runs with other quality settings than `performance` (it must
+/// then be restarted to pick them up).
+pub fn needs_restart(performance: &Map<String, Value>) -> bool {
+    edit_config(performance, false)
+}
+
+fn edit_config(performance: &Map<String, Value>, write: bool) -> bool {
     let Some(path) = config_path() else {
         return false;
     };
     let Ok(text) = std::fs::read_to_string(&path) else {
         return false;
     };
-    let Ok(mut j) = serde_json::from_str::<serde_json::Value>(text.trim_start_matches('\u{feff}'))
-    else {
+    let Ok(mut j) = serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')) else {
         return false;
     };
     let mut changed = false;
@@ -152,7 +165,7 @@ pub fn prepare_config() -> bool {
             else {
                 continue;
             };
-            let mut set = |k: &str, v: serde_json::Value| {
+            let mut set = |k: &str, v: Value| {
                 if g.get(k) != Some(&v) {
                     g.insert(k.into(), v);
                     changed = true;
@@ -161,9 +174,13 @@ pub fn prepare_config() -> bool {
             set("safemode", false.into());
             set("playbackfullscreen", "run".into());
             set("playbackmaximized", "run".into());
+            set("playbackfocus", "run".into());
+            for (k, v) in performance {
+                set(k, v.clone());
+            }
         }
     }
-    if changed {
+    if changed && write {
         let backup = path.with_extension("json.rustpaper-backup");
         if !backup.exists() {
             let _ = std::fs::copy(&path, &backup);
@@ -185,14 +202,14 @@ fn kill_named(name: &str) {
 /// Makes sure WE runs with our config. Starts it through Steam when needed
 /// (restarting it when the config had to change). Blocks until WE accepts
 /// commands; false when it never came up.
-pub fn ensure_running() -> bool {
-    let changed = prepare_config();
+pub fn ensure_running(performance: &Map<String, Value>) -> bool {
+    let changed = prepare_config(performance);
     if pid().is_some() && !changed {
         return true;
     }
     if pid().is_some() {
         eprintln!("we: restarting Wallpaper Engine (config changed)");
-        return restart();
+        return restart(performance);
     }
     start()
 }
@@ -200,7 +217,7 @@ pub fn ensure_running() -> bool {
 /// Stops WE (UI, launcher and renderer) and starts it again. Also the cure
 /// for a degraded WE: after dozens of wallpaper windows opened and closed it
 /// rendered new ones black or pixelated, at ~3 fps, until restarted.
-pub fn restart() -> bool {
+pub fn restart(performance: &Map<String, Value>) -> bool {
     for n in ["launcher.exe", "wallpaperui.exe", WE_COMM] {
         kill_named(n);
     }
@@ -208,7 +225,8 @@ pub fn restart() -> bool {
     while pid().is_some() && t.elapsed() < Duration::from_secs(30) {
         std::thread::sleep(Duration::from_millis(250));
     }
-    prepare_config();
+    // written while WE is stopped: a running WE rewrites its config on exit
+    prepare_config(performance);
     start()
 }
 
