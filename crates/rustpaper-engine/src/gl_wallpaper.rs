@@ -223,7 +223,7 @@ impl GlWallpaper {
         }
 
         // The scene drawn at screen resolution, like WE (the largest visible
-        // output; a no-op while it doesn't change).
+        // output; set_output_size is a no-op while it doesn't change).
         let (ow, oh) = ready
             .iter()
             .map(|r| r.1)

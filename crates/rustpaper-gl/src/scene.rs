@@ -1713,6 +1713,13 @@ impl SceneRenderer {
         {
             return;
         }
+        // Called every frame by the engine: only a new output size does
+        // anything. Without this, each frame created two scene targets and
+        // leaked the old ones: a 5120x2868 scene (3028926404) on a 3840x2160
+        // output grew ~1 GiB/s of host memory until systemd-oomd killed it.
+        if (self.scene.tex.width, self.scene.tex.height) == (width.max(1), height.max(1)) {
+            return;
+        }
         let (cw, ch) = ((x1 - x0) as f32, (y1 - y0) as f32);
         let (ax, ay) = (sw as f32 / cw, sh as f32 / ch);
         let bx = ax - 2.0 * x0 as f32 / cw - 1.0;
@@ -1723,13 +1730,17 @@ impl SceneRenderer {
             0.0, 0.0, 1.0, 0.0, //
             bx, by, 0.0, 1.0,
         ]);
-        self.scene = Target::with_format(gl, width, height, self.scene_hdr);
-        self.fullframe = Target::with_format(gl, width, height, self.scene_hdr);
+        let scene = Target::with_format(gl, width, height, self.scene_hdr);
+        std::mem::replace(&mut self.scene, scene).delete(gl);
+        let fullframe = Target::with_format(gl, width, height, self.scene_hdr);
+        std::mem::replace(&mut self.fullframe, fullframe).delete(gl);
         if let Some(b) = &mut self.bloom {
-            b.chain.clear();
-            b.output = None;
+            b.chain.drain(..).for_each(|t| t.delete(gl));
+            if let Some(t) = b.output.take() {
+                t.delete(gl);
+            }
         }
-        self.unique_fbos.clear();
+        self.unique_fbos.drain().for_each(|(_, t)| t.delete(gl));
     }
 
     pub fn output(&self) -> &Target {

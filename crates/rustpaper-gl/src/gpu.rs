@@ -284,6 +284,16 @@ impl Target {
         Self::with_format(gl, width, height, false)
     }
 
+    /// Frees the GL objects. A dropped `Target` keeps them alive (it has no
+    /// context to free them with), and the NVIDIA driver backs every
+    /// texture with host memory: replace targets through this.
+    pub fn delete(self, gl: &glow::Context) {
+        unsafe {
+            gl.delete_framebuffer(self.fbo);
+            gl.delete_texture(self.tex.id);
+        }
+    }
+
     /// `hdr` = RGBA16F: keeps values above 1.0 (HDR scenes, bloom chains).
     pub fn with_format(gl: &glow::Context, width: u32, height: u32, hdr: bool) -> Target {
         let (w, h) = (width.max(1), height.max(1));
