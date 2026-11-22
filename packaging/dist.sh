@@ -5,7 +5,7 @@
 # Releases carry and the `rustpaper-bin` AUR package installs:
 #
 #   rustpaper-<version>-x86_64-linux.tar.gz
-#     rustpaper-<version>/bin/{rustpaper,rustpaper-selector,rustpaper-render,rustpaper-script-worker,rustpaper-workshop}
+#     rustpaper-<version>/bin/{rustpaper,rustpaper-selector,rustpaper-workshop}
 #     rustpaper-<version>/lib/rustpaper/libsteam_api.so   (Steamworks, for rustpaper-workshop)
 #     rustpaper-<version>/share/applications/rustpaper.desktop
 #     rustpaper-<version>/share/icons/hicolor/128x128/apps/rustpaper.png
@@ -19,12 +19,11 @@ build=1
 out=${1:?usage: dist.sh [--no-build] <out dir>}
 repo=$(cd "$(dirname "$0")/.." && pwd)
 version=$(sed -n 's/^version = "\([^"]*\)".*/\1/p' "$repo/Cargo.toml" | head -1)
-bins=(rustpaper rustpaper-selector rustpaper-render rustpaper-script-worker rustpaper-workshop)
+bins=(rustpaper rustpaper-selector rustpaper-workshop)
 
 if [ $build = 1 ]; then
     (cd "$repo" && cargo build --release --locked \
-        -p rustpaper-engine -p rustpaper-selector -p rustpaper-gl -p rustpaper-script \
-        -p rustpaper-workshop --bins)
+        -p rustpaper-engine -p rustpaper-selector -p rustpaper-workshop --bins)
 fi
 
 name=rustpaper-$version

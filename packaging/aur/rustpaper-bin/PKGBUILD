@@ -5,15 +5,12 @@
 pkgname=rustpaper-bin
 pkgver=0.2.0 # x-release-please-version
 pkgrel=1
-pkgdesc="Wallpaper Engine scene and video wallpapers on Wayland (live engine + selector)"
+pkgdesc="Wallpaper Engine wallpapers on Wayland: the real WE under Proton, mirrored onto the desktop (+ selector)"
 arch=('x86_64')
 url="https://github.com/ViniciusDev26/Rustpaper"
 license=('MIT')
 depends=('gcc-libs' 'glibc' 'gtk3' 'libglvnd' 'libxkbcommon' 'wayland' 'webkit2gtk-4.1'
-         'ffmpeg' 'vulkan-icd-loader')
-optdepends=('pipewire: audio-reactive wallpapers (pw-record)'
-            'hyprland: pause while a window is fullscreen, cursor effects'
-            'steam: Wallpaper Engine (its assets and Workshop wallpapers are required), Workshop tab')
+         'mesa' 'util-linux' 'hyprland' 'steam')
 provides=('rustpaper')
 conflicts=('rustpaper')
 source=("https://github.com/ViniciusDev26/Rustpaper/releases/download/v$pkgver/rustpaper-$pkgver-x86_64-linux.tar.gz")

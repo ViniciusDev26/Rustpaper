@@ -1,9 +1,8 @@
 // Module `paths`: where the Wallpaper Engine files live on this machine.
 //
 // Two folders matter:
-//   - the base assets shipped with WE (`.../common/wallpaper_engine/assets`):
-//     shared shaders, effects, materials and particle sprites that scenes
-//     reference OUTSIDE their own pkg;
+//   - WE's install (`.../common/wallpaper_engine`): `wallpaper64.exe`, which
+//     the engine drives under Proton, and its `config.json`;
 //   - the Workshop content folder (`.../workshop/content/431960`): one `<id>/`
 //     folder per subscribed wallpaper.
 //
@@ -35,17 +34,10 @@ fn first_existing(env: &str, suffix: &str) -> Option<PathBuf> {
         .find(|p| p.is_dir())
 }
 
-/// Base WE assets dir (`$WE_ASSETS_DIR`, or the Steam install).
-pub fn assets_dir() -> Option<PathBuf> {
-    first_existing("WE_ASSETS_DIR", "steamapps/common/wallpaper_engine/assets")
-}
-
-/// Shaders dir inside the base assets (`$WE_SHADERS_DIR` wins, for old tooling).
-pub fn shaders_dir() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("WE_SHADERS_DIR").map(PathBuf::from) {
-        return Some(p);
-    }
-    assets_dir().map(|a| a.join("shaders"))
+/// Wallpaper Engine's install dir (`$WE_DIR`, or the Steam library): holds
+/// `wallpaper64.exe` and WE's `config.json`.
+pub fn we_dir() -> Option<PathBuf> {
+    first_existing("WE_DIR", "steamapps/common/wallpaper_engine")
 }
 
 /// Workshop content dir (`$WE_WORKSHOP_DIR`, or the Steam library).
@@ -56,7 +48,8 @@ pub fn workshop_dir() -> Option<PathBuf> {
     )
 }
 
-/// Folder of the downloaded test corpus (harness/download-testset.sh):
+/// Folder of an extra wallpaper library laid out like Steam's (the old
+/// fidelity-harness corpus):
 /// `$RUSTPAPER_TESTSET_DIR` or ~/.local/share/rustpaper-testset.
 pub fn testset_dir() -> Option<PathBuf> {
     let root = std::env::var_os("RUSTPAPER_TESTSET_DIR")
