@@ -524,6 +524,26 @@ The measurements behind it:
   the scene clock ~0.25 s after the openWallpaper command. The shimmer
   sweeps measured the same lag (see Shimmer).
 
+**Children take their ancestor's parallax.** A child object (image,
+text, particles, shape quad) uses the `parallaxDepth` of its nearest
+ancestor that sets one, and its own is ignored. Lucy 3521337568's planet
+(compose 449, `parallaxDepth` 0.5, child of group 556 at 0) sat ~80 px
+right of WE's with the pointer WE saw (0, 0); still frame at t = 10 vs
+WE's mean, planet region (900x500 top-left) SSIM by the planet's depth:
+0.5 (its own) 0.729, 0.3 0.749, 0.1 0.778, **0 0.803**, -0.1 0.782,
+-0.2 0.773; 0.2 on one axis and 0 on the other 0.760 / 0.761. WE's planet
+is also static over the whole capture (its motion map is black there),
+ours drifted while the follow converged. The camera object 1640 (zoom 3 -> 1
+and an origin path over 36 frames at 12 fps) ends at 3 s, before the
+capture starts (6.8 s), so it is not involved. Taking the ROOT ancestor's
+depth instead (default 1 when the root sets none) scored the same on Lucy
+and 3366882745 but worse on Chainsaw Man 3577990983 (0.783 vs 0.786,
+energy ratio 1.87 vs 1.55). Harness, the 5 camera-parallax scenes with such
+children (the only ones the rule changes): Lucy 0.7545 -> 0.7904 (energy
+ratio 1.17 -> 1.05), 3366882745 0.829 -> 0.936 (ratio 2.10 -> 0.95),
+Chainsaw Man 0.656 -> 0.786 (ratio 1.54 -> 1.55), 3233141951 0.6275 ->
+0.6276, 3195212886 unchanged.
+
 `general.zoom` zooms the camera around the scene center (CITRUS 2704773569,
 zoom 1.1: mean SSIM 0.43 -> 0.98).
 
@@ -854,8 +874,10 @@ even in `--describe`). Now they are layers listed as `"shape quad"`:
   with depth 1 (our default) the glow was too bright on the left
   (sky left of the planet, x 0..650: |diff| 26.4, region SSIM 0.814), with
   the parent's 0.12 the region's mean color matches WE's (62/72/82 vs
-  62/72/83, |diff| 16.6, SSIM 0.834; depth 0 gives 17.8 / 0.831).
-- **Image children inherit it too.** Chainsaw Man 3577990983 hangs its sky
+  62/72/83, |diff| 16.6, SSIM 0.834; depth 0 gives 17.8 / 0.831). Every
+  other child follows the same rule (see Camera, "Children take their
+  ancestor's parallax").
+- **Image children inherit it too** (the general rule below). Chainsaw Man 3577990983 hangs its sky
   (3840x2160, scale 1.05), clouds and five fireworks from group 35, depth
   0; the children store no `parallaxDepth`. WE saw the pointer at (0, 0)
   and its background covers the screen; with depth 1 ours slid ~100 px
@@ -992,9 +1014,7 @@ customization panel (`docs/SELECTOR.md`).
 - Shape quads: the default size (scene height) is measured on landscape
   scenes only; a portrait scene could use its width (min side) instead.
   Shapes other than `quad`, and quads without a `DIRECTDRAW` effect, are
-  skipped with a warning (none in the corpus). Particle CHILDREN without
-  `parallaxDepth` still use depth 1 (images and quads inherit the
-  parent's): not measured.
+  skipped with a warning (none in the corpus).
 - Particles: **the prewarm (`starttime`) runs in real time**: it ignores
   `instanceoverride.rate`. In `make_particles.py pre_rate001` (rate 0.01,
   starttime 10, emission 2/s, life 12), WE shows 0.82x the dots of rate 1
