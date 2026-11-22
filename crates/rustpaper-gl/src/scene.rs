@@ -2540,6 +2540,12 @@ impl SceneRenderer {
         let f = &call.frame;
         prog.set(gl, "g_ModelViewProjectionMatrix", &call.mvp);
         prog.set(gl, "g_ModelMatrix", &call.model);
+        // The layer's own transform, also in effect passes (whose model
+        // matrix is the identity of texture space). Workshop effect
+        // frame_builder reads the layer scale from it (FIXSCALE); unset it
+        // was all zeros, so Chainsaw Man 3577990983's dock backdrop (a
+        // 100x100 solid scaled ~9.6 x 1.8, black at 0.55 alpha) drew nothing.
+        prog.set(gl, "g_LayerModelMatrix", &self.layers[call.layer].world);
         prog.set(gl, "g_ViewProjectionMatrix", &call.proj);
         prog.set(gl, "g_EffectTextureProjectionMatrix", &math::IDENTITY);
         prog.set(
