@@ -9,20 +9,25 @@ wallpaper still differed somewhere and the long tail never ended, so it was
 replaced by this (the old code is in git history before the migration
 commit).
 
-## Architecture: one core, desktop adapters
+## Architecture: one core, a stage, desktop adapters
 
 ```
-            core (identical on every desktop)                 adapters (desktop/)
- ┌──────────────────────────────────────────────────┐   ┌─────────────────────────────┐
- │ we.rs      WE under Proton: start, -control,     │   │ trait Desktop               │
- │            config.json, applyProperties          │   │   outputs()   real monitors │
- │ config.rs  CLI / state.json (--service, SIGHUP)  │◀──│   coverage()  Playback info │
- │ main.rs    targets, reload, watchdog, Playback   │   │   stage()                   │
- │ mirror.rs  capture WE's windows -> layer-shell   │   │ trait Stage                 │
- │            (standard Wayland protocols only)     │   │   prepare() hide_we_ui()    │
- └──────────────────────────────────────────────────┘   │   tend()                    │
-                                                        │ hyprland.rs  sway.rs  ...   │
-                                                        └─────────────────────────────┘
+                         core (identical on every desktop)
+ ┌────────────────────────────────────────────────────────────────────────┐
+ │ we.rs      WE under Proton: start via Steam, -control, config.json,    │
+ │            applyProperties, stop its whole launch                      │
+ │ launch.rs  `we-launch %command%` (WE's Steam launch option), setup-steam│
+ │ config.rs  CLI / state.json (--service, SIGHUP reload, --stage)        │
+ │ main.rs    targets, reload, watchdog, Playback rules                   │
+ │ mirror.rs  layer-shell surfaces on the user's compositor               │
+ └──────────────┬─────────────────────────────────────┬───────────────────┘
+                │ trait Stage                         │ trait Desktop
+   ┌────────────┴────────────────────┐   ┌────────────┴─────────────────────┐
+   │ stage.rs: private stage         │   │ hyprland.rs  sway.rs  generic.rs │
+   │ (our Smithay compositor +       │   │ monitors, what covers them;      │
+   │  XWayland; WE's dmabufs go      │   │ Hyprland and Sway also offer a   │
+   │  straight to the surfaces)      │   │ desktop stage (headless outputs) │
+   └─────────────────────────────────┘   └──────────────────────────────────┘
 ```
 
 The core never talks to a compositor. Everything desktop-specific sits
@@ -31,28 +36,45 @@ behind two traits (`desktop/mod.rs`):
   each one (fullscreen, maximized or tiled, focused, asleep), for the
   Playback rules.
 - **`Stage`**: a place where WE's windows live out of the user's sight but
-  rendered, because compositors only render (and so only let us capture)
-  windows they consider visible. It must:
+  rendered. It must:
   - prepare it once per monitor;
   - keep WE's own UI hidden;
   - repair it every 2 s (`tend`).
 
-Supporting a desktop = one adapter implementing both traits.
-`desktop::detect()` picks it from the session (`HYPRLAND_INSTANCE_SIGNATURE`,
-`SWAYSOCK`). An unsupported session gets an error naming exactly what is
-missing.
+  Normally this is the private stage (`stage.rs`). The Hyprland and Sway
+  adapters also offer a **desktop stage** inside the user's compositor, the
+  original design. Compositors only render (and so only let us capture)
+  windows they consider visible, so a desktop stage needs headless outputs
+  and rules.
+
+Supporting a desktop = a `Desktop` adapter. `desktop::detect()` picks
+Hyprland (`HYPRLAND_INSTANCE_SIGNATURE`), Sway (`SWAYSOCK`), or else the
+generic adapter. The generic adapter reads the monitors from the
+compositor's `wl_output`s and works with the private stage on any
+compositor with layer-shell; it cannot tell what covers a monitor, so the
+Playback rules never pause there.
 
 | Desktop | Adapter | Stage | Status |
 |---|---|---|---|
 | any with layer-shell | the private stage (below) hosts WE; the adapter only reports monitors and coverage | private | verified on Hyprland (with WE, 4K + 1080p at 60 fps) and on a nested Sway 1.12 (test X client) |
 | Hyprland 0.56+ | `desktop/hyprland.rs` | private, or headless outputs `RP-<output>` + window rules | both stages verified with WE |
 | Sway 1.11+ | `desktop/sway.rs` | private, or `create_output` + `workspace ... output` + `for_window` | both stages verified on a nested Sway 1.12 with a test X client (class `steam_app_431960`); not yet with WE on a real Sway session |
-| KDE, niri, others | `desktop/generic.rs` (monitors from `wl_output`, no coverage) | private only | not run yet |
+| niri, KDE, others | `desktop/generic.rs` (monitors from `wl_output`, no coverage) | private only | verified on a nested niri 26.04 with the test window (frames on niri's background, 2026-11-22); KDE not tried |
 | GNOME | none | none | no layer-shell: needs a Shell extension to show the wallpaper |
 
-What every adapter can rely on: `zwlr-layer-shell` to show the wallpaper
-and `ext-image-copy-capture` + `ext-foreign-toplevel-list` to capture WE's
-windows. The mirror uses only these.
+What the user's compositor must offer: `zwlr-layer-shell` (the wallpaper
+surfaces) and `zwp_linux_dmabuf_v1` (to show WE's buffers without a copy;
+shm works too, at a CPU cost). Desktop stages also need
+`ext-image-copy-capture` + `ext-foreign-toplevel-list` to capture WE's
+windows. The mirror uses only these standard protocols.
+
+Testing a stage without WE: `RUSTPAPER_NO_WE=1` runs only the stage and the
+mirror, and `scripts/stage-test-window.py` (an X window titled
+`rustpaper-<output>` with WE's window class) stands in for WE. Other
+compositors were tested nested on a hidden headless output of Hyprland
+(Sway with `WLR_BACKENDS=wayland`, niri); the nested compositor's window
+must be on a *visible* workspace, or it gets no frames (Sway's measured
+rate dropped to 0.1 fps until it was moved).
 
 ### The private stage (`stage.rs`)
 
@@ -111,10 +133,68 @@ every new launch: `WaitingPrevProcess` -> `AppError_16` in
 gone. The engine now stops every process carrying `SteamAppId=431960` or
 WE's Wine prefix in its environment (SIGTERM, then SIGKILL after 10 s).
 
-## How it works (Hyprland stage)
+## Engine lifecycle (any stage)
 
-For each real monitor there is ONE long-lived WE window, shared by every
-engine instance:
+For each real monitor there is ONE long-lived WE window, `rustpaper-<output>`,
+asked for with `-control openWallpaper -playInWindow` (`we.rs`).
+
+**Switching wallpapers never opens or closes windows.** `openWallpaper` with
+an existing window name loads the new wallpaper into that window. A first
+design opened a window per engine and closed it on exit, and WE degraded
+within minutes:
+- a close (`closeWallpaper -location` or the compositor's) took down another
+  window showing the same wallpaper;
+- later `closeWallpaper` did nothing at all;
+- new windows came up black, or pixelated with a wrong clock, at ~3 fps.
+
+**Service mode.** `rustpaper --service` (the systemd user service the
+selector manages, docs/SELECTOR.md) shows what `~/.config/rustpaper/state.json`
+says (`rustpaper_core::state`). It re-reads it on SIGHUP
+(`systemctl --user reload rustpaper`) and applies the change in place:
+- a new wallpaper or new property values load into the same windows;
+- new quality settings restart WE (see below);
+- a mute change is sent to WE.
+
+The process never restarts, so the desktop never shows the plain
+background. With nothing chosen yet it exits 0, so the service does not
+loop. `rustpaper <dir> [...]` still works for manual runs.
+
+When an engine exits:
+- with a desktop stage, the windows and headless outputs stay for the next
+  engine; when it is the last `rustpaper` running it sends `-control stop`,
+  so WE renders nothing while no wallpaper is shown;
+- with the private stage, its XWayland goes with it and WE loses its
+  display. The next engine starts a new stage and has Steam launch WE onto
+  it (15-30 s).
+
+The systemd service avoids both by reloading in place. Without systemd, the
+selector starts the next engine before stopping the old one.
+
+A **watchdog** runs every 2 s. It lets the stage repair itself (`tend`:
+workspace and fullscreen state on desktop stages), and asks WE again for a
+window that is missing after 40 s. After two
+unanswered requests it restarts WE, which is also the cure for the degraded
+state above. It also applies the **Playback rules** (state.json, the
+selector's Performance tab).
+- **Conditions**, per monitor (from the desktop adapter's `coverage`, and
+  `power::on_battery`):
+  - a fullscreen window;
+  - a maximized or tiled window on the active workspace (Hyprland tiles by
+    default, so the wallpaper only shows in the gaps);
+  - the focused window on that monitor;
+  - display off (DPMS);
+  - running on battery (a Mains adapter offline).
+- **Actions.** Each condition is Keep running or Pause. A paused monitor
+  stops capturing (desktop stage) or drops the stage's frames (private
+  stage); when every monitor is paused, the engine sends
+  `-control pause` to WE (and `play` when one resumes).
+- **Defaults:** pause under fullscreen windows and when the display sleeps,
+  like WE.
+
+## The desktop stage on Hyprland
+
+The original stage, still available (`--stage desktop`, or `auto` without
+WE's launch option). Per monitor:
 
 1. **Headless output.** A headless Hyprland output `RP-<output>` is created
    at the monitor's pixel size, scale 1. A workspace rule pins workspace
@@ -144,33 +224,6 @@ engine instance:
    only when the window has new content, so WE paces the loop. There is no GL
    context and no CPU copy.
 
-**Switching wallpapers never opens or closes windows.** `openWallpaper` with
-an existing window name loads the new wallpaper into that window. A first
-design opened a window per engine and closed it on exit, and WE degraded
-within minutes:
-- a close (`closeWallpaper -location` or the compositor's) took down another
-  window showing the same wallpaper;
-- later `closeWallpaper` did nothing at all;
-- new windows came up black, or pixelated with a wrong clock, at ~3 fps.
-
-**Service mode.** `rustpaper --service` (the systemd user service the
-selector manages, docs/SELECTOR.md) shows what `~/.config/rustpaper/state.json`
-says (`rustpaper_core::state`). It re-reads it on SIGHUP
-(`systemctl --user reload rustpaper`) and applies the change in place:
-- a new wallpaper or new property values load into the same windows;
-- new quality settings restart WE (see below);
-- a mute change is sent to WE.
-
-The process never restarts, so the desktop never shows the plain
-background. With nothing chosen yet it exits 0, so the service does not
-loop. `rustpaper <dir> [...]` still works for manual runs.
-
-An engine that exits leaves the windows and headless outputs for the next
-one. When it is the last `rustpaper` running, it sends `-control stop` so WE
-renders nothing while no wallpaper is shown. (Without systemd, the selector
-starts the next engine before stopping the old one, so for 2.5 s both mirror
-the same window.)
-
 **Config reloads.** A Hyprland config reload drops every rule added at
 runtime: window rules, workspace pins, headless output modes. Omarchy
 reloads on every theme switch, which "Theme from wallpaper" triggers. The
@@ -185,25 +238,7 @@ adapter listens on Hyprland's event socket (`.socket2.sock`,
   keep them, through a file that `hyprland.lua` would `require`. That means
   editing the user's config, so it is not done automatically.
 
-A **watchdog** runs every 2 s. It restores the workspace and fullscreen
-state, and asks WE again for a window that is missing after 40 s. After two
-unanswered requests it restarts WE, which is also the cure for the degraded
-state above. It also applies the **Playback rules** (state.json, the
-selector's Performance tab).
-- **Conditions**, per monitor (`hyprland::monitors`, `power::on_battery`):
-  - a fullscreen window;
-  - a maximized or tiled window on the active workspace (Hyprland tiles by
-    default, so the wallpaper only shows in the gaps);
-  - the focused window on that monitor;
-  - display off (DPMS);
-  - running on battery (a Mains adapter offline).
-- **Actions.** Each condition is Keep running or Pause. A paused monitor
-  stops capturing; when every monitor is paused, the engine sends
-  `-control pause` to WE (and `play` when one resumes).
-- **Defaults:** pause under fullscreen windows and when the display sleeps,
-  like WE.
-
-### WE's configuration
+## WE's configuration
 
 `we::prepare_config` edits WE's `config.json` (one-time backup:
 `config.json.rustpaper-backup`) and restarts WE when something changed. The
@@ -228,7 +263,7 @@ on exit:
 WE's own windows (UI, dialogs) are moved to `special:rustpaper-we` and never
 take focus.
 
-### Properties and sound
+## Properties and sound
 
 The selector's property values go to WE with
 `-control applyProperties -location <window> -properties RAW~({...})~END`,
@@ -247,7 +282,7 @@ previous wallpaper while the new one loads with its defaults).
 WE has no volume command, so `--volume 0` / `--mute` send `-control mute`
 and any other volume sends `unmute`; the volume itself is WE's own setting.
 
-## Measurements (2026-11-22, RTX 4060 Ti, Hyprland 0.56.2)
+## Measurements (desktop stage, 2026-11-22, RTX 4060 Ti, Hyprland 0.56.2)
 
 Jinx 3078285611 on HDMI-A-1 (3840x2160, scale 1.5) plus Lonely Cat 3299228616
 on DP-1 (1920x1080), 20 s averages:
@@ -267,18 +302,24 @@ on DP-1 (1920x1080), 20 s averages:
 
 ## Known gaps
 
-- **Cursor.** WE reads the X pointer through XWayland, which only moves
-  while the cursor is over an X window. Over a layer surface it never moves,
-  so eye-tracking and parallax wallpapers do not react and clicks do nothing.
-  Fixing this needs pointer injection into XWayland (XTest or libei) from
-  Hyprland's cursor position.
-- **Volume** is only mute/unmute (see above).
-- **Degraded WE** (black or pixelated windows, a few fps) is only detected
-  when windows stop appearing. A WE that renders badly but keeps its windows
-  needs a manual restart (`kill` wallpaper64.exe; the engine restarts it).
-- **Leftovers**: the headless outputs and WE's windows stay after the last
-  engine exits (stopped, so they cost nothing). The next engine reuses them.
-- **Desktops:** Hyprland (0.56+, in use) and Sway (1.11+, not yet run
-  live); others need an adapter or the private stage (see Architecture).
+- **Cursor.** WE reads the X pointer, which never moves over a layer
+  surface, so eye-tracking and parallax wallpapers do not react and clicks
+  do nothing. The private stage makes this solvable: its XWayland is ours,
+  so the engine can feed it pointer motion (a `wl_seat` in `stage.rs`) from
+  the cursor position the desktop adapter reports. Not done yet.
+- **Explicit sync** (`wp_linux_drm_syncobj`) is not offered to the stage's
+  XWayland; implicit sync showed no corruption on NVIDIA so far.
+- **Volume** is only mute/unmute (WE has no volume command).
+- **Degraded WE** (black or pixelated windows, a few fps; seen with the
+  desktop stage after dozens of window open/close cycles) is only detected
+  when windows stop appearing.
+- **Leftovers of desktop stages**: their headless outputs and WE windows
+  stay after the last engine exits (stopped, so they cost nothing); the
+  next engine reuses them. The private stage leaves nothing behind (its
+  XWayland dies with the engine, and WE with it).
+- **Selector**: no stage choice and no `setup-steam` button yet (the engine
+  picks the private stage once the launch option exists).
+- **Measurements** above are for the desktop stage; the private stage has
+  not been measured on the same wallpaper pair yet.
 - **Untrusted code.** SceneScript and web wallpapers run inside WE as they do
   on Windows, with no sandbox, and Proton maps the host root as `Z:`.

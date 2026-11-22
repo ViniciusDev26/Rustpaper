@@ -20,57 +20,78 @@
 **Rustpaper** puts **Wallpaper Engine** (Steam) wallpapers on the Wayland
 desktop. The wallpaper is rendered by the **real Wallpaper Engine**, running
 under Proton, so it looks and behaves exactly like on Windows (scenes,
-SceneScript, audio visualizers, videos, web wallpapers); Rustpaper mirrors it
-onto the desktop of each monitor and gives you a *selector* to browse your
-library, **customize each wallpaper's properties**, browse the Workshop and
-apply wallpapers.
+SceneScript, audio visualizers, videos, web wallpapers). Rustpaper hosts WE's
+windows in a compositor of its own and puts their frames on each monitor's
+desktop, and gives you a *selector* to browse your library, **customize each
+wallpaper's properties**, browse the Workshop and tune performance.
 
-Personal project for learning Rust and low-level graphics programming — not
-an official product, and not affiliated with Valve or Wallpaper Engine.
+Personal project, not an official product, and not affiliated with Valve or
+Wallpaper Engine.
 
 ---
 
-## ⚠️ Hard requirement: you need Wallpaper Engine
+## ⚠️ Requirements
 
 This project **does not ship any wallpaper content or renderer**: it drives
 your own copy of **Wallpaper Engine**, purchased on Steam.
 
-To use it you need:
+- [Wallpaper Engine](https://store.steampowered.com/app/431960/Wallpaper_Engine/)
+  installed through Steam, **running under Proton** (Steam -> Wallpaper
+  Engine -> Properties -> Compatibility), and some wallpapers subscribed
+  from its Workshop.
+- A Wayland compositor with **layer-shell**:
 
-1. [Wallpaper Engine](https://store.steampowered.com/app/431960/Wallpaper_Engine/)
-   purchased and installed through Steam, **running under Proton** (Steam ->
-   Wallpaper Engine -> Properties -> Compatibility);
-2. wallpapers subscribed from its Workshop;
-3. **Hyprland 0.56+** (or Sway 1.11+, adapter not yet tested live). Each
-   desktop is an adapter (`crates/rustpaper-engine/src/desktop/`); see
-   [`docs/ENGINE.md`](./docs/ENGINE.md) for adding one.
+  | Desktop | Status |
+  |---|---|
+  | Hyprland 0.56+ | in daily use, with its own adapter (Playback rules know what covers each monitor) |
+  | Sway 1.11+ | its own adapter; verified on a nested Sway with a test window, not yet with WE on a real session |
+  | niri, KDE, other layer-shell compositors | generic adapter (the Playback rules cannot pause there: it cannot see what covers a monitor); verified on a nested niri 26.04 with a test window; KDE not tried |
+  | GNOME | not supported (no layer-shell) |
+
+- `Xwayland`, libgbm (mesa) and `nsenter` (util-linux): already there on
+  most desktops.
 
 ---
 
-## 🚧 Project status: beta
+## 🚀 Install and first run
 
-**Arch Linux:** each [GitHub release](https://github.com/ViniciusDev26/Rustpaper/releases)
-carries prebuilt binaries and a ready `rustpaper-bin.PKGBUILD`:
+1. **Wallpaper Engine**: install it in Steam, force Proton for it, and
+   launch it once to get past its first-run dialog.
+2. **Rustpaper** (Arch Linux): each
+   [GitHub release](https://github.com/ViniciusDev26/Rustpaper/releases)
+   carries prebuilt binaries and a ready `rustpaper-bin.PKGBUILD`:
 
-```sh
-mkdir rustpaper && cd rustpaper
-curl -LO https://github.com/ViniciusDev26/Rustpaper/releases/latest/download/rustpaper-bin.PKGBUILD
-mv rustpaper-bin.PKGBUILD PKGBUILD && makepkg -si
-```
+   ```sh
+   mkdir rustpaper && cd rustpaper
+   gh release download -R ViniciusDev26/Rustpaper -p 'rustpaper-bin.PKGBUILD' -p '*.tar.gz'
+   mv rustpaper-bin.PKGBUILD PKGBUILD && makepkg -si
+   ```
 
-(AUR packages `rustpaper-bin` / `rustpaper` will follow; their PKGBUILDs are
-in `packaging/aur/`.) **From source**, for your user:
+   (`gh` because the repository is private for now: a plain `curl` of the
+   release URL gets a "Not Found" page. AUR packages `rustpaper-bin` /
+   `rustpaper` will follow; their PKGBUILDs are in `packaging/aur/`.)
 
-```sh
-./scripts/install.sh          # cargo build --release + ~/.local/bin + launcher entry
-rustpaper-selector            # or "Rustpaper" in your app launcher
-```
+   **From source**, for your user: `./scripts/install.sh` (needs a Rust
+   toolchain, pinned in `mise.toml`, and Node.js 20+ with npm for the
+   selector's UI).
+3. **Let Rustpaper host Wallpaper Engine** (once):
 
-Needs a Rust toolchain (pinned in `mise.toml`), Node.js 20+ with npm (the
-selector's UI is built by its build.rs), libgbm (mesa), `nsenter`
-(util-linux), Steam with Wallpaper Engine, and Hyprland 0.56+. Wallpaper
-Engine is found in your Steam library automatically (`WE_DIR` /
-`WE_WORKSHOP_DIR` override it).
+   ```sh
+   rustpaper setup-steam
+   ```
+
+   It sets WE's Steam launch option to `"…/rustpaper" we-launch %command%`,
+   which points WE at Rustpaper's own compositor while the wallpaper runs
+   and changes nothing otherwise. Steam rewrites its config when it exits,
+   so the command closes Steam for a few seconds, writes the option (with a
+   backup) and starts Steam again.
+4. Open **Rustpaper** from your app launcher, click a wallpaper, and tick
+   **Start on login**. The first wallpaper takes 15-20 s while Steam starts
+   WE.
+
+Disable other wallpaper daemons first (`linux-wallpaperengine`, swaybg...).
+WE's folders are found in your Steam library (`WE_DIR` / `WE_WORKSHOP_DIR`
+override them).
 
 ---
 
@@ -79,39 +100,57 @@ Engine is found in your Steam library automatically (`WE_DIR` /
 - **Every wallpaper type WE plays**: scenes, videos, web and application
   wallpapers, pixel-identical to WE because WE renders them.
 - **Multi-monitor**, each at its native resolution (fractional scaling too),
-  60 fps; frames go from WE's window to the desktop without leaving the GPU.
+  60 fps. WE's frames go from its GPU buffers to your desktop without a
+  copy.
 - **Customization**: the selector shows each wallpaper's properties
-  (sliders, colors, toggles, dropdowns, text) like WE and sends them to WE.
-- **Workshop store**: browse, search and subscribe to Workshop wallpapers
-  from the selector (through your running Steam client).
-- **Performance tab** like WE's: quality presets and settings (FPS,
-  anti-aliasing, texture resolution, post-processing, shadows, lighting) and
-  Playback rules (pause when a window is fullscreen, maximized/tiled or
-  focused, when the display sleeps, on battery).
-- **Desktop integration**: runs as a systemd user service ("Start on login"
-  enables it), Omarchy theme from the wallpaper's colors.
+  (sliders, colors with suggestions taken from the wallpaper, toggles,
+  dropdowns, text) like WE, and sends them to WE live.
+- **Workshop store**: browse, search and subscribe from the selector
+  (through your running Steam client).
+- **Performance tab** like WE's:
+  - quality presets and settings (FPS, anti-aliasing, texture resolution,
+    post-processing, shadows, lighting);
+  - Playback rules: pause when a window is fullscreen, maximized/tiled or
+    focused, when the display sleeps, or on battery.
+- **Desktop integration**: runs as a systemd user service ("Start on
+  login"), changes apply in place without flashing, Omarchy theme from the
+  wallpaper's colors.
 
-Not yet: cursor interaction (eye tracking, parallax, clicks), per-wallpaper
-volume (only mute), an animated lock screen (prerequisites in
-[`docs/LOCKSCREEN.md`](./docs/LOCKSCREEN.md)). Workshop JavaScript (SceneScript, web wallpapers) runs
-inside Wallpaper Engine as it does on Windows: **not sandboxed**.
+**Not yet:**
+- cursor interaction (eye tracking, parallax, clicks);
+- per-wallpaper volume (only mute);
+- an animated lock screen (prerequisites in
+  [`docs/LOCKSCREEN.md`](./docs/LOCKSCREEN.md)).
 
-How it works, measurements and known gaps: [`docs/ENGINE.md`](./docs/ENGINE.md),
-[`docs/SELECTOR.md`](./docs/SELECTOR.md).
+Workshop JavaScript (SceneScript, web wallpapers) runs inside Wallpaper
+Engine as it does on Windows: **not sandboxed**.
+
+How it works, measurements and known gaps:
+[`docs/ENGINE.md`](./docs/ENGINE.md), [`docs/SELECTOR.md`](./docs/SELECTOR.md).
 
 ---
 
 ## 🧩 Architecture (summary)
 
+```
+ Steam ──▶ Wallpaper Engine (Proton) ──X11──▶ private stage: Rustpaper's own compositor + XWayland
+                                                     │ WE's GPU buffers (dmabuf), no copy
+ selector ──state.json──▶ engine (systemd service) ──┴──▶ layer-shell surface on each monitor
+                              │
+                              └── desktop adapter: monitors, what covers them (Hyprland, Sway, generic)
+```
+
 Cargo workspace under `crates/`:
 
-- **`rustpaper-core`** — where Wallpaper Engine's files live, what a
-  `project.json` says.
-- **`rustpaper-engine`** — the live wallpaper (`rustpaper` binary): drives
-  Wallpaper Engine under Proton and mirrors its windows onto the desktop.
-- **`rustpaper-selector`** — Tauri desktop app (gallery + properties +
-  Workshop store).
-- **`rustpaper-workshop`** — the store's bridge to the Steam client
+- **`rustpaper-core`**: what the engine and the selector share. Steam/WE
+  paths, project.json, the selector's `state.json`, WE's quality settings
+  as data, Steam's `localconfig.vdf`.
+- **`rustpaper-engine`**: the live wallpaper (`rustpaper` binary). It drives
+  Wallpaper Engine, hosts it in the private stage, and has desktop adapters
+  for each compositor.
+- **`rustpaper-selector`**: Tauri desktop app (gallery, properties,
+  Workshop store, Performance tab).
+- **`rustpaper-workshop`**: the store's bridge to the Steam client
   (Steamworks).
 
 Contributor notes: [`CLAUDE.md`](./CLAUDE.md).

@@ -23,10 +23,15 @@ hand.
 | `feat!` / `BREAKING CHANGE:` footer | minor on 0.x, major from 1.0 |
 | `docs`, `refactor`, `test`, `ci`, `build`, `chore`, `style` | none (in the CHANGELOG only if feat/fix/perf) |
 
-Scopes are free; the usual ones are the crates and folders: `gl`, `script`,
-`engine`, `selector`, `core`, `workshop`, `packaging`, `ci`, `docs`.
-Examples: `feat(gl): compose layers group their children`,
-`fix(script): camera zoom from setCameraTransforms`.
+Scopes are free; the usual ones are the crates and folders: `engine`,
+`selector`, `core`, `workshop`, `packaging`, `ci`, `docs`.
+Examples: `feat(engine): private stage, Rustpaper's own compositor for WE's
+windows`, `fix(selector): ...`.
+
+The subject must start lowercase (commitlint's `subject-case`), even with a
+proper noun: `fix(engine): sway adapter ...`, not `Sway adapter`. A subject
+that slips through is only fixable by rewriting the branch, so check before
+pushing.
 
 CI (`.github/workflows/ci.yml`, job *Conventional Commits*) runs commitlint
 (`commitlint.config.mjs`) on **every commit** of a pull request. Locally:
@@ -46,10 +51,15 @@ CI (`.github/workflows/ci.yml`, job *Conventional Commits*) runs commitlint
 2. **Merging the release PR** tags `vX.Y.Z` and creates the GitHub release.
 3. `build` (in an `archlinux:base-devel` container) runs
    `packaging/dist.sh` and attaches to the release:
-   - `rustpaper-X.Y.Z-x86_64-linux.tar.gz` (+ `.sha256`): the five binaries,
+   - `rustpaper-X.Y.Z-x86_64-linux.tar.gz` (+ `.sha256`): the three binaries
+     (`rustpaper`, `rustpaper-selector`, `rustpaper-workshop`),
      `lib/rustpaper/libsteam_api.so`, the `.desktop` entry, the icon,
      LICENSE and README;
    - `rustpaper-bin.PKGBUILD` with that tarball's checksum: `makepkg -si`.
+     While the repository is private, download both with
+     `gh release download` (a plain `curl` gets GitHub's "Not Found" page,
+     and makepkg cannot fetch the tarball either: it uses the local file
+     when it is next to the PKGBUILD).
 4. `aur` publishes `rustpaper-bin` (the tarball) and `rustpaper` (built from
    the tag's source) to the AUR, with checksums from `updpkgsums`. It is
    skipped (a notice in the run) while the `AUR_SSH_PRIVATE_KEY` secret is
