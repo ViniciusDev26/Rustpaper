@@ -7,7 +7,13 @@
 // Playback stops while the wallpaper is paused (every output covered by a
 // fullscreen window) and the current track restarts when it resumes.
 // Without ffplay the wallpaper is simply silent.
+//
+// The selector stops an engine with SIGKILL, so `Drop` never runs: each
+// ffplay asks the kernel to SIGKILL it when its parent dies
+// (PR_SET_PDEATHSIG), otherwise it kept playing the track to its end after
+// the wallpaper was switched or removed.
 
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
@@ -44,6 +50,7 @@ impl SoundPlayer {
         let base = std::env::var_os("XDG_RUNTIME_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(std::env::temp_dir);
+        remove_stale_dirs(&base);
         let dir = base.join(format!("rustpaper-sounds-{}", std::process::id()));
         std::fs::create_dir_all(&dir).ok()?;
         let paused = Arc::new(AtomicBool::new(false));
@@ -111,6 +118,27 @@ impl Drop for SoundPlayer {
         // the threads kill their ffplay within ~100 ms
         std::thread::sleep(Duration::from_millis(150));
         let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// Deletes the track folders of engines that were killed (SIGKILL skips
+/// `Drop`): `rustpaper-sounds-<pid>` whose process is gone.
+fn remove_stale_dirs(base: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(base) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let name = e.file_name();
+        let Some(pid) = name
+            .to_str()
+            .and_then(|n| n.strip_prefix("rustpaper-sounds-"))
+            .and_then(|p| p.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
+            let _ = std::fs::remove_dir_all(e.path());
+        }
     }
 }
 
@@ -192,15 +220,31 @@ fn play(
 }
 
 fn spawn(file: &PathBuf, volume: f32) -> Option<Child> {
-    Command::new("ffplay")
-        .args(["-nodisp", "-autoexit", "-loglevel", "quiet", "-volume"])
+    let parent = std::process::id() as libc::pid_t;
+    let mut cmd = Command::new("ffplay");
+    cmd.args(["-nodisp", "-autoexit", "-loglevel", "quiet", "-volume"])
         .arg(((volume * 100.0).round() as u32).to_string())
         .arg(file)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()
+        .stderr(Stdio::null());
+    // SAFETY: runs in the forked child before exec and only makes
+    // async-signal-safe syscalls (prctl, getppid, _exit).
+    unsafe {
+        cmd.pre_exec(move || {
+            // The death signal follows the *thread* that forked: this sound
+            // thread lives until its ffplay is reaped, so that is fine.
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // the engine may have died before prctl took effect
+            if libc::getppid() != parent {
+                libc::_exit(0);
+            }
+            Ok(())
+        });
+    }
+    cmd.spawn().ok()
 }
 
 fn kill(child: &mut Child) {
