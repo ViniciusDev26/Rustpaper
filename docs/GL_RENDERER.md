@@ -524,6 +524,26 @@ The measurements behind it:
   the scene clock ~0.25 s after the openWallpaper command. The shimmer
   sweeps measured the same lag (see Shimmer).
 
+**Children take their ancestor's parallax.** A child object (image,
+text, particles, shape quad) uses the `parallaxDepth` of its nearest
+ancestor that sets one, and its own is ignored. Lucy 3521337568's planet
+(compose 449, `parallaxDepth` 0.5, child of group 556 at 0) sat ~80 px
+right of WE's with the pointer WE saw (0, 0); still frame at t = 10 vs
+WE's mean, planet region (900x500 top-left) SSIM by the planet's depth:
+0.5 (its own) 0.729, 0.3 0.749, 0.1 0.778, **0 0.803**, -0.1 0.782,
+-0.2 0.773; 0.2 on one axis and 0 on the other 0.760 / 0.761. WE's planet
+is also static over the whole capture (its motion map is black there),
+ours drifted while the follow converged. The camera object 1640 (zoom 3 -> 1
+and an origin path over 36 frames at 12 fps) ends at 3 s, before the
+capture starts (6.8 s), so it is not involved. Taking the ROOT ancestor's
+depth instead (default 1 when the root sets none) scored the same on Lucy
+and 3366882745 but worse on Chainsaw Man 3577990983 (0.783 vs 0.786,
+energy ratio 1.87 vs 1.55). Harness, the 5 camera-parallax scenes with such
+children (the only ones the rule changes): Lucy 0.7545 -> 0.7904 (energy
+ratio 1.17 -> 1.05), 3366882745 0.829 -> 0.936 (ratio 2.10 -> 0.95),
+Chainsaw Man 0.656 -> 0.786 (ratio 1.54 -> 1.55), 3233141951 0.6275 ->
+0.6276, 3195212886 unchanged.
+
 `general.zoom` zooms the camera around the scene center (CITRUS 2704773569,
 zoom 1.1: mean SSIM 0.43 -> 0.98).
 
@@ -536,6 +556,15 @@ drawn by a synthetic image layer (so effects and blend modes apply).
 - Font: the object's font from the pkg, else a system font through
   `fc-match`.
 - The canvas grows to fit the text (WE never clips).
+- **Transparent texels are black** (rgb 0, alpha 0), glyphs white with
+  coverage as alpha. Lucy 3521337568's clock runs `shine`, whose combine
+  pass blends the rays over the raw texture's rgb: we wrote white with
+  alpha 0 over each glyph's whole box and every glyph sat in a white box;
+  WE shows none. Clock region (260x110) SSIM against WE's mean: 0.762 with
+  the boxes, 0.765 black, 0.711 with an all-white canvas (a white haze
+  around the text). Harness on all 38 scored scenes with text: every mean
+  SSIM change within +-0.0006 (largest drop 3195212886 0.8226 -> 0.8219,
+  below the 0.005 gate threshold), no verdict change.
 - `horizontalalign` left/right puts the text's start/end AT the object's
   origin (center: centered on it), not at the edge of the `size` box
   (Toyota 3560329032's right-aligned clock; Asuna 3239767814).
@@ -765,10 +794,32 @@ unchanged WE material shader draws it.
 - MDLV0023 has extra blocks between the indices and MDLS (the parser looks
   for the magic), and MDLS0004's animation offset points at the MDAT block
   that precedes MDLA.
-- **A puppet is drawn into its layer target with the material's blending**,
-  not copied opaque like a quad: its triangles overlap and their hulls are
-  mostly transparent texels of a parts atlas, so a hair strand drawn after
-  the face erased it. Chainsaw Man 3577990983's head was missing (only the
+- **A puppet's effects run on its flat texture, before the warp.** The
+  layer target holds the texture (the parts atlas, at texture resolution),
+  the effect chain runs on it, and the mesh then samples the result and is
+  drawn straight onto the scene with the layer transform. Evidence, Lucy
+  3521337568: all her effect masks are 1185x1080, half of the 2371x2160
+  texture, and overlaid on the texture their painted areas sit on the atlas
+  pieces (waterwaves blobs on the loose hair strands and the jacket's
+  collar, the shine mask a frame around the pieces that leaves the body
+  column out), not on the posed character. Drawing the posed mesh into a
+  layer-sized target (our earlier path) put every mask in the wrong place
+  and cut her jacket with a hard vertical edge at the quad's left side (the
+  bind mesh spans x -1452..-200 in a quad 2371 wide, 267 px past its left
+  edge); WE draws the whole jacket. With the effects on the atlas, the
+  hair's motion map matches WE's (the strands' wave edges were dim before)
+  and the jacket is whole. Harness 2026-11-22, all 19 puppet scenes: Lucy
+  0.7508 -> 0.7545 (energy ratio 0.88 -> 1.17), Jinx 3078285611
+  0.944 -> 0.980 (FAIL -> PASS, ratio 0.78 -> 1.06), Dome 3113287126
+  0.971 -> 0.987, wlop sky2 2900431360 0.984 -> 0.991, 3022080536
+  0.985 -> 0.992, Kirito x Asuna 3463520581 0.964 -> 0.970, Chainsaw Man
+  3577990983 0.653 -> 0.656; the other 12 unchanged (+-0.002). A puppet
+  layer referenced as `_rt_imageLayerComposite_N` now exposes the effected
+  atlas, not the posed image (none in the corpus; unverified).
+- **The warped mesh is drawn with the material's blending**, not copied
+  opaque like a quad: its triangles overlap and their hulls are mostly
+  transparent texels of a parts atlas, so a hair strand drawn after the face
+  erased it. Chainsaw Man 3577990983's head was missing (only the
   last-drawn strands showed); Jinx 3078285611's hair was pink holes. Gate
   2026-11-21: Jinx 0.714 -> 0.944, Chainsaw Man 0.613 -> 0.653.
 - **`cullmode: normal`** culls back faces. Our targets keep row 0 at the top
@@ -832,8 +883,10 @@ even in `--describe`). Now they are layers listed as `"shape quad"`:
   with depth 1 (our default) the glow was too bright on the left
   (sky left of the planet, x 0..650: |diff| 26.4, region SSIM 0.814), with
   the parent's 0.12 the region's mean color matches WE's (62/72/82 vs
-  62/72/83, |diff| 16.6, SSIM 0.834; depth 0 gives 17.8 / 0.831).
-- **Image children inherit it too.** Chainsaw Man 3577990983 hangs its sky
+  62/72/83, |diff| 16.6, SSIM 0.834; depth 0 gives 17.8 / 0.831). Every
+  other child follows the same rule (see Camera, "Children take their
+  ancestor's parallax").
+- **Image children inherit it too** (the general rule below). Chainsaw Man 3577990983 hangs its sky
   (3840x2160, scale 1.05), clouds and five fireworks from group 35, depth
   0; the children store no `parallaxDepth`. WE saw the pointer at (0, 0)
   and its background covers the screen; with depth 1 ours slid ~100 px
@@ -963,6 +1016,15 @@ customization panel (`docs/SELECTOR.md`).
   0.12 / -0.11) sit a few px off WE's in the mean (the camera parallax
   model; letting the follow catch up from t = 0 on the first frame did not
   change the score: 0.856), and the dock alignment above.
+- Lucy 3521337568 (mean SSIM 0.790, above WE's own WE-vs-WE floor of
+  0.778, energy ratio 1.05): what is left is noise-level. Its fullscreen
+  `filmgrain` (#1937) matches WE on average: one-frame high-pass
+  (|frame - gblur 2|) 2.03 vs WE 2.01 on the bright ground, 0.10 vs 0.10
+  in the dark sky; frame-to-frame |diff| in static regions 0.030 vs 0.025
+  and 0.105 vs 0.078 (out of 255, at the level of video compression
+  noise). The clock (Monofur, pointsize 16, `shine` at ray intensity 2) is
+  still bolder and glowier than WE's thin strokes (clock region SSIM
+  0.765); the shine/text rasterization was not calibrated further.
 - Lonely Cat 3299228616: the HDR bloom of its water reflection is much
   brighter than WE's (the layer's own passes match; `general.bloom` with
   `hdr: true`). Not calibrated yet.
@@ -970,9 +1032,7 @@ customization panel (`docs/SELECTOR.md`).
 - Shape quads: the default size (scene height) is measured on landscape
   scenes only; a portrait scene could use its width (min side) instead.
   Shapes other than `quad`, and quads without a `DIRECTDRAW` effect, are
-  skipped with a warning (none in the corpus). Particle CHILDREN without
-  `parallaxDepth` still use depth 1 (images and quads inherit the
-  parent's): not measured.
+  skipped with a warning (none in the corpus).
 - Particles: **the prewarm (`starttime`) runs in real time**: it ignores
   `instanceoverride.rate`. In `make_particles.py pre_rate001` (rate 0.01,
   starttime 10, emission 2/s, life 12), WE shows 0.82x the dots of rate 1

@@ -480,11 +480,7 @@ impl SceneRenderer {
             if obj.get("image").and_then(|i| i.as_str()).is_some() || is_shape_quad(obj) {
                 match r.load_layer(gl, obj) {
                     Ok(mut layer) => {
-                        // children without their own depth take their
-                        // ancestor's (see inherited_parallax)
-                        if obj.get("parallaxDepth").is_none()
-                            && let Some(p) = inherited_parallax(objects, obj)
-                        {
+                        if let Some(p) = inherited_parallax(objects, obj) {
                             layer.parallax = p;
                         }
                         r.order.push(ObjRef::Layer(r.layers.len()));
@@ -497,7 +493,10 @@ impl SceneRenderer {
                 }
             } else if obj.get("particle").and_then(|p| p.as_str()).is_some() {
                 match r.load_particles(gl, obj) {
-                    Ok(p) => {
+                    Ok(mut p) => {
+                        if let Some(d) = inherited_parallax(objects, obj) {
+                            p.parallax = d;
+                        }
                         r.order.push(ObjRef::Particles(r.particle_objs.len()));
                         r.particle_objs.push(p);
                     }
@@ -542,7 +541,10 @@ impl SceneRenderer {
                     Ok(t) => {
                         r.texts.push(t);
                         match r.load_layer(gl, obj) {
-                            Ok(layer) => {
+                            Ok(mut layer) => {
+                                if let Some(p) = inherited_parallax(objects, obj) {
+                                    layer.parallax = p;
+                                }
                                 r.order.push(ObjRef::Layer(r.layers.len()));
                                 r.layers.push(layer);
                             }
@@ -2075,6 +2077,7 @@ impl SceneRenderer {
                 verts,
                 blend,
                 frame,
+                mesh: true,
             },
         );
     }
@@ -2092,17 +2095,17 @@ impl SceneRenderer {
         let mut current = self.take(gl, fw, fh);
         current.clear(gl, [0.0, 0.0, 0.0, 0.0]);
 
-        // 1) the layer itself. A quad is copied as is; a puppet mesh is many
-        // overlapping triangles whose hulls are mostly transparent texels, so
-        // it needs the material's blending: copied opaque, a hair strand drawn
-        // after the face erased it. Chainsaw Man 3577990983: the head (face +
-        // hair pieces from the parts atlas, all over the head in the bind
-        // pose) was missing, only the last-drawn strands showed.
-        let layer_blend = if self.layers[i].puppet.is_some() {
-            self.layers[i].material.blend
-        } else {
-            Blend::Opaque
-        };
+        // 1) the layer itself, copied as is. A puppet too: WE runs a puppet's
+        // effects on its flat TEXTURE (the parts atlas) and only then warps
+        // it with the mesh, straight onto the scene (`draw_composite`).
+        // Lucy 3521337568: every effect mask is half the texture's size
+        // (1185x1080 for 2371x2160) and its painted areas sit on the atlas
+        // pieces (waterwaves blobs on the loose hair strands, the shine mask
+        // a frame around the pieces with the body column left out), not on
+        // the posed character. Drawing the posed mesh into a layer-sized
+        // target instead cut her jacket at the quad's left edge (the bind
+        // mesh spans x -1452..-200 in a quad 2371 wide) and put every mask
+        // in the wrong place.
         let (mvp, model, proj, verts) = match self.layers[i].kind {
             LayerKind::Image => (
                 math::centered_ortho(uw, uh),
@@ -2136,8 +2139,9 @@ impl SceneRenderer {
                 model,
                 proj,
                 verts,
-                blend: layer_blend,
+                blend: Blend::Opaque,
                 frame,
+                mesh: false,
             },
         );
 
@@ -2285,6 +2289,7 @@ impl SceneRenderer {
                         },
                         blend,
                         frame,
+                        mesh: false,
                     },
                 );
                 if screen_quad.is_some() && last_pass == Some((e, p)) && target_name.is_none() {
@@ -2325,12 +2330,11 @@ impl SceneRenderer {
     /// harness/calibration/run_grain.sh (`_tail`): film grain followed by
     /// another effect on a 1920x1080 layer whose texture is 32x18 comes out
     /// of WE as smooth blobs (neighbour correlation 1.00 up to 3 px, std
-    /// 14.0 vs 22.0), i.e. computed at 32x18 and magnified. Puppets and
-    /// flipbooks keep the layer size.
+    /// 14.0 vs 22.0), i.e. computed at 32x18 and magnified. Puppets too
+    /// (their effects run on the texture); flipbooks keep the layer size.
     fn layer_target_size(&self, i: usize) -> (u32, u32) {
         let l = &self.layers[i];
         if l.kind == LayerKind::Image
-            && l.puppet.is_none()
             && l.flipbook.is_none()
             && let Some((_, TexSource::Named(n))) = l.material.slots.iter().find(|(u, _)| *u == 0)
             && let Some(t) = self.textures.get(n)
@@ -2362,6 +2366,7 @@ impl SceneRenderer {
                     verts: CLIP_QUAD,
                     blend,
                     frame: FrameInput::default(),
+                    mesh: false,
                 },
             );
             return;
@@ -2410,6 +2415,7 @@ impl SceneRenderer {
                     verts,
                     blend,
                     frame: FrameInput::default(),
+                    mesh: true,
                 },
             );
             return;
@@ -2423,7 +2429,18 @@ impl SceneRenderer {
         }
         self.blit.set(gl, "g_ModelViewProjectionMatrix", &mvp);
         self.blit.set(gl, "g_Texture0", &[0.0]);
-        self.quad.draw(gl, &verts);
+        match &l.puppet {
+            // the effected texture, warped (mesh UVs are 0..1 of the texture)
+            Some((_, mesh)) => unsafe {
+                if l.cull_back {
+                    gl.enable(glow::CULL_FACE);
+                    gl.cull_face(glow::FRONT);
+                }
+                mesh.draw(gl);
+                gl.disable(glow::CULL_FACE);
+            },
+            None => self.quad.draw(gl, &verts),
+        }
     }
 
     fn draw_pass(&mut self, gl: &glow::Context, call: DrawCall) {
@@ -2635,7 +2652,7 @@ impl SceneRenderer {
         }
 
         match (&call.which, &self.layers[call.layer].puppet) {
-            (PassRef::Material, Some((_, mesh))) => {
+            (PassRef::Material | PassRef::Composite, Some((_, mesh))) if call.mesh => {
                 let cull = self.layers[call.layer].cull_back;
                 unsafe {
                     // our targets keep row 0 at the top (y flipped), so
@@ -3274,6 +3291,10 @@ struct DrawCall<'a> {
     verts: [f32; 20],
     blend: Blend,
     frame: FrameInput,
+    /// Draw the layer's puppet mesh (if it has one) instead of `verts`:
+    /// only where the layer lands on the scene. Its effects run on the flat
+    /// texture (see `composite_layer`).
+    mesh: bool,
 }
 
 /// `g_AudioSpectrum{16,32,64}{Left,Right}` from the current spectrum.
@@ -3341,11 +3362,14 @@ fn is_shape_quad(obj: &Value) -> bool {
         && obj.get("shape").and_then(|s| s.as_str()) == Some("quad")
 }
 
-/// `parallaxDepth` of the nearest ancestor that sets one. Shape quads are
-/// always children in the corpus and never set their own: Lucy 3521337568's
-/// light shafts hang from group 2065 (depth 0.12) and, with the pointer WE
-/// saw (0, 0), only the parent's depth puts the glow where WE has it (sky
-/// left of the planet: |diff| 26.4 -> 16.6, region SSIM 0.814 -> 0.834;
+/// Parallax of a child object: the `parallaxDepth` of the nearest ancestor
+/// that sets one, which overrides the child's own. Lucy 3521337568's planet
+/// (`parallaxDepth` 0.5, child of group 556 at 0, pointer at (0, 0)):
+/// planet-region SSIM against WE 0.729 at its own 0.5, 0.803 at 0, worse
+/// again at -0.1 / -0.2 in either axis. Shape quads never set one and take
+/// their parent's the same way: Lucy's light shafts hang from group 2065
+/// (depth 0.12), and only the parent's depth puts the glow where WE has it
+/// (sky left of the planet: |diff| 26.4 -> 16.6, region SSIM 0.814 -> 0.834;
 /// depth 0 gives 17.8 / 0.831).
 /// Image children follow the same rule: Chainsaw Man 3577990983's sky,
 /// clouds and fireworks hang from group 35 (depth 0) and WE saw the pointer
