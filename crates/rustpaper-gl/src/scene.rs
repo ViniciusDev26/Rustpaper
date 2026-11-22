@@ -2075,6 +2075,7 @@ impl SceneRenderer {
                 verts,
                 blend,
                 frame,
+                mesh: true,
             },
         );
     }
@@ -2092,17 +2093,17 @@ impl SceneRenderer {
         let mut current = self.take(gl, fw, fh);
         current.clear(gl, [0.0, 0.0, 0.0, 0.0]);
 
-        // 1) the layer itself. A quad is copied as is; a puppet mesh is many
-        // overlapping triangles whose hulls are mostly transparent texels, so
-        // it needs the material's blending: copied opaque, a hair strand drawn
-        // after the face erased it. Chainsaw Man 3577990983: the head (face +
-        // hair pieces from the parts atlas, all over the head in the bind
-        // pose) was missing, only the last-drawn strands showed.
-        let layer_blend = if self.layers[i].puppet.is_some() {
-            self.layers[i].material.blend
-        } else {
-            Blend::Opaque
-        };
+        // 1) the layer itself, copied as is. A puppet too: WE runs a puppet's
+        // effects on its flat TEXTURE (the parts atlas) and only then warps
+        // it with the mesh, straight onto the scene (`draw_composite`).
+        // Lucy 3521337568: every effect mask is half the texture's size
+        // (1185x1080 for 2371x2160) and its painted areas sit on the atlas
+        // pieces (waterwaves blobs on the loose hair strands, the shine mask
+        // a frame around the pieces with the body column left out), not on
+        // the posed character. Drawing the posed mesh into a layer-sized
+        // target instead cut her jacket at the quad's left edge (the bind
+        // mesh spans x -1452..-200 in a quad 2371 wide) and put every mask
+        // in the wrong place.
         let (mvp, model, proj, verts) = match self.layers[i].kind {
             LayerKind::Image => (
                 math::centered_ortho(uw, uh),
@@ -2136,8 +2137,9 @@ impl SceneRenderer {
                 model,
                 proj,
                 verts,
-                blend: layer_blend,
+                blend: Blend::Opaque,
                 frame,
+                mesh: false,
             },
         );
 
@@ -2285,6 +2287,7 @@ impl SceneRenderer {
                         },
                         blend,
                         frame,
+                        mesh: false,
                     },
                 );
                 if screen_quad.is_some() && last_pass == Some((e, p)) && target_name.is_none() {
@@ -2325,12 +2328,11 @@ impl SceneRenderer {
     /// harness/calibration/run_grain.sh (`_tail`): film grain followed by
     /// another effect on a 1920x1080 layer whose texture is 32x18 comes out
     /// of WE as smooth blobs (neighbour correlation 1.00 up to 3 px, std
-    /// 14.0 vs 22.0), i.e. computed at 32x18 and magnified. Puppets and
-    /// flipbooks keep the layer size.
+    /// 14.0 vs 22.0), i.e. computed at 32x18 and magnified. Puppets too
+    /// (their effects run on the texture); flipbooks keep the layer size.
     fn layer_target_size(&self, i: usize) -> (u32, u32) {
         let l = &self.layers[i];
         if l.kind == LayerKind::Image
-            && l.puppet.is_none()
             && l.flipbook.is_none()
             && let Some((_, TexSource::Named(n))) = l.material.slots.iter().find(|(u, _)| *u == 0)
             && let Some(t) = self.textures.get(n)
@@ -2362,6 +2364,7 @@ impl SceneRenderer {
                     verts: CLIP_QUAD,
                     blend,
                     frame: FrameInput::default(),
+                    mesh: false,
                 },
             );
             return;
@@ -2410,6 +2413,7 @@ impl SceneRenderer {
                     verts,
                     blend,
                     frame: FrameInput::default(),
+                    mesh: true,
                 },
             );
             return;
@@ -2423,7 +2427,18 @@ impl SceneRenderer {
         }
         self.blit.set(gl, "g_ModelViewProjectionMatrix", &mvp);
         self.blit.set(gl, "g_Texture0", &[0.0]);
-        self.quad.draw(gl, &verts);
+        match &l.puppet {
+            // the effected texture, warped (mesh UVs are 0..1 of the texture)
+            Some((_, mesh)) => unsafe {
+                if l.cull_back {
+                    gl.enable(glow::CULL_FACE);
+                    gl.cull_face(glow::FRONT);
+                }
+                mesh.draw(gl);
+                gl.disable(glow::CULL_FACE);
+            },
+            None => self.quad.draw(gl, &verts),
+        }
     }
 
     fn draw_pass(&mut self, gl: &glow::Context, call: DrawCall) {
@@ -2635,7 +2650,7 @@ impl SceneRenderer {
         }
 
         match (&call.which, &self.layers[call.layer].puppet) {
-            (PassRef::Material, Some((_, mesh))) => {
+            (PassRef::Material | PassRef::Composite, Some((_, mesh))) if call.mesh => {
                 let cull = self.layers[call.layer].cull_back;
                 unsafe {
                     // our targets keep row 0 at the top (y flipped), so
@@ -3274,6 +3289,10 @@ struct DrawCall<'a> {
     verts: [f32; 20],
     blend: Blend,
     frame: FrameInput,
+    /// Draw the layer's puppet mesh (if it has one) instead of `verts`:
+    /// only where the layer lands on the scene. Its effects run on the flat
+    /// texture (see `composite_layer`).
+    mesh: bool,
 }
 
 /// `g_AudioSpectrum{16,32,64}{Left,Right}` from the current spectrum.

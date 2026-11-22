@@ -765,10 +765,32 @@ unchanged WE material shader draws it.
 - MDLV0023 has extra blocks between the indices and MDLS (the parser looks
   for the magic), and MDLS0004's animation offset points at the MDAT block
   that precedes MDLA.
-- **A puppet is drawn into its layer target with the material's blending**,
-  not copied opaque like a quad: its triangles overlap and their hulls are
-  mostly transparent texels of a parts atlas, so a hair strand drawn after
-  the face erased it. Chainsaw Man 3577990983's head was missing (only the
+- **A puppet's effects run on its flat texture, before the warp.** The
+  layer target holds the texture (the parts atlas, at texture resolution),
+  the effect chain runs on it, and the mesh then samples the result and is
+  drawn straight onto the scene with the layer transform. Evidence, Lucy
+  3521337568: all her effect masks are 1185x1080, half of the 2371x2160
+  texture, and overlaid on the texture their painted areas sit on the atlas
+  pieces (waterwaves blobs on the loose hair strands and the jacket's
+  collar, the shine mask a frame around the pieces that leaves the body
+  column out), not on the posed character. Drawing the posed mesh into a
+  layer-sized target (our earlier path) put every mask in the wrong place
+  and cut her jacket with a hard vertical edge at the quad's left side (the
+  bind mesh spans x -1452..-200 in a quad 2371 wide, 267 px past its left
+  edge); WE draws the whole jacket. With the effects on the atlas, the
+  hair's motion map matches WE's (the strands' wave edges were dim before)
+  and the jacket is whole. Harness 2026-11-22, all 19 puppet scenes: Lucy
+  0.7508 -> 0.7545 (energy ratio 0.88 -> 1.17), Jinx 3078285611
+  0.944 -> 0.980 (FAIL -> PASS, ratio 0.78 -> 1.06), Dome 3113287126
+  0.971 -> 0.987, wlop sky2 2900431360 0.984 -> 0.991, 3022080536
+  0.985 -> 0.992, Kirito x Asuna 3463520581 0.964 -> 0.970, Chainsaw Man
+  3577990983 0.653 -> 0.656; the other 12 unchanged (+-0.002). A puppet
+  layer referenced as `_rt_imageLayerComposite_N` now exposes the effected
+  atlas, not the posed image (none in the corpus; unverified).
+- **The warped mesh is drawn with the material's blending**, not copied
+  opaque like a quad: its triangles overlap and their hulls are mostly
+  transparent texels of a parts atlas, so a hair strand drawn after the face
+  erased it. Chainsaw Man 3577990983's head was missing (only the
   last-drawn strands showed); Jinx 3078285611's hair was pink holes. Gate
   2026-11-21: Jinx 0.714 -> 0.944, Chainsaw Man 0.613 -> 0.653.
 - **`cullmode: normal`** culls back faces. Our targets keep row 0 at the top
