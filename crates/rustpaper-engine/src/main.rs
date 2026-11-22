@@ -28,6 +28,7 @@
 mod gbm;
 mod hyprland;
 mod mirror;
+mod power;
 mod we;
 
 use std::os::fd::AsRawFd;
@@ -36,6 +37,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use mirror::Mirrors;
+use rustpaper_core::performance;
+use rustpaper_core::state::{self, Action, Playback};
+use serde_json::{Map, Value};
 
 /// WE's window class under Proton (`steam_app_<AppID>`).
 const WE_CLASS: &str = "steam_app_431960";
@@ -53,16 +57,36 @@ const MAX_ATTEMPTS: u32 = 2;
 const PROPS_DELAY: Duration = Duration::from_secs(3);
 
 static QUIT: AtomicBool = AtomicBool::new(false);
+/// SIGHUP (`systemctl --user reload rustpaper`): re-read the selector's state.
+static RELOAD: AtomicBool = AtomicBool::new(false);
 
-extern "C" fn on_signal(_: libc::c_int) {
+extern "C" fn on_quit(_: libc::c_int) {
     QUIT.store(true, Ordering::SeqCst);
 }
 
-struct Options {
-    dir: PathBuf,
-    properties: serde_json::Map<String, serde_json::Value>,
+extern "C" fn on_reload(_: libc::c_int) {
+    RELOAD.store(true, Ordering::SeqCst);
+}
+
+/// What to show and how.
+#[derive(Clone, PartialEq)]
+struct Config {
+    /// The wallpaper's project.json (absolute).
+    project: PathBuf,
+    /// User property values `{ "name": value }`.
+    properties: Map<String, Value>,
     mute: bool,
-    output: Option<String>,
+    playback: Playback,
+    /// WE quality settings (sanitized); empty = leave WE's as they are.
+    performance: Map<String, Value>,
+}
+
+/// Where the Config comes from.
+enum Source {
+    /// `rustpaper <dir> [...]`: fixed.
+    Args(Config),
+    /// `rustpaper --service`: the selector's state.json, re-read on SIGHUP.
+    Service,
 }
 
 /// One monitor showing the wallpaper.
@@ -82,19 +106,21 @@ struct Target {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: rustpaper <wallpaper folder> [--props properties.json] [--mute] [--volume 0..100] [--output NAME]"
+        "usage: rustpaper <wallpaper folder> [--props properties.json] [--mute] [--volume 0..100] [--output NAME]\n       rustpaper --service [--output NAME]   (the selector's choice; SIGHUP re-reads it)"
     );
     std::process::exit(2);
 }
 
-fn parse_args() -> Options {
+fn parse_args() -> (Source, Option<String>) {
     let mut args = std::env::args().skip(1);
     let mut dir = None;
     let mut props_file: Option<PathBuf> = None;
     let mut mute = false;
     let mut output = None;
+    let mut service = false;
     while let Some(a) = args.next() {
         match a.as_str() {
+            "--service" => service = true,
             "--props" => props_file = args.next().map(PathBuf::from),
             "--mute" | "--no-audio" => mute = true,
             // WE has no volume command: anything above 0 plays at WE's own
@@ -112,33 +138,71 @@ fn parse_args() -> Options {
             _ => dir = Some(PathBuf::from(a)),
         }
     }
+    if service {
+        return (Source::Service, output);
+    }
     let Some(dir) = dir else { usage() };
-    // User property values chosen in the selector: { "name": value, ... }
     let properties = props_file
         .and_then(|f| std::fs::read_to_string(f).ok())
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
         .and_then(|v| v.as_object().cloned())
         .unwrap_or_default();
-    Options {
-        dir,
+    let project = project_file(&dir).unwrap_or_else(|e| {
+        eprintln!("error: {e}");
+        std::process::exit(1);
+    });
+    let config = Config {
+        project,
         properties,
         mute,
-        output,
+        playback: Playback::default(),
+        performance: Map::new(),
+    };
+    (Source::Args(config), output)
+}
+
+fn project_file(dir: &Path) -> Result<PathBuf, String> {
+    let project = dir.join("project.json");
+    if !project.is_file() {
+        return Err(format!("{} not found", project.display()));
     }
+    Ok(std::fs::canonicalize(&project).unwrap_or(project))
+}
+
+/// The selector's choice (`~/.config/rustpaper/state.json`).
+fn service_config() -> Result<Config, String> {
+    let st = state::load();
+    let id = st
+        .last_id
+        .clone()
+        .ok_or("no wallpaper chosen yet (pick one in rustpaper-selector)")?;
+    let dir =
+        rustpaper_core::paths::find_wallpaper(&id).ok_or(format!("wallpaper {id} not found"))?;
+    Ok(Config {
+        project: project_file(&dir)?,
+        properties: state::load_properties(&id),
+        mute: st.volume == 0,
+        playback: st.playback,
+        performance: performance::sanitize(&st.performance),
+    })
 }
 
 fn main() {
-    let opts = parse_args();
-    let project = opts.dir.join("project.json");
-    if !project.is_file() {
-        eprintln!("error: {} not found", project.display());
-        std::process::exit(1);
-    }
-    let project = std::fs::canonicalize(&project).unwrap_or(project);
-    for sig in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
+    let (source, output) = parse_args();
+    let mut cfg = match &source {
+        Source::Args(c) => c.clone(),
+        Source::Service => service_config().unwrap_or_else(|e| {
+            // nothing to show is not a failure (the service must not loop)
+            eprintln!("rustpaper: {e}");
+            std::process::exit(0);
+        }),
+    };
+    for sig in [libc::SIGTERM, libc::SIGINT] {
         // SAFETY: the handler only stores to an atomic.
-        unsafe { libc::signal(sig, on_signal as *const () as libc::sighandler_t) };
+        unsafe { libc::signal(sig, on_quit as *const () as libc::sighandler_t) };
     }
+    // SAFETY: same.
+    unsafe { libc::signal(libc::SIGHUP, on_reload as *const () as libc::sighandler_t) };
     if hyprland::json("j/version").is_none() {
         eprintln!("error: rustpaper needs Hyprland (0.56 or newer)");
         std::process::exit(1);
@@ -146,12 +210,12 @@ fn main() {
     // before any layer surface exists: no compositor fade when switching
     hyprland::disable_layer_animations();
 
-    let targets = plan_targets(opts.output.as_deref());
+    let targets = plan_targets(output.as_deref());
     if targets.is_empty() {
         eprintln!("error: no monitor to show the wallpaper on");
         std::process::exit(1);
     }
-    if !we::ensure_running() {
+    if !we::ensure_running(&cfg.performance) {
         eprintln!("error: Wallpaper Engine is not running (start it from Steam)");
         std::process::exit(1);
     }
@@ -168,7 +232,7 @@ fn main() {
         .into_iter()
         .filter_map(|mut t| {
             prepare_target(&t);
-            open_window(&project, &mut t);
+            open_window(&cfg.project, &mut t);
             mirrors
                 .add(&qh, &t.output, &t.name)
                 .map_err(|e| eprintln!("{}: {e}", t.output))
@@ -187,9 +251,19 @@ fn main() {
             break;
         }
         mirrors.pump(&qh);
+        if RELOAD.swap(false, Ordering::SeqCst) && matches!(source, Source::Service) {
+            match service_config() {
+                Ok(new) => {
+                    reload(&cfg, &new, &mut targets);
+                    cfg = new;
+                }
+                Err(e) => eprintln!("reload: {e}"),
+            }
+            last_tick = Instant::now() - TICK;
+        }
         if last_tick.elapsed() >= TICK {
             last_tick = Instant::now();
-            watchdog(&project, &opts, &mut targets, &mut mirrors, &mut we_paused);
+            watchdog(&cfg, &mut targets, &mut mirrors, &mut we_paused);
         }
         if stats.elapsed() >= Duration::from_secs(60) {
             let dt = stats.elapsed().as_secs_f64();
@@ -210,6 +284,29 @@ fn main() {
     // WE's wallpapers so they cost nothing while no wallpaper is shown.
     if !other_engine_running() {
         we::control(&["-control", "stop"]);
+    }
+}
+
+/// Applies a new Config without restarting the engine (so the desktop never
+/// shows the plain background in between): new quality settings restart WE,
+/// a new wallpaper or new property values load into the same windows.
+fn reload(old: &Config, new: &Config, targets: &mut [Target]) {
+    if !new.performance.is_empty() && we::needs_restart(&new.performance) {
+        eprintln!("reload: new quality settings, restarting Wallpaper Engine");
+        if we::restart(&new.performance) {
+            hide_we_ui();
+        }
+        for t in targets.iter_mut() {
+            t.attempts = 0;
+            open_window(&new.project, t);
+        }
+    } else if new.project != old.project || new.properties != old.properties {
+        eprintln!("reload: {}", new.project.display());
+        for t in targets.iter_mut() {
+            open_window(&new.project, t);
+        }
+    } else if new.mute != old.mute {
+        we::control(&["-control", if new.mute { "mute" } else { "unmute" }]);
     }
 }
 
@@ -379,13 +476,7 @@ fn hide_we_ui() {
 }
 
 /// Keeps every target's arrangement and decides pausing.
-fn watchdog(
-    project: &Path,
-    opts: &Options,
-    targets: &mut [Target],
-    mirrors: &mut Mirrors,
-    we_paused: &mut bool,
-) {
+fn watchdog(cfg: &Config, targets: &mut [Target], mirrors: &mut Mirrors, we_paused: &mut bool) {
     let clients = hyprland::clients();
     let monitors = hyprland::monitors_raw();
     for t in targets.iter_mut() {
@@ -400,7 +491,7 @@ fn watchdog(
                         "{}: Wallpaper Engine is not answering, restarting it",
                         t.output
                     );
-                    if we::restart() {
+                    if we::restart(&cfg.performance) {
                         hide_we_ui();
                     }
                     t.attempts = 0;
@@ -410,7 +501,7 @@ fn watchdog(
                         t.output
                     );
                 }
-                open_window(project, t);
+                open_window(&cfg.project, t);
             }
             continue;
         };
@@ -421,10 +512,10 @@ fn watchdog(
             .unwrap_or_default();
         if !t.configured && t.opened.elapsed() > PROPS_DELAY {
             t.configured = true;
-            if !we::apply_properties(&opts.properties, &t.name) {
+            if !we::apply_properties(&cfg.properties, &t.name) {
                 eprintln!("{}: Wallpaper Engine refused the property values", t.output);
             }
-            we::control(&["-control", if opts.mute { "mute" } else { "unmute" }]);
+            we::control(&["-control", if cfg.mute { "mute" } else { "unmute" }]);
         }
         let ws = c
             .pointer("/workspace/name")
@@ -466,11 +557,15 @@ fn watchdog(
             }
         }
     }
-    // pause capture where a fullscreen window covers the monitor; pause WE
-    // itself when that is every monitor
+    // the user's Playback settings, per monitor; WE itself pauses when
+    // every monitor is paused
+    let battery = power::on_battery();
     if let Some(mons) = hyprland::monitors() {
         for m in &mut mirrors.list {
-            m.paused = mons.iter().any(|x| x.name == m.output && x.covered);
+            m.paused = mons
+                .iter()
+                .find(|x| x.name == m.output)
+                .is_some_and(|x| should_pause(&cfg.playback, x, battery));
         }
     }
     let all = !mirrors.list.is_empty() && mirrors.list.iter().all(|m| m.paused);
@@ -485,9 +580,47 @@ fn watchdog(
     }
 }
 
+/// Whether the Playback settings pause monitor `m`.
+fn should_pause(p: &Playback, m: &hyprland::Monitor, on_battery: bool) -> bool {
+    let pause = |a: Action, cond: bool| cond && a == Action::Pause;
+    pause(p.fullscreen, m.fullscreen)
+        || pause(p.maximized, m.maximized)
+        || pause(p.focused, m.focused)
+        || pause(p.sleep, m.asleep)
+        || pause(p.battery, on_battery)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn playback_settings_decide_pausing() {
+        let p = Playback::default();
+        let tiled = hyprland::Monitor {
+            maximized: true,
+            ..Default::default()
+        };
+        let full = hyprland::Monitor {
+            fullscreen: true,
+            ..Default::default()
+        };
+        assert!(
+            !should_pause(&p, &tiled, false),
+            "tiled windows keep running by default"
+        );
+        assert!(should_pause(&p, &full, false));
+        let eco = Playback {
+            maximized: Action::Pause,
+            battery: Action::Pause,
+            ..p
+        };
+        assert!(should_pause(&eco, &tiled, false));
+        assert!(
+            should_pause(&eco, &hyprland::Monitor::default(), true),
+            "on battery"
+        );
+    }
 
     #[test]
     fn headless_outputs_are_not_monitors() {
