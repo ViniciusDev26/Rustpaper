@@ -19,6 +19,11 @@ pub struct Settings {
     /// (`rustpaper --volume`); 0 mutes them.
     #[serde(default = "full_volume")]
     pub volume: u8,
+    /// Generate and apply an Omarchy theme from each applied wallpaper's
+    /// colors (like Aether; omarchy.rs). Off by default: it changes the
+    /// whole desktop's theme.
+    #[serde(default)]
+    pub wallpaper_theme: bool,
 }
 
 fn full_volume() -> u8 {
@@ -32,6 +37,7 @@ impl Default for Settings {
             autostart: false,
             no_scripts: false,
             volume: full_volume(),
+            wallpaper_theme: false,
         }
     }
 }

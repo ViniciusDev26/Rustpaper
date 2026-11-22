@@ -5,6 +5,8 @@ import { WorkshopView } from "./components/WorkshopView";
 import { useLibrary, visibleWallpapers, type SortMode } from "./store/library";
 import { useSettings, volumeText } from "./store/settings";
 import { errorText, toast } from "./store/toast";
+import { api, onThemeChanged, onWallpaperTheme } from "./api/tauri";
+import { applyTheme } from "./lib/theme";
 
 type Tab = "library" | "store";
 
@@ -37,8 +39,13 @@ function Header({ tab, setTab }: { tab: Tab; setTab: (t: Tab) => void }) {
   const count = visibleWallpapers(lib).length;
   const check = "flex cursor-pointer items-center gap-1.5 text-sm whitespace-nowrap text-sub";
   return (
-    <header className="flex flex-wrap items-center gap-3 gap-y-2 border-b border-line bg-bar px-5 py-3">
-      <h1 className="m-0 text-base font-semibold">Rustpaper</h1>
+    // No title bar under Hyprland (tauri.conf.json `decorations: false`): this
+    // header is the top of the window, and its empty parts drag it when the
+    // window floats.
+    <header data-tauri-drag-region className="flex flex-wrap items-center gap-3 gap-y-2 border-b border-line bg-bar px-5 py-3 select-none">
+      <h1 data-tauri-drag-region className="m-0 text-base font-semibold">
+        Rustpaper
+      </h1>
       <nav className="flex gap-1">
         <Button variant={tab === "library" ? "tab-active" : "tab"} onClick={() => setTab("library")}>
           Library
@@ -52,7 +59,7 @@ function Header({ tab, setTab }: { tab: Tab; setTab: (t: Tab) => void }) {
         </Button>
       </nav>
       {tab === "library" && <span className="text-sm whitespace-nowrap text-muted">{count} wallpapers</span>}
-      <span className="flex-1" />
+      <span data-tauri-drag-region className="flex-1 self-stretch" />
       {tab === "library" && (
         <>
           <input
@@ -78,6 +85,16 @@ function Header({ tab, setTab }: { tab: Tab; setTab: (t: Tab) => void }) {
         Run scripts
       </label>
       <VolumeSlider />
+      {settings.omarchy && (
+        <label className={check} title="Generate an Omarchy theme from each applied wallpaper's colors (like Aether) and apply it to the whole desktop">
+          <input
+            type="checkbox"
+            checked={settings.wallpaperTheme}
+            onChange={(e) => settings.setWallpaperTheme(e.currentTarget.checked)}
+          />
+          Theme from wallpaper
+        </label>
+      )}
       <label className={check}>
         <input type="checkbox" checked={settings.autostart} onChange={(e) => settings.setAutostart(e.currentTarget.checked)} />
         Start on login
@@ -88,6 +105,17 @@ function Header({ tab, setTab }: { tab: Tab; setTab: (t: Tab) => void }) {
 
 export function App() {
   const [tab, setTab] = useState<Tab>("library");
+
+  useEffect(() => {
+    // follow the Omarchy theme (and its switches); defaults elsewhere
+    api.getTheme().then(applyTheme, () => {});
+    const unlisten = onThemeChanged(applyTheme);
+    const unlistenWallpaper = onWallpaperTheme((err) => toast(err ? `Theme: ${err}` : "Desktop theme updated"));
+    return () => {
+      void unlisten.then((f) => f());
+      void unlistenWallpaper.then((f) => f());
+    };
+  }, []);
 
   useEffect(() => {
     // settings first: the panel reopens the last applied wallpaper

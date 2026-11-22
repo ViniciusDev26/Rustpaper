@@ -68,6 +68,8 @@ comments, with the measurement that justified it.
   UI in `ui/`: React + TypeScript + Tailwind v4 (Vite), Zustand stores,
   Zod-validated command replies (`src/api`). build.rs builds it (needs
   Node.js + npm) into `$OUT_DIR/ui`; `cd ui && npm test` for its unit tests.
+  Undecorated under Hyprland, colors from the active Omarchy theme
+  (`src/omarchy.rs`, see SELECTOR.md).
 - **`rustpaper-workshop`** — binary **`rustpaper-workshop`**: the selector's
   Steam Workshop store. Talks to the running Steam client through Steamworks
   as WE (AppID 431960): query, subscribe/unsubscribe, download progress;
