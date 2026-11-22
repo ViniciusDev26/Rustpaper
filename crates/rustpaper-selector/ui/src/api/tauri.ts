@@ -4,6 +4,7 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type { z } from "zod";
 import {
+  MaybeTheme,
   PropertiesView,
   Settings,
   StatusMap,
@@ -58,4 +59,14 @@ export const api = {
   workshopUnsubscribe: (id: string) => run("workshop_unsubscribe", { id }),
   workshopStatus: (ids: string[]) => call(StatusMap, "workshop_status", { ids }),
   workshopSubscriptions: () => call(Subscriptions, "workshop_subscriptions"),
+  getTheme: () => call(MaybeTheme, "get_theme"),
 };
+
+/// Omarchy theme switches (emitted by the backend's watcher).
+export async function onThemeChanged(cb: (t: z.infer<typeof MaybeTheme>) => void): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<unknown>("theme-changed", (e) => {
+    const parsed = MaybeTheme.safeParse(e.payload);
+    if (parsed.success) cb(parsed.data);
+  });
+}

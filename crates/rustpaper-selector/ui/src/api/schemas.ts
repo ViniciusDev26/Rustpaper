@@ -98,6 +98,15 @@ export const WorkshopPage = z.object({
 });
 export type WorkshopPage = z.infer<typeof WorkshopPage>;
 
+/// get_theme / `theme-changed` -> omarchy::Theme (null outside Omarchy)
+export const Theme = z.object({
+  name: z.string(),
+  mode: z.enum(["dark", "light"]),
+  colors: z.record(z.string()),
+});
+export type Theme = z.infer<typeof Theme>;
+export const MaybeTheme = Theme.nullable();
+
 export const StatusMap = z.record(ItemState);
 export const Subscriptions = z.record(z.number());
 

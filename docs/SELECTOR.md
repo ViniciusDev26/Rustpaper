@@ -37,6 +37,27 @@ build. `RUSTPAPER_UI_DIST=<dir>` uses a prebuilt bundle. Working on the UI
 alone: `cd ui && npm run dev` (the Tauri commands need the real app; the
 page loads, but the API calls fail outside it).
 
+## Desktop look (Hyprland / Omarchy)
+
+- **No title bar under Hyprland**, like Omarchy's own apps: tauri.conf.json
+  opens the window with `decorations: false`, so Hyprland's border,
+  rounding, shadow and opacity apply and the UI header is the top of the
+  window (`data-tauri-drag-region` on its empty parts drags a floating
+  window; capability `core:window:allow-start-dragging`). Outside Hyprland
+  (no `HYPRLAND_INSTANCE_SIGNATURE`) setup turns the toolkit decorations
+  back on, so GNOME & co. keep their title bar and buttons.
+- Window class `rustpaper-selector`, title `Rustpaper`: what Hyprland
+  window rules match, e.g. in Lua
+  `o.window({ class = "^rustpaper-selector$" }, { float = true })`.
+- **Colors follow the active Omarchy theme** (`src/omarchy.rs`): it reads
+  `$XDG_STATE_HOME/omarchy/current/theme/colors.toml` (Omarchy's semantic
+  palette + `mode`), keeps only hex colors (they become CSS custom
+  properties), and polls `current/theme.generation` every 2 s to emit
+  `theme-changed` on a switch. The UI maps the palette onto its tokens
+  (`ui/src/lib/theme.ts`; colors Omarchy has no match for are mixed from
+  background/foreground, so light themes stay readable) and falls back to
+  the built-in Catppuccin palette outside Omarchy.
+
 The selector starts the engine binary found next to itself
 (`target/release/rustpaper`, or the install prefix), else `rustpaper` from
 `PATH`.

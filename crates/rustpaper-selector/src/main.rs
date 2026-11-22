@@ -8,8 +8,10 @@
 //   get_settings / set_autostart / set_scripts / set_volume
 //   workshop_query / workshop_subscribe / workshop_unsubscribe / workshop_status /
 //   workshop_subscriptions
+//   get_theme            -> the active Omarchy theme (omarchy.rs), + `theme-changed` events
 //                        -> the Steam Workshop store (workshop.rs)
 
+mod omarchy;
 mod settings;
 mod workshop;
 
@@ -343,6 +345,13 @@ fn restart_with_settings(s: &settings::Settings, state: &EngineState) -> Result<
     Ok(())
 }
 
+/// The active Omarchy theme's palette, None outside Omarchy (the UI keeps its
+/// own colors).
+#[tauri::command]
+fn get_theme() -> Option<omarchy::Theme> {
+    omarchy::theme()
+}
+
 /// Runs a Workshop request on a blocking thread (the helper answers in
 /// seconds; Tauri commands must not block the UI).
 async fn workshop_call(app: tauri::AppHandle, cmd: Value) -> Result<Value, String> {
@@ -417,6 +426,16 @@ fn main() {
             for dir in rustpaper_core::paths::wallpaper_dirs() {
                 scope.allow_directory(&dir, true)?;
             }
+            // tauri.conf.json opens the window undecorated: under Hyprland it
+            // gets the compositor's border/rounding like Omarchy's own apps,
+            // the UI header being the top of the window; elsewhere (GNOME...)
+            // the toolkit's title bar and buttons come back.
+            if !omarchy::is_hyprland()
+                && let Some(w) = app.get_webview_window("main")
+            {
+                w.set_decorations(true)?;
+            }
+            omarchy::watch(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -432,7 +451,8 @@ fn main() {
             workshop_subscribe,
             workshop_unsubscribe,
             workshop_subscriptions,
-            workshop_status
+            workshop_status,
+            get_theme
         ])
         // Closing the selector leaves the wallpaper running (dropping a
         // `Child` doesn't kill it); the next selector replaces it on apply
