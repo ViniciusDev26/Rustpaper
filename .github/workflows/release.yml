@@ -61,7 +61,7 @@ jobs:
     steps:
       - name: Install build dependencies
         run: |
-          pacman -Syu --noconfirm --needed git rust pkgconf github-cli \
+          pacman -Syu --noconfirm --needed git rust pkgconf github-cli nodejs npm \
             gtk3 webkit2gtk-4.1 libglvnd libxkbcommon wayland
       - uses: actions/checkout@v4
       - name: Build the tarball

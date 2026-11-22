@@ -42,5 +42,11 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
         --component rustfmt --component clippy \
     && chmod -R a+w "$RUSTUP_HOME" "$CARGO_HOME"
 
+# Node.js 22 (NodeSource): rustpaper-selector's build.rs builds its React UI
+# with npm/Vite (Ubuntu 24.04's own nodejs is 18, too old for Vite/Tailwind 4).
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN rustc --version && cargo --version && cargo clippy --version && cargo fmt --version \
-    && glslangValidator --version
+    && glslangValidator --version && node --version && npm --version

@@ -1,0 +1,38 @@
+@import "tailwindcss";
+
+/* Catppuccin Mocha, the palette the selector always used */
+@theme {
+  --color-bg: #1e1e2e;
+  --color-bar: #181825;
+  --color-card: #313244;
+  --color-line: #313244;
+  --color-edge: #45475a;
+  --color-surface: #585b70;
+  --color-muted: #6c7086;
+  --color-sub: #a6adc8;
+  --color-fg: #cdd6f4;
+  --color-accent: #89b4fa;
+  --color-pink: #f5c2e7;
+  --color-red: #f38ba8;
+  --color-green: #a6e3a1;
+  --color-yellow: #f9e2af;
+  --color-ink: #11111b;
+}
+
+:root {
+  color-scheme: dark;
+}
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: system-ui, sans-serif;
+}
+input[type="range"] {
+  accent-color: var(--color-accent);
+}
