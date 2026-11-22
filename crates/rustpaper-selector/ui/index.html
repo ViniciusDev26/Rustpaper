@@ -55,6 +55,26 @@
       .prop.group { font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; color: var(--accent); padding-top: 14px; border-bottom: 1px solid var(--line); }
       .prop.note { font-size: .78rem; color: var(--muted); }
       .empty { color: var(--muted); font-size: .85rem; padding: 4px 16px 16px; }
+      /* tabs + Workshop store */
+      .tabs { display: flex; gap: 4px; }
+      .tab { background: transparent; color: var(--sub); padding: 5px 10px; font-weight: 500; }
+      .tab.active { background: var(--card); color: var(--fg); }
+      #store { flex: 1; overflow-y: auto; display: none; }
+      body.store #store { display: block; }
+      body.store #gallery, body.store #panel, body.store .library-only { display: none !important; }
+      .store-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 14px 20px 0; }
+      .store-bar input[type=search] { width: 260px; }
+      .store-bar select, .store-bar input[type=search] { background: var(--card); border: 1px solid #45475a; color: var(--fg); border-radius: 6px; padding: 5px 9px; }
+      #store-status { padding: 10px 20px 0; color: var(--sub); font-size: .85rem; }
+      .store-card { cursor: default; }
+      .store-card:hover { transform: none; border-color: transparent; }
+      .store-card .stats { color: var(--muted); font-size: .72rem; margin-top: 4px; display: flex; justify-content: space-between; gap: 6px; }
+      .store-card .row { display: flex; gap: 6px; margin-top: 8px; }
+      .store-card .row button { flex: 1; padding: 5px 6px; font-size: .78rem; }
+      .store-card .note { color: #f9e2af; font-size: .7rem; margin-top: 4px; }
+      .badge.web { background: #f9e2af; color: #11111b; }
+      .badge.rating { background: #f38ba8; color: #11111b; margin-left: 4px; }
+      #store-more { display: block; margin: 0 auto 24px; }
       .toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--accent); color: #11111b; padding: 8px 16px; border-radius: 8px; font-size: .85rem; opacity: 0; transition: opacity .2s; pointer-events: none; }
       .toast.show { opacity: 1; }
     </style>
@@ -62,9 +82,13 @@
   <body>
     <header>
       <h1>Rustpaper</h1>
-      <span class="count" id="count"></span>
+      <nav class="tabs">
+        <button class="tab active" id="tab-library">Library</button>
+        <button class="tab" id="tab-store" title="Browse and subscribe on the Steam Workshop (needs Steam running)">Workshop</button>
+      </nav>
+      <span class="count library-only" id="count"></span>
       <span class="spacer"></span>
-      <input type="search" id="search" placeholder="Search" />
+      <input type="search" id="search" class="library-only" placeholder="Search" />
       <label class="check" title="SceneScripts run in a sandbox (no files, network or processes)"><input type="checkbox" id="scripts" /> Run scripts</label>
       <label class="check" title="Volume of the wallpapers' own music and sounds (0 = muted)"><span id="volume-label">Volume</span> <input type="range" id="volume" min="0" max="100" step="5" /></label>
       <label class="check"><input type="checkbox" id="autostart" /> Start on login</label>
@@ -75,10 +99,34 @@
         <div class="grid" id="grid"></div>
       </div>
       <aside id="panel"></aside>
+      <div id="store">
+        <div class="store-bar">
+          <input type="search" id="ws-search" placeholder="Search the Workshop (Enter)" />
+          <select id="ws-sort">
+            <option value="trend">Trending this week</option>
+            <option value="top">Most popular</option>
+            <option value="subscriptions">Most subscribed</option>
+            <option value="recent">Most recent</option>
+            <option value="updated">Recently updated</option>
+            <option value="subscribed">My subscriptions</option>
+          </select>
+          <select id="ws-kind">
+            <option value="all">All types</option>
+            <option value="scene">Scene</option>
+            <option value="video">Video</option>
+            <option value="web">Web (not supported yet)</option>
+          </select>
+          <label class="check" title="Also show items rated Questionable or Mature"><input type="checkbox" id="ws-mature" /> Mature</label>
+        </div>
+        <div id="store-status"></div>
+        <div class="grid" id="store-grid"></div>
+        <button class="secondary" id="store-more" hidden>Load more</button>
+      </div>
     </main>
     <div class="toast" id="toast"></div>
 
     <script src="properties.js"></script>
+    <script src="workshop.js"></script>
     <script>
       const { invoke, convertFileSrc } = window.__TAURI__.core;
       const $ = (id) => document.getElementById(id);
@@ -201,6 +249,34 @@
       function sameValue(a, b) {
         return JSON.stringify(a) === JSON.stringify(b);
       }
+
+      // Re-scans the Workshop folders (after a download or unsubscribe in the
+      // store); keeps the panel when its wallpaper is still there.
+      async function reloadLibrary() {
+        wallpapers = await invoke("list_wallpapers");
+        if (selected && !wallpapers.some((w) => w.id === selected.id)) {
+          selected = null;
+          $("panel").classList.remove("open");
+        }
+        renderGrid();
+      }
+
+      function showTab(store) {
+        document.body.classList.toggle("store", store);
+        $("tab-library").classList.toggle("active", !store);
+        $("tab-store").classList.toggle("active", store);
+        if (store) RpStore.open();
+        else reloadLibrary().catch((e) => showToast(`${e}`));
+      }
+      $("tab-library").addEventListener("click", () => showTab(false));
+      $("tab-store").addEventListener("click", () => showTab(true));
+      RpStore.init({ invoke, el, $, showToast, reloadLibrary,
+        applyInstalled: (id) => {
+          const w = wallpapers.find((x) => x.id === id);
+          if (!w) return showToast("Not in the library yet");
+          showTab(false);
+          apply(w);
+        } });
 
       $("search").addEventListener("input", renderGrid);
       $("autostart").addEventListener("change", async (ev) => {

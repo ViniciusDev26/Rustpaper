@@ -6,8 +6,11 @@
 //   get_properties(id)   -> the wallpaper's customizable properties + saved values
 //   save_properties(id, values) -> persists them and hot-swaps the running engine
 //   get_settings / set_autostart / set_scripts / set_volume
+//   workshop_query / workshop_subscribe / workshop_unsubscribe / workshop_status
+//                        -> the Steam Workshop store (workshop.rs)
 
 mod settings;
+mod workshop;
 
 use std::path::{Path, PathBuf};
 use std::process::Child;
@@ -319,11 +322,54 @@ fn restart_with_settings(s: &settings::Settings, state: &EngineState) -> Result<
     Ok(())
 }
 
+/// Runs a Workshop request on a blocking thread (the helper answers in
+/// seconds; Tauri commands must not block the UI).
+async fn workshop_call(app: tauri::AppHandle, cmd: Value) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || app.state::<workshop::Workshop>().request(cmd))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// One page of the Workshop: `{sort, kind, search, page, mature}` ->
+/// `{total, page, items: [...]}`.
+#[tauri::command]
+async fn workshop_query(app: tauri::AppHandle, query: Value) -> Result<Value, String> {
+    let mut cmd = match query {
+        Value::Object(m) => Value::Object(m),
+        _ => return Err("query must be an object".into()),
+    };
+    cmd["cmd"] = Value::from("query");
+    workshop_call(app, cmd).await
+}
+
+#[tauri::command]
+async fn workshop_subscribe(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    workshop_call(app, serde_json::json!({ "cmd": "subscribe", "item": id }))
+        .await
+        .map(|_| ())
+}
+
+/// Unsubscribes and removes the downloaded folder right away (Steam keeps
+/// it until a later cleanup, so it would stay in the gallery).
+#[tauri::command]
+async fn workshop_unsubscribe(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    workshop_call(app, serde_json::json!({ "cmd": "unsubscribe", "item": id })).await?;
+    workshop::remove_unsubscribed(&id)
+}
+
+/// Local state of items: `{id: {subscribed, installed, downloading,
+/// downloaded, total, needs_update}}`.
+#[tauri::command]
+async fn workshop_status(app: tauri::AppHandle, ids: Vec<String>) -> Result<Value, String> {
+    workshop_call(app, serde_json::json!({ "cmd": "status", "items": ids })).await
+}
+
 fn main() {
     setup_linux_env();
 
     tauri::Builder::default()
         .manage(EngineState(Mutex::new(None)))
+        .manage(workshop::Workshop::default())
         .setup(|app| {
             // Previews are served by the asset protocol: allow exactly the
             // folders wallpapers come from (they vary per Steam library).
@@ -341,7 +387,11 @@ fn main() {
             get_settings,
             set_autostart,
             set_scripts,
-            set_volume
+            set_volume,
+            workshop_query,
+            workshop_subscribe,
+            workshop_unsubscribe,
+            workshop_status
         ])
         // Closing the selector leaves the wallpaper running (dropping a
         // `Child` doesn't kill it); the next selector replaces it on apply
