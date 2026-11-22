@@ -1017,20 +1017,13 @@ customization panel (`docs/SELECTOR.md`).
 
 - **SceneScript** runs sandboxed (`docs/SCENESCRIPT.md`). **`web`
   wallpapers** are not supported.
-- Chainsaw Man 3577990983 (0.889 after alignment; fireworks replay after
-  random delays, so runs differ by ~0.004). The two foreground hands are
-  the largest gap: the four worst of 48 mean-|diff| tiles are the right
-  hand (x 1440..1920, 26% of the total). Measured against a render with
-  the parallax off (pointer at the center), WE moves the layers by
-  (x right, y down, px): right hand `右` (depth -0.11) -82 / 0, left hand
-  `左` (0.12) -31 / +50, the girl `sl` (-0.05 / 0.04) -14 / +8. Our model,
-  fully converged at pointer (0, 0): -41 / -23, +45 / +25, -19 / +8. The
-  girl agrees; both hands are off by roughly (-40..-76, +24), which no
-  depth-linear rule fits (and their effects, shake at strength^2 = 0.016,
-  waterwaves and twirl, move them by ~10 px at most). Letting the follow
-  catch up from t = 0 on the first frame did not change the score
-  (0.856). Unexplained; next step would be a calibration scene with two
-  layers at opposite depths and `cameraparallax` on.
+- Chainsaw Man 3577990983 (0.927 after the cursor-relative parallax;
+  fireworks replay after random delays, so runs differ by ~0.004): what is
+  left is mostly the edges of the two foreground hands, whose parallax
+  depends on the cursor WE saw. This capture's `we_pointer.txt` says (0, 0),
+  but the first depth calibration showed that reading can be wrong (it said
+  (0, 0.232) while the squares put WE's cursor at about (0.24, 0)); a
+  recapture with a good reading is the next step.
 - Lucy 3521337568 (mean SSIM 0.790, above WE's own WE-vs-WE floor of
   0.778, energy ratio 1.05): what is left is noise-level. Its fullscreen
   `filmgrain` (#1937) matches WE on average: one-frame high-pass
@@ -1120,10 +1113,21 @@ customization panel (`docs/SELECTOR.md`).
 - `g_ParallaxPosition` follows the (smoothed) cursor like the camera
   parallax (it was fixed at the center): `depthparallax` effects shift layers
   with it.
-- Camera parallax (`Parallax` in scene.rs): cursor offset from the center x
-  `amount` x `mouseinfluence` x `parallaxDepth` x scene size, content moving
-  away from the cursor, following it exponentially with `delay` as the time
-  constant. WE reads the cursor through XWayland: the last position the
+- Camera parallax (`Parallax` in scene.rs): every object moves AWAY FROM
+  THE CURSOR by `amount` x `mouseinfluence` x `parallaxDepth` x (its origin
+  - the cursor), in scene units: positions scale about the cursor, sizes
+  don't (`harness/calibration/run_depths.sh`: five squares at depths
+  -0.5..1 along the middle of a 3840x2160 scene, amount 0.4, influence 1,
+  WE's cursor at (0.448, 0.431): WE dx +116 / +10 / +4 / +86 / +264 px,
+  this model +116 / +11 / +4 / +85 / +264; dy within 1-4 px; the square
+  sizes stay 135 px at every depth). It used to use the screen CENTER in
+  place of the object's origin, identical for centered objects (full-screen
+  backgrounds) but wrong at the edges: Lucy 3521337568 0.7905 -> 0.8712,
+  Chainsaw Man 3577990983 0.8907 -> 0.9268, 2884352976 0.9489 -> 0.9642
+  (PASS); 3233141951 +0.004, 2224061441 / 2902406982 / 3366882745 within
+  0.0004; 2617953025 -0.002, 3195212886 -0.004, 3835761947 -0.004 (still
+  PASS), all under the 0.005 noise threshold. The cursor follows the
+  pointer exponentially with `delay` as the time constant. WE reads the cursor through XWayland: the last position the
   cursor had over an X window, in X coordinates (harness/xpointer.py records
   it; the harness's earlier hyprctl reading was wrong). XWarpPointer changes
   that reading but not what WE sees. The follow model is NOT settled: a
