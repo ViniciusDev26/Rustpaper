@@ -134,7 +134,7 @@ fn config_path() -> Option<PathBuf> {
 ///   focused, and every wallpaper window of ours IS a fullscreen app: with
 ///   two monitors each paused the other (DP-1 went 60 -> 29 -> 0 fps,
 ///   2026-11-22). The engine applies the user's Playback settings itself,
-///   from what Hyprland shows on the real monitors.
+///   from what the desktop adapter reports about the real monitors.
 /// - the user's quality settings (`performance`, already sanitized).
 pub fn prepare_config(performance: &Map<String, Value>) -> bool {
     edit_config(performance, true)
