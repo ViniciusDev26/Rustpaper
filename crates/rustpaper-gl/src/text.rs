@@ -479,6 +479,16 @@ pub fn rasterize(fonts: &FontSet, text: &str, style: &TextStyle) -> Vec<u8> {
                 }
                 let i = ((yy as u32 * w + xx as u32) * 4) as usize;
                 let a = (cov.clamp(0.0, 1.0) * 255.0) as u8;
+                // Texels outside the glyphs stay (0, 0, 0, 0): writing white
+                // with alpha 0 over each glyph's whole box showed the boxes
+                // wherever an effect reads rgb without alpha. Lucy
+                // 3521337568's clock (shine, combine `ApplyBlending` over
+                // the raw texture) drew a white box per glyph; WE has none
+                // (clock region SSIM 0.762 -> 0.765). A white canvas instead
+                // gave a white haze around the text (0.711).
+                if a == 0 {
+                    return;
+                }
                 if style.background.is_some() {
                     // glyphs over an opaque background: blend toward white
                     for k in 0..3 {
