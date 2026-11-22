@@ -1,12 +1,11 @@
 # Rustpaper workspace. The crates live in crates/*:
 #   rustpaper-core     : Wallpaper Engine formats (shared, no graphics)
-#   rustpaper-engine   : the live wallpaper, binary `rustpaper`
+#   rustpaper-engine   : the live wallpaper (real WE under Proton), binary `rustpaper`
 #   rustpaper-selector : desktop app to browse and apply wallpapers
-#   rustpaper-gl       : OpenGL scene renderer (EGL) + `rustpaper-render` CLI
-#   rustpaper-script   : sandboxed SceneScript worker
+#   rustpaper-workshop : Steam Workshop bridge for the selector
 [workspace]
 resolver = "3"
-members = ["crates/rustpaper-core", "crates/rustpaper-engine", "crates/rustpaper-gl", "crates/rustpaper-script", "crates/rustpaper-selector", "crates/rustpaper-workshop"]
+members = ["crates/rustpaper-core", "crates/rustpaper-engine", "crates/rustpaper-selector", "crates/rustpaper-workshop"]
 
 # One version for every crate (and the selector's tauri.conf.json), bumped by
 # release-please from Conventional Commits (docs/RELEASING.md).
