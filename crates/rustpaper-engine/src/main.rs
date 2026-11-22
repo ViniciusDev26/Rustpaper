@@ -237,6 +237,13 @@ fn main() {
             }
             last_tick = Instant::now() - TICK;
         }
+        if !we_on && last_tick.elapsed() >= TICK {
+            // debugging without WE: still keep the stage's arrangement
+            last_tick = Instant::now();
+            for t in &targets {
+                stage.tend(&t.output);
+            }
+        }
         if we_on && last_tick.elapsed() >= TICK {
             last_tick = Instant::now();
             watchdog(
