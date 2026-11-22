@@ -943,6 +943,26 @@ customization panel (`docs/SELECTOR.md`).
 
 - **SceneScript** runs sandboxed (`docs/SCENESCRIPT.md`). **`web`
   wallpapers** are not supported.
+- **Image-layer `alignment`** (`bottom`, `topleft`, ...: which point of
+  the quad sits at the origin) is ignored; quads stay centered. Chainsaw
+  Man 3577990983's dock icons (y 36.8 in the 4K scene, 102 high,
+  `bottom`) have their centers 43 px above the bottom of WE's 1080p capture
+  = 36.8 + 102 / 2 scene units, ours at 18 px, and half of the dock
+  backdrop is under the screen edge. Shifting the quad (scene y up, by
+  half its size) gave Chainsaw Man 0.8718 -> 0.8839, Jinx 3078285611
+  +0.003, 3448290956 +0.005, 3830708962 / 2902406982 identical, but
+  Persona 3 3151551777 0.848 -> 0.825: its bottom-aligned audio bars
+  (`Simple_Audio_Bars`, bounds set by a script) moved where WE draws bars,
+  yet with a different pattern. Rejected until Persona's bars are
+  understood; the patch is a `Layer::quad_world` used by the draw and
+  hover paths. Scripts also write `layer.alignment` (the dock does every
+  frame); the prelude does not forward it.
+- Chainsaw Man 3577990983, after the 2026-11-22 fixes (0.856..0.860,
+  energy ratio 0.86..0.91; fireworks replay after random delays, so runs
+  differ by ~0.004): the two hands in the foreground (`左` / `右`, depths
+  0.12 / -0.11) sit a few px off WE's in the mean (the camera parallax
+  model; letting the follow catch up from t = 0 on the first frame did not
+  change the score: 0.856), and the dock alignment above.
 - Lonely Cat 3299228616: the HDR bloom of its water reflection is much
   brighter than WE's (the layer's own passes match; `general.bloom` with
   `hdr: true`). Not calibrated yet.
