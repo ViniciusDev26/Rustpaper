@@ -46,8 +46,9 @@ CI (`.github/workflows/ci.yml`, job *Conventional Commits*) runs commitlint
 2. **Merging the release PR** tags `vX.Y.Z` and creates the GitHub release.
 3. `build` (in an `archlinux:base-devel` container) runs
    `packaging/dist.sh` and attaches to the release:
-   - `rustpaper-X.Y.Z-x86_64-linux.tar.gz` (+ `.sha256`): the four binaries,
-     the `.desktop` entry, the icon, LICENSE and README;
+   - `rustpaper-X.Y.Z-x86_64-linux.tar.gz` (+ `.sha256`): the five binaries,
+     `lib/rustpaper/libsteam_api.so`, the `.desktop` entry, the icon,
+     LICENSE and README;
    - `rustpaper-bin.PKGBUILD` with that tarball's checksum: `makepkg -si`.
 4. `aur` publishes `rustpaper-bin` (the tarball) and `rustpaper` (built from
    the tag's source) to the AUR, with checksums from `updpkgsums`. It is
@@ -79,3 +80,13 @@ cd packaging/aur/rustpaper-bin && makepkg -f     # needs a published release
 
 To try a PKGBUILD before a release exists, copy it next to a local tarball
 and point `source=` at the file (that is how both were checked).
+
+## Steamworks library
+
+`rustpaper-workshop` links `libsteam_api.so`, the Steamworks SDK
+redistributable that the `steamworks-sys` crate bundles. Its build.rs copies
+it next to the binaries and sets RUNPATH `$ORIGIN:$ORIGIN/../lib/rustpaper`;
+packages install it as `/usr/lib/rustpaper/libsteam_api.so`. Valve's SDK
+license covers redistribution with Steam apps: shipping it in a third-party
+package (AUR) is a grey area many packages accept; dropping
+`rustpaper-workshop` from a package only removes the Workshop tab.

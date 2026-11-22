@@ -64,7 +64,13 @@ comments, with the measurement that justified it.
   with ffplay, killed with the engine via PR_SET_PDEATHSIG; `--volume`,
   `--mute`). `RUSTPAPER_LEGACY_SCENE=1` = old wgpu scenes.
 - **`rustpaper-selector`** — Tauri v2 app, binary **`rustpaper-selector`**;
-  static UI in `ui/` (`index.html`, `properties.js`).
+  static UI in `ui/` (`index.html`, `properties.js`, `workshop.js`).
+- **`rustpaper-workshop`** — binary **`rustpaper-workshop`**: the selector's
+  Steam Workshop store. Talks to the running Steam client through Steamworks
+  as WE (AppID 431960): query, subscribe/unsubscribe, download progress;
+  JSON lines with the selector (`workshop.rs` there). Links
+  `libsteam_api.so` (RUNPATH `$ORIGIN:$ORIGIN/../lib/rustpaper`, copied by
+  its build.rs). Runs no Workshop content.
 
 ## Build and run (host)
 
