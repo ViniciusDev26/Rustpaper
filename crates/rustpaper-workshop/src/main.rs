@@ -82,15 +82,25 @@ fn init_error(e: &steamworks::SteamAPIInitError) -> String {
     )
 }
 
+/// A subscriptions page to fetch next: (request id, page, entries so far).
+/// Steam callbacks must not start queries themselves (run_callbacks holds
+/// the callback registry's lock: registering a new call there deadlocks),
+/// so a page callback queues the next page and the main loop sends it.
+type NextPage = (u64, u32, serde_json::Map<String, Value>);
+
 fn serve(client: &Client, requests: &Receiver<String>, out: &Sender<String>) {
     let mut last_request = Instant::now();
+    let (next_tx, next_rx) = mpsc::channel::<NextPage>();
     loop {
         client.run_callbacks();
+        for (id, page, acc) in next_rx.try_iter() {
+            subscriptions(client, id, page, acc, out.clone(), next_tx.clone());
+        }
         match requests.recv_timeout(PUMP) {
             Ok(line) => {
                 last_request = Instant::now();
                 match serde_json::from_str::<Request>(&line) {
-                    Ok(r) => handle(client, r, out),
+                    Ok(r) => handle(client, r, out, &next_tx),
                     Err(e) => {
                         let id = serde_json::from_str::<Value>(&line)
                             .ok()
@@ -110,7 +120,7 @@ fn serve(client: &Client, requests: &Receiver<String>, out: &Sender<String>) {
     }
 }
 
-fn handle(client: &Client, r: Request, out: &Sender<String>) {
+fn handle(client: &Client, r: Request, out: &Sender<String>, next: &Sender<NextPage>) {
     let id = r.id;
     let reply = |res: Result<Value, String>| match res {
         Ok(v) => protocol::ok(id, v),
@@ -140,6 +150,14 @@ fn handle(client: &Client, r: Request, out: &Sender<String>) {
                 let _ = out.send(reply_for(id, res.map(|_| Value::Null)));
             });
         }
+        Command::Subscriptions => subscriptions(
+            client,
+            id,
+            1,
+            serde_json::Map::new(),
+            out.clone(),
+            next.clone(),
+        ),
         Command::Status { items } => {
             let states: serde_json::Map<String, Value> = items
                 .iter()
@@ -152,6 +170,61 @@ fn handle(client: &Client, r: Request, out: &Sender<String>) {
             let _ = out.send(reply(Ok(Value::Object(states))));
         }
     }
+}
+
+/// Steam's page size for UGC queries.
+const PAGE: u32 = 50;
+/// Safety cap on subscription pages (5000 items).
+const MAX_PAGES: u32 = 100;
+
+/// Every subscription with the time it was added to the list, one page at
+/// a time (each page's callback queues the next one, see NextPage).
+fn subscriptions(
+    client: &Client,
+    id: u64,
+    page: u32,
+    mut acc: serde_json::Map<String, Value>,
+    out: Sender<String>,
+    next: Sender<NextPage>,
+) {
+    let account = client.user().steam_id().account_id();
+    let apps = AppIDs::Both {
+        creator: WALLPAPER_ENGINE,
+        consumer: WALLPAPER_ENGINE,
+    };
+    let handle = client.ugc().query_user(
+        account,
+        UserList::Subscribed,
+        UGCType::Items,
+        UserListOrder::SubscriptionDateDesc,
+        apps,
+        page,
+    );
+    let Ok(handle) = handle else {
+        let _ = out.send(protocol::err(id, "Steam refused the subscriptions query"));
+        return;
+    };
+    handle.fetch(move |res| match res {
+        Err(e) => {
+            let _ = out.send(protocol::err(id, e));
+        }
+        Ok(results) => {
+            for r in results.iter().flatten() {
+                acc.insert(
+                    r.published_file_id.0.to_string(),
+                    json!(r.time_added_to_user_list),
+                );
+            }
+            let done = results.returned_results() < PAGE
+                || page * PAGE >= results.total_results()
+                || page >= MAX_PAGES;
+            if done {
+                let _ = out.send(protocol::ok(id, Value::Object(acc)));
+            } else {
+                let _ = next.send((id, page + 1, acc));
+            }
+        }
+    });
 }
 
 fn reply_for(id: u64, res: Result<Value, steamworks::SteamError>) -> String {

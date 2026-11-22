@@ -6,6 +6,7 @@
 //   {"id": 1, "cmd": "query", "sort": "trend", "kind": "scene", "search": "", "page": 1, "mature": false}
 //   {"id": 2, "cmd": "subscribe", "item": "123"}      also "unsubscribe"
 //   {"id": 3, "cmd": "status", "items": ["123", ...]}
+//   {"id": 4, "cmd": "subscriptions"}   -> {"123": <unix time subscribed>, ...}
 // helper -> selector, one line per request, matched by `id`:
 //   {"id": 1, "ok": true, "result": ...} | {"id": 1, "ok": false, "error": "..."}
 // plus a first line {"ready": true} | {"ready": false, "error": "..."} once
@@ -28,6 +29,7 @@ pub enum Command {
     Subscribe { item: String },
     Unsubscribe { item: String },
     Status { items: Vec<String> },
+    Subscriptions,
 }
 
 #[derive(Deserialize, Debug, PartialEq, Clone)]
@@ -168,6 +170,8 @@ mod tests {
             serde_json::from_str(r#"{"id":5,"cmd":"subscribe","item":"123"}"#).unwrap();
         assert_eq!(r.cmd, Command::Subscribe { item: "123".into() });
         assert!(serde_json::from_str::<Request>(r#"{"id":6,"cmd":"rm -rf"}"#).is_err());
+        let r: Request = serde_json::from_str(r#"{"id":7,"cmd":"subscriptions"}"#).unwrap();
+        assert_eq!(r.cmd, Command::Subscriptions);
     }
 
     #[test]
