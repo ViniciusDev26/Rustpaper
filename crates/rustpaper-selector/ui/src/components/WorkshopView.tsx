@@ -18,7 +18,7 @@ const KINDS: [WorkshopKind, string][] = [
   ["all", "All types"],
   ["scene", "Scene"],
   ["video", "Video"],
-  ["web", "Web (not supported yet)"],
+  ["web", "Web"],
 ];
 
 function Actions({ it, onApply }: { it: WorkshopItem; onApply: () => void }) {
@@ -36,11 +36,9 @@ function Actions({ it, onApply }: { it: WorkshopItem; onApply: () => void }) {
   if (s.subscribed) {
     return (
       <>
-        {it.kind !== "web" && (
-          <Button className={cls} onClick={onApply}>
-            Apply
-          </Button>
-        )}
+        <Button className={cls} onClick={onApply}>
+          Apply
+        </Button>
         <Button variant="secondary" className={cls} onClick={() => unsubscribe(it)}>
           Unsubscribe
         </Button>
@@ -118,7 +116,6 @@ export function WorkshopView({ onApplied }: { onApplied: () => void }) {
                 <span>{fmtCount(it.subscriptions)} subscribers</span>
                 <span>{it.file_size ? fmtSize(it.file_size) : ""}</span>
               </div>
-              {it.kind === "web" && <div className="mt-1 text-[0.7rem] text-yellow">Web wallpapers don't run yet</div>}
               <div className="mt-2 flex gap-1.5">
                 <Actions it={it} onApply={() => applyInstalled(it.id)} />
               </div>

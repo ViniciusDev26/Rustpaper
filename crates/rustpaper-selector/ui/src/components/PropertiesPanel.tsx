@@ -28,7 +28,6 @@ export function PropertiesPanel({ wallpaper: w }: { wallpaper: Wallpaper }) {
   useEffect(() => {
     setView(null);
     setError(null);
-    if (!w.supported) return;
     let current = true;
     api
       .getProperties(w.id)
@@ -42,7 +41,7 @@ export function PropertiesPanel({ wallpaper: w }: { wallpaper: Wallpaper }) {
       current = false;
       clearTimeout(saveTimer.current);
     };
-  }, [w.id, w.supported]);
+  }, [w.id]);
 
   /// Only the values that differ from the wallpaper's defaults are saved.
   const changed = (vals: Record<string, unknown>) =>
@@ -110,43 +109,31 @@ export function PropertiesPanel({ wallpaper: w }: { wallpaper: Wallpaper }) {
         <h2 className="mb-2 text-[0.95rem] font-semibold [overflow-wrap:anywhere]">{w.title || w.id}</h2>
         <Badge>{w.kind}</Badge>
       </div>
-      {!w.supported ? (
-        <>
-          {(unsubscribeButton || themeButton) && (
-            <div className="flex flex-wrap gap-2 px-4 pb-3">
-              {themeButton}
-              {unsubscribeButton}
-            </div>
-          )}
-          <div className="px-4 pb-4 text-sm text-muted">
-            {w.kind === "web"
-              ? "Web wallpapers run the author's JavaScript and are not supported."
-              : "This wallpaper type is not supported."}
-          </div>
-        </>
-      ) : (
-        <>
-          <div className="flex flex-wrap gap-2 px-4 pb-3">
-            <Button onClick={() => apply(w)}>Apply</Button>
-            <Button variant="secondary" onClick={reset} disabled={!view}>
-              Reset
-            </Button>
-            {themeButton}
-            {unsubscribeButton}
-          </div>
-          <div className="px-4 pt-1 pb-5" key={generation}>
-            {error ? (
-              <div className="text-sm text-muted">{error}</div>
-            ) : !view ? null : shown.length === 0 ? (
-              <div className="text-sm text-muted">No customizable properties.</div>
-            ) : (
-              shown.map((p) => (
-                <PropertyControl key={p.name} p={p} value={values[p.name]} set={(v) => setValue(p.name, v)} />
-              ))
-            )}
-          </div>
-        </>
-      )}
+      <div className="flex flex-wrap gap-2 px-4 pb-3">
+        <Button onClick={() => apply(w)}>Apply</Button>
+        <Button variant="secondary" onClick={reset} disabled={!view}>
+          Reset
+        </Button>
+        {themeButton}
+        {unsubscribeButton}
+      </div>
+      <div className="px-4 pt-1 pb-5" key={generation}>
+        {error ? (
+          <div className="text-sm text-muted">{error}</div>
+        ) : !view ? null : shown.length === 0 ? (
+          <div className="text-sm text-muted">No customizable properties.</div>
+        ) : (
+          shown.map((p) => (
+            <PropertyControl
+              key={p.name}
+              p={p}
+              value={values[p.name]}
+              set={(v) => setValue(p.name, v)}
+              wallpaperId={w.id}
+            />
+          ))
+        )}
+      </div>
     </aside>
   );
 }
