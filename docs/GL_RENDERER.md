@@ -1016,6 +1016,15 @@ customization panel (`docs/SELECTOR.md`).
   0.12 / -0.11) sit a few px off WE's in the mean (the camera parallax
   model; letting the follow catch up from t = 0 on the first frame did not
   change the score: 0.856), and the dock alignment above.
+- Lucy 3521337568 (mean SSIM 0.790, above WE's own WE-vs-WE floor of
+  0.778, energy ratio 1.05): what is left is noise-level. Its fullscreen
+  `filmgrain` (#1937) matches WE on average: one-frame high-pass
+  (|frame - gblur 2|) 2.03 vs WE 2.01 on the bright ground, 0.10 vs 0.10
+  in the dark sky; frame-to-frame |diff| in static regions 0.030 vs 0.025
+  and 0.105 vs 0.078 (out of 255, at the level of video compression
+  noise). The clock (Monofur, pointsize 16, `shine` at ray intensity 2) is
+  still bolder and glowier than WE's thin strokes (clock region SSIM
+  0.765); the shine/text rasterization was not calibrated further.
 - Lonely Cat 3299228616: the HDR bloom of its water reflection is much
   brighter than WE's (the layer's own passes match; `general.bloom` with
   `hdr: true`). Not calibrated yet.
