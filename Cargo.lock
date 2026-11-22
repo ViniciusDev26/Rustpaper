@@ -3142,6 +3142,7 @@ dependencies = [
  "calloop 0.14.4",
  "calloop-wayland-source 0.4.1",
  "image",
+ "libc",
  "naga",
  "pollster",
  "raw-window-handle",
