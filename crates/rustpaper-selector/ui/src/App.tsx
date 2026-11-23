@@ -4,6 +4,7 @@ import { LibraryView } from "./components/LibraryView";
 import { PerformanceView } from "./components/PerformanceView";
 import { WorkshopView } from "./components/WorkshopView";
 import { useLibrary, visibleWallpapers, type SortMode } from "./store/library";
+import { useRoles } from "./store/roles";
 import { useSettings, volumeText } from "./store/settings";
 import { errorText, toast } from "./store/toast";
 import { api, onThemeChanged, onWallpaperTheme } from "./api/tauri";
@@ -138,6 +139,7 @@ export function App() {
       try {
         await useSettings.getState().load();
         await useLibrary.getState().load();
+        void useRoles.getState().load();
         const last = useSettings.getState().lastId;
         if (last && useLibrary.getState().wallpapers.some((w) => w.id === last)) useLibrary.getState().select(last);
       } catch (e) {

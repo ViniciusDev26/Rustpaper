@@ -14,6 +14,10 @@
 //! | idle | the shell's idle service (`idle.lock` seconds in shell.json) | the daemon adopts the timeout and sets `idle.lock` to 0 |
 //! | suspend | `omarchy-sleep-lock.service` | masked; the daemon locks before suspend |
 //!
+//! Rustpaper's screensaver (the engine's, docs/SELECTOR.md) replaces
+//! Omarchy's the same way: while it is on, shell.json's
+//! `idle.screensaver` is 0 and its old value is kept to restore.
+//!
 //! Authentication uses Omarchy's own PAM service (`omarchy-lock-password`,
 //! with its faillock policy); the panel takes the theme's colors and font.
 
@@ -32,6 +36,8 @@ const MENU_END: &str = "// rustpaper-lock-end";
 const SLEEP_UNIT: &str = "omarchy-sleep-lock.service";
 /// Omarchy's idle lock when shell.json does not set one (its idle service).
 const OMARCHY_DEFAULT_IDLE_LOCK: u64 = 300;
+/// Its screensaver's, likewise.
+const OMARCHY_DEFAULT_SCREENSAVER: u64 = 150;
 
 fn bindings_file() -> Option<PathBuf> {
     Some(config_home()?.join("hypr/bindings.lua"))
@@ -113,46 +119,60 @@ fn menu_with_lock(text: &str, exe: Option<&Path>) -> String {
 /// shell.json's idle lock (seconds; Omarchy's default when unset), and the
 /// text with it set to `new` when given.
 fn shell_idle(text: &str, new: Option<u64>) -> Option<(u64, String)> {
+    shell_idle_key(text, "lock", OMARCHY_DEFAULT_IDLE_LOCK, new)
+}
+
+/// shell.json's `idle.<key>` (seconds; `default` when unset), and the text
+/// with it set to `new` when given.
+fn shell_idle_key(text: &str, key: &str, default: u64, new: Option<u64>) -> Option<(u64, String)> {
     let mut v: Value = serde_json::from_str(text).ok()?;
     let current = v
         .get("idle")
-        .and_then(|i| i.get("lock"))
+        .and_then(|i| i.get(key))
         .and_then(Value::as_u64)
-        .unwrap_or(OMARCHY_DEFAULT_IDLE_LOCK);
+        .unwrap_or(default);
     if let Some(n) = new {
         let obj = v.as_object_mut()?;
         let idle = obj
             .entry("idle")
             .or_insert_with(|| Value::Object(Default::default()));
-        idle.as_object_mut()?.insert("lock".into(), Value::from(n));
+        idle.as_object_mut()?.insert(key.into(), Value::from(n));
     }
     let mut out = serde_json::to_string_pretty(&v).ok()?;
     out.push('\n');
     Some((current, out))
 }
 
-fn read_saved_idle() -> Option<u64> {
+fn read_saved(key: &str) -> Option<u64> {
     let text = std::fs::read_to_string(saved_file()?).ok()?;
-    serde_json::from_str::<Value>(&text).ok()?["omarchy_idle_lock"].as_u64()
+    serde_json::from_str::<Value>(&text).ok()?[key].as_u64()
+}
+
+/// Sets (or removes) one key of lock.json, keeping the others.
+fn write_saved(key: &str, n: Option<u64>) -> Result<(), String> {
+    let path = saved_file().ok_or("no config directory")?;
+    let mut v: serde_json::Map<String, Value> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default();
+    match n {
+        Some(n) => v.insert(key.into(), Value::from(n)),
+        None => v.remove(key),
+    };
+    if v.is_empty() {
+        let _ = std::fs::remove_file(&path);
+        return Ok(());
+    }
+    std::fs::create_dir_all(path.parent().unwrap_or(Path::new("."))).map_err(|e| e.to_string())?;
+    std::fs::write(&path, Value::Object(v).to_string()).map_err(|e| e.to_string())
+}
+
+fn read_saved_idle() -> Option<u64> {
+    read_saved("omarchy_idle_lock")
 }
 
 fn write_saved_idle(n: Option<u64>) -> Result<(), String> {
-    let path = saved_file().ok_or("no config directory")?;
-    match n {
-        Some(n) => {
-            std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")))
-                .map_err(|e| e.to_string())?;
-            std::fs::write(
-                &path,
-                serde_json::json!({ "omarchy_idle_lock": n }).to_string(),
-            )
-            .map_err(|e| e.to_string())
-        }
-        None => {
-            let _ = std::fs::remove_file(&path);
-            Ok(())
-        }
-    }
+    write_saved("omarchy_idle_lock", n)
 }
 
 /// Takes Omarchy's idle lock over: when shell.json has a timeout (the user
@@ -251,6 +271,35 @@ true
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn();
+    }
+
+    fn hand_over_screensaver(&self, ours: bool) {
+        let Some(path) = shell_json() else { return };
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return;
+        };
+        let key = "omarchy_screensaver";
+        if ours {
+            if let Some((current, zeroed)) =
+                shell_idle_key(&text, "screensaver", OMARCHY_DEFAULT_SCREENSAVER, Some(0))
+                && current > 0
+                && write_saved(key, Some(current)).is_ok()
+                && std::fs::write(&path, zeroed).is_ok()
+            {
+                eprintln!("screensaver: Omarchy's ({current} s) is off while Rustpaper's is on");
+            }
+        } else if let Some(saved) = read_saved(key)
+            && let Some((_, restored)) = shell_idle_key(
+                &text,
+                "screensaver",
+                OMARCHY_DEFAULT_SCREENSAVER,
+                Some(saved),
+            )
+        {
+            let _ = std::fs::write(&path, restored);
+            let _ = write_saved(key, None);
+            eprintln!("screensaver: Omarchy's is back ({saved} s)");
+        }
     }
 
     fn idle_lock_seconds(&self) -> Option<u32> {

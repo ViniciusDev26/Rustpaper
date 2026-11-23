@@ -70,6 +70,11 @@ pub trait LockAdapter {
         None
     }
 
+    /// Rustpaper's screensaver is on (`ours`): the desktop's own screensaver
+    /// steps aside, or comes back when it is turned off. Idempotent; the
+    /// engine calls it at start and when the setting changes.
+    fn hand_over_screensaver(&self, _ours: bool) {}
+
     /// Routes the desktop's lock triggers to `exe lock` (and starts the
     /// daemon). Idempotent. Returns notes for the user (what they must do
     /// by hand, if anything).

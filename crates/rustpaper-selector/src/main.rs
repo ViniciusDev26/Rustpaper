@@ -29,7 +29,7 @@ use std::time::Duration;
 
 use rustpaper_core::performance;
 use rustpaper_core::project::{Project, WallpaperKind};
-use rustpaper_core::state::{self, Playback};
+use rustpaper_core::state::{self, Playback, Role};
 use serde::Serialize;
 use serde_json::{Map, Value};
 use tauri::{Emitter, Manager};
@@ -179,9 +179,16 @@ fn engine_running(state: &EngineState) -> bool {
             .is_some_and(|c| matches!(c.try_wait(), Ok(None)))
 }
 
-/// The wallpaper on screen, if any.
-fn showing(state: &EngineState) -> Option<String> {
+/// The desktop wallpaper on screen (every monitor's without its own), if
+/// an engine runs.
+fn desktop_showing(state: &EngineState) -> Option<String> {
     state::load().last_id.filter(|_| engine_running(state))
+}
+
+/// Wallpaper `id` is on screen somewhere (a monitor's desktop, the lock
+/// screen or the screensaver) and an engine runs.
+fn in_use(state: &EngineState, id: &str) -> bool {
+    state::load().uses(id) && engine_running(state)
 }
 
 /// Refreshes the engine when one is running (settings changed).
@@ -255,18 +262,38 @@ fn is_engine(proc_dir: &Path, uid: libc::uid_t) -> bool {
     field("Uid:") == Some(uid) && field("PPid:") != Some(std::process::id())
 }
 
+/// A monitor name from the UI: what `rustpaper outputs` reported, nothing
+/// else (it ends up in state.json).
+fn check_output(output: &Option<String>) -> Result<(), String> {
+    match output {
+        Some(o) if !outputs().iter().any(|v| &v.name == o) => Err(format!("no monitor named {o}")),
+        _ => Ok(()),
+    }
+}
+
+/// Shows wallpaper `id` as `role` (default: the desktop) on `output` (None:
+/// every monitor). The desktop wallpaper also themes the desktop when
+/// "Theme from wallpaper" is on.
 #[tauri::command]
 fn apply(
     app: tauri::AppHandle,
     id: String,
+    role: Option<Role>,
+    output: Option<String>,
     state: tauri::State<EngineState>,
 ) -> Result<(), String> {
     wallpaper_dir(&id)?;
+    check_output(&output)?;
+    let role = role.unwrap_or(Role::Desktop);
     let mut st = state::load();
-    st.last_id = Some(id.clone());
+    if role != Role::Desktop && st.last_id.is_none() {
+        // everything falls back to the desktop: it must exist first
+        st.last_id = Some(id.clone());
+    }
+    st.assign(role, output.as_deref(), &id);
     state::save(&st).map_err(|e| e.to_string())?;
     refresh_engine(&state)?;
-    if st.wallpaper_theme && omarchy::available() {
+    if role == Role::Desktop && st.wallpaper_theme && omarchy::available() {
         // seconds of work (omarchy-theme-set retints every app): off the
         // command, reported through `wallpaper-theme` events
         std::thread::spawn(move || {
@@ -304,7 +331,7 @@ async fn set_wallpaper_theme(
     let mut st = state::load();
     st.wallpaper_theme = enabled;
     state::save(&st).map_err(|e| e.to_string())?;
-    match showing(&state) {
+    match desktop_showing(&state) {
         Some(id) if enabled => tauri::async_runtime::spawn_blocking(move || wallpaper_theme(&id))
             .await
             .map_err(|e| e.to_string())?,
@@ -361,7 +388,7 @@ fn get_properties(id: String, state: tauri::State<EngineState>) -> Result<Proper
         })
         .collect();
     properties.sort_by_key(|p| p.get("order").and_then(|o| o.as_i64()).unwrap_or(0));
-    let applied = showing(&state).as_deref() == Some(id.as_str());
+    let applied = in_use(&state, &id);
     Ok(PropertiesView {
         properties,
         saved: state::load_properties(&id),
@@ -379,7 +406,7 @@ fn save_properties(
 ) -> Result<(), String> {
     wallpaper_dir(&id)?;
     state::save_properties(&id, &values).map_err(|e| e.to_string())?;
-    if showing(&state).as_deref() == Some(id.as_str()) {
+    if in_use(&state, &id) {
         refresh_engine(&state)?;
     }
     Ok(())
@@ -396,6 +423,78 @@ async fn wallpaper_colors(id: String) -> Result<Vec<String>, String> {
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// A monitor as the engine sees it (`rustpaper outputs`).
+#[derive(Serialize, serde::Deserialize, Clone)]
+struct OutputView {
+    name: String,
+    width: u32,
+    height: u32,
+}
+
+/// The monitors, from the engine's desktop adapter (the names per-monitor
+/// choices use). Empty when it cannot tell (no Wayland display).
+fn outputs() -> Vec<OutputView> {
+    std::process::Command::new(engine_path())
+        .arg("outputs")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| serde_json::from_slice(&o.stdout).ok())
+        .unwrap_or_default()
+}
+
+/// Where every wallpaper shows: the "Use for" menu and the badges.
+#[derive(Serialize)]
+struct RolesView {
+    outputs: Vec<OutputView>,
+    /// Desktop for every monitor without its own.
+    desktop: Option<String>,
+    /// Desktop per monitor.
+    monitors: std::collections::BTreeMap<String, String>,
+    lock: Option<String>,
+    screensaver: state::Screensaver,
+}
+
+#[tauri::command]
+fn get_roles() -> RolesView {
+    let st = state::load();
+    RolesView {
+        outputs: outputs(),
+        desktop: st.last_id,
+        monitors: st.monitors,
+        lock: st.lock_id,
+        screensaver: st.screensaver,
+    }
+}
+
+/// Removes a role's choice so its fallback shows (the lock screen -> the
+/// desktop's; a monitor's -> the one for every monitor).
+#[tauri::command]
+fn clear_role(
+    role: Role,
+    output: Option<String>,
+    state: tauri::State<EngineState>,
+) -> Result<(), String> {
+    let mut st = state::load();
+    st.unassign(role, output.as_deref());
+    state::save(&st).map_err(|e| e.to_string())?;
+    refresh_if_running(&state)
+}
+
+/// The screensaver switch and its delay.
+#[tauri::command]
+fn set_screensaver(
+    enabled: bool,
+    seconds: u32,
+    state: tauri::State<EngineState>,
+) -> Result<(), String> {
+    let mut st = state::load();
+    st.screensaver.enabled = enabled;
+    st.screensaver.seconds = seconds.clamp(10, 24 * 3600);
+    state::save(&st).map_err(|e| e.to_string())?;
+    refresh_if_running(&state)
 }
 
 /// The header's settings.
@@ -570,7 +669,7 @@ async fn workshop_subscribe(app: tauri::AppHandle, id: String) -> Result<(), Str
 /// stream from disk).
 #[tauri::command]
 async fn workshop_unsubscribe(app: tauri::AppHandle, id: String) -> Result<(), String> {
-    let running = showing(&app.state::<EngineState>());
+    let running = desktop_showing(&app.state::<EngineState>());
     if running.as_deref() == Some(id.as_str()) {
         return Err("This wallpaper is on screen: apply another one before unsubscribing.".into());
     }
@@ -638,6 +737,9 @@ fn main() {
             theme_from_wallpaper,
             set_wallpaper_theme,
             set_animated_lock,
+            get_roles,
+            clear_role,
+            set_screensaver,
             desktop_info
         ])
         // Closing the selector leaves the wallpaper running: systemd runs the

@@ -6,11 +6,63 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { PropertiesView, Wallpaper } from "../api/schemas";
 import { api, fileUrl } from "../api/tauri";
 import { evalCondition, sameValue } from "../lib/properties";
+import { parsePlacementKey, placementKey, placementsOf, removable, targets } from "../lib/roles";
 import { useLibrary } from "../store/library";
+import { useRoles } from "../store/roles";
 import { useSettings } from "../store/settings";
 import { errorText, toast } from "../store/toast";
-import { Badge, Button, ConfirmButton } from "./common";
+import { Badge, Button, ConfirmButton, field } from "./common";
 import { PropertyControl } from "./PropertyControl";
+
+/// "Use for": puts the wallpaper on the desktop of one monitor, the lock
+/// screen or the screensaver, and lists (removably) where it already is.
+function UseFor({ wallpaper: w }: { wallpaper: Wallpaper }) {
+  const { roles, assign, clear } = useRoles();
+  if (!roles) return null;
+  const here = placementsOf(w.id, roles);
+  const hereKeys = new Set(here.map(placementKey));
+  const options = targets(roles).filter((t) => !hereKeys.has(placementKey(t)));
+  return (
+    <div className="px-4 pb-3">
+      <select
+        className={`${field} w-full`}
+        value=""
+        title="Show this wallpaper somewhere else too: one monitor's desktop, the lock screen, or the screensaver"
+        onChange={(e) => {
+          const t = parsePlacementKey(e.currentTarget.value);
+          if (t) void assign(w.id, w.title, t.role, t.output);
+        }}
+      >
+        <option value="" disabled>
+          Use for…
+        </option>
+        {options.map((t) => (
+          <option key={placementKey(t)} value={placementKey(t)}>
+            {t.label}
+          </option>
+        ))}
+      </select>
+      {here.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {here.map((p) => (
+            <span key={placementKey(p)} className="inline-flex items-center gap-1 rounded bg-edge px-2 py-0.5 text-[0.72rem]">
+              {p.label}
+              {removable(p) && (
+                <button
+                  className="cursor-pointer text-muted hover:text-fg"
+                  title={`Stop using it for ${p.label}`}
+                  onClick={() => void clear(p.role, p.output)}
+                >
+                  ×
+                </button>
+              )}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 /// Saving restarts the engine; one restart per burst of edits.
 const SAVE_DELAY_MS = 700;
@@ -117,6 +169,7 @@ export function PropertiesPanel({ wallpaper: w }: { wallpaper: Wallpaper }) {
         {themeButton}
         {unsubscribeButton}
       </div>
+      <UseFor wallpaper={w} />
       <div className="px-4 pt-1 pb-5" key={generation}>
         {error ? (
           <div className="text-sm text-muted">{error}</div>

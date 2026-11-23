@@ -40,8 +40,13 @@ lock triggers to route) lives in a lock adapter. Code: `crates/rustpaper-engine/
   lock imports them on the user's compositor like the mirror does: zero
   copy, no rendering of its own. The socket is per Wayland display and only
   accepts peers of the same uid.
+- **Its own wallpaper:** the selector can give the lock screen a
+  wallpaper of its own ("Use for → Lock screen"). When the lock connects,
+  the engine loads it into WE's windows and gives each monitor its desktop
+  wallpaper back on unlock (docs/ENGINE.md, "What each monitor shows").
+  WE needs 1-3 s to load it: until then the lock shows the desktop's.
 - **Fallbacks:** with no engine (or the desktop stage, whose buffers are
-  the compositor's), the wallpaper's preview image, cropped to cover;
+  the compositor's), the lock wallpaper's preview image, cropped to cover;
   then the adapter's picture (Omarchy: the theme background); then the
   theme's background color. If the engine goes away mid-lock, its last
   frame stays and the lock reconnects when an engine comes back.

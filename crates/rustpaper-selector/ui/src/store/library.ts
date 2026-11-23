@@ -3,6 +3,7 @@
 import { create } from "zustand";
 import type { Wallpaper } from "../api/schemas";
 import { api } from "../api/tauri";
+import { useRoles } from "./roles";
 import { errorText, toast } from "./toast";
 
 export type SortMode = "title" | "subscribed";
@@ -83,6 +84,8 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     } catch (e) {
       toast(`Error: ${errorText(e)}`);
     }
+    // the badges show where each wallpaper is
+    await useRoles.getState().load();
   },
   setSearch: (search) => set({ search }),
   setSort: async (sort) => {

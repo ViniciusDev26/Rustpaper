@@ -11,6 +11,11 @@
 //! arrive through [`Mirrors::show`] and are attached as they are; the
 //! capture protocols are then not needed at all.
 //!
+//! The screensaver is the same surfaces raised to the Overlay layer (over
+//! every window) with all input while the user is idle
+//! (`ext-idle-notify-v1`), and lowered again on the first input
+//! ([`Mirrors::set_screensaver`]).
+//!
 //! Buffers are GBM dmabufs on the compositor's GPU, attached to our surface
 //! as-is: no GL context here, and no CPU copy. With wl_shm the compositor
 //! read every frame back to RAM: one 1080p60 mirror took Hyprland from 2.8%
@@ -20,6 +25,7 @@
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
 
 use wayland_client::globals::{GlobalListContents, registry_queue_init};
+use wayland_client::protocol::wl_seat::WlSeat;
 use wayland_client::protocol::{
     wl_buffer::{self, WlBuffer},
     wl_compositor::WlCompositor,
@@ -36,6 +42,10 @@ use wayland_client::{
 use wayland_protocols::ext::foreign_toplevel_list::v1::client::{
     ext_foreign_toplevel_handle_v1::{self, ExtForeignToplevelHandleV1},
     ext_foreign_toplevel_list_v1::{self, ExtForeignToplevelListV1},
+};
+use wayland_protocols::ext::idle_notify::v1::client::{
+    ext_idle_notification_v1::{self, ExtIdleNotificationV1},
+    ext_idle_notifier_v1::ExtIdleNotifierV1,
 };
 use wayland_protocols::ext::image_capture_source::v1::client::{
     ext_foreign_toplevel_image_capture_source_manager_v1::ExtForeignToplevelImageCaptureSourceManagerV1,
@@ -56,7 +66,7 @@ use wayland_protocols::wp::viewporter::client::{
 };
 use wayland_protocols_wlr::layer_shell::v1::client::{
     zwlr_layer_shell_v1::{Layer, ZwlrLayerShellV1},
-    zwlr_layer_surface_v1::{self, Anchor, ZwlrLayerSurfaceV1},
+    zwlr_layer_surface_v1::{self, Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1},
 };
 
 use crate::gbm;
@@ -100,6 +110,7 @@ pub struct Mirror {
     /// Frames shown since the counter was last reset (stats).
     pub frames: u32,
     surface: WlSurface,
+    layer: ZwlrLayerSurfaceV1,
     viewport: WpViewport,
     logical: (u32, u32),
     configured: bool,
@@ -165,6 +176,13 @@ pub struct Mirrors {
     next_id: u64,
     /// 1x1 black buffer the surfaces show while locked (see `set_locked`).
     park: Option<WlBuffer>,
+    idle_notifier: Option<ExtIdleNotifierV1>,
+    seat: Option<WlSeat>,
+    /// The current idle notification and its timeout (seconds).
+    idle_watch: Option<(u32, ExtIdleNotificationV1)>,
+    /// No input for the timeout (until the next input).
+    pub idle: bool,
+    screensaver: bool,
 }
 
 impl Mirrors {
@@ -199,6 +217,11 @@ impl Mirrors {
             toplevels: Vec::new(),
             next_id: 0,
             park: None,
+            idle_notifier: globals.bind(&qh, 1..=1, ()).ok(),
+            seat: globals.bind(&qh, 1..=1, ()).ok(),
+            idle_watch: None,
+            idle: false,
+            screensaver: false,
         };
         let _list: Option<ExtForeignToplevelListV1> = globals.bind(&qh, 1..=1, ()).ok();
         if let Some(d) = &m.dmabuf {
@@ -272,6 +295,7 @@ impl Mirrors {
             locked: false,
             frames: 0,
             surface,
+            layer,
             viewport,
             logical: (0, 0),
             configured: false,
@@ -467,6 +491,56 @@ impl Mirrors {
                 m.surface.damage_buffer(0, 0, 1, 1);
                 m.surface.commit();
             }
+        }
+    }
+
+    /// Watches for `secs` seconds without input (None: stop watching).
+    /// Idle inhibitors (a playing video) hold it off, as they should.
+    pub fn set_idle_timeout(&mut self, qh: &QueueHandle<Self>, secs: Option<u32>) {
+        if self.idle_watch.as_ref().map(|w| w.0) == secs {
+            return;
+        }
+        if let Some((_, n)) = self.idle_watch.take() {
+            n.destroy();
+        }
+        self.idle = false;
+        let (Some(secs), Some(notifier), Some(seat)) = (secs, &self.idle_notifier, &self.seat)
+        else {
+            if secs.is_some() {
+                eprintln!("screensaver: the compositor lacks ext-idle-notify-v1");
+            }
+            return;
+        };
+        let n = notifier.get_idle_notification(secs.saturating_mul(1000), seat, qh, ());
+        self.idle_watch = Some((secs, n));
+    }
+
+    /// Raises the wallpaper over every window (screensaver), or puts it
+    /// back under them. While raised it takes all input, so the click or key
+    /// that ends the screensaver does not reach the window under it.
+    pub fn set_screensaver(&mut self, qh: &QueueHandle<Self>, on: bool) {
+        if self.screensaver == on {
+            return;
+        }
+        self.screensaver = on;
+        for m in &self.list {
+            if m.layer.version() < 2 {
+                continue;
+            }
+            if on {
+                m.layer.set_layer(Layer::Overlay);
+                m.layer
+                    .set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
+                m.surface.set_input_region(None);
+            } else {
+                m.layer.set_layer(Layer::Bottom);
+                m.layer
+                    .set_keyboard_interactivity(KeyboardInteractivity::None);
+                let empty = self.compositor.create_region(qh, ());
+                m.surface.set_input_region(Some(&empty));
+                empty.destroy();
+            }
+            m.surface.commit();
         }
     }
 
@@ -748,6 +822,25 @@ impl Dispatch<WlRegistry, GlobalListContents> for Mirrors {
     }
 }
 
+impl Dispatch<ExtIdleNotificationV1, ()> for Mirrors {
+    fn event(
+        s: &mut Self,
+        _: &ExtIdleNotificationV1,
+        e: ext_idle_notification_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match e {
+            ext_idle_notification_v1::Event::Idled => s.idle = true,
+            ext_idle_notification_v1::Event::Resumed => s.idle = false,
+            _ => {}
+        }
+    }
+}
+
+delegate_noop!(Mirrors: ignore ExtIdleNotifierV1);
+delegate_noop!(Mirrors: ignore WlSeat);
 delegate_noop!(Mirrors: WlCompositor);
 delegate_noop!(Mirrors: WlShmPool);
 delegate_noop!(Mirrors: WlRegion);

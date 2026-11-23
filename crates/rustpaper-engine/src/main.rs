@@ -37,11 +37,10 @@ mod we;
 
 use std::collections::HashMap;
 use std::os::fd::AsRawFd;
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use config::{Config, Source};
+use config::{Choice, Config, Mode, Source};
 use desktop::{Coverage, Desktop, Output, Stage};
 use mirror::Mirrors;
 use rustpaper_core::state::{Action, Playback, StageChoice};
@@ -81,6 +80,8 @@ struct Target {
     attempts: u32,
     /// Properties/mute were sent for the current request.
     configured: bool,
+    /// The wallpaper this window should show now (its mode's choice).
+    want: Choice,
 }
 
 fn fail(msg: impl std::fmt::Display) -> ! {
@@ -100,6 +101,19 @@ fn main() {
     ) {
         lock::main(&argv);
     }
+    if argv.get(1).map(String::as_str) == Some("outputs") {
+        // the monitors as the engine sees them (the selector's per-monitor
+        // choices use these names)
+        let (mirrors, _, _) = Mirrors::connect().unwrap_or_else(|e| fail(e));
+        let desktop = desktop::detect(mirrors.wl_outputs()).unwrap_or_else(|e| fail(e));
+        let list: Vec<serde_json::Value> = desktop
+            .outputs()
+            .iter()
+            .map(|o| serde_json::json!({ "name": o.name, "width": o.size.0, "height": o.size.1 }))
+            .collect();
+        println!("{}", serde_json::Value::Array(list));
+        std::process::exit(0);
+    }
     if argv.get(1).map(String::as_str) == Some("setup-steam") {
         match launch::setup_steam() {
             Ok(()) => std::process::exit(0),
@@ -108,7 +122,7 @@ fn main() {
     }
     let (source, only) = config::parse_args();
     let mut cfg = match &source {
-        Source::Args(c) => c.clone(),
+        Source::Args(c) => (**c).clone(),
         Source::Service(stage) => {
             let mut c = config::service_config().unwrap_or_else(|e| {
                 // nothing to show is not a failure (the service must not loop)
@@ -198,13 +212,14 @@ fn main() {
             stage.prepare(&output);
             let mut t = Target {
                 title: desktop::window_title(&output.name),
+                want: cfg.choice(&output.name, Mode::Desktop).clone(),
                 output,
                 opened: Instant::now(),
                 attempts: 0,
                 configured: false,
             };
             if we_on {
-                open_window(&cfg.project, &mut t);
+                open_window(&mut t);
             }
             mirrors
                 .add(&qh, &t.output.name, &t.title, private_stage.is_none())
@@ -221,6 +236,16 @@ fn main() {
     // who still uses each of WE's buffers (lock::feed::holders); a buffer
     // goes back to WE when neither the mirror nor the lock does
     let mut holders: HashMap<u64, u8> = HashMap::new();
+
+    // the screensaver: idle for its timeout (service mode hands Omarchy's
+    // screensaver over to it, lock/adapter.rs)
+    let service = matches!(source, Source::Service(_));
+    let saver_timeout = |c: &Config| c.screensaver.enabled.then_some(c.screensaver.seconds);
+    mirrors.set_idle_timeout(&qh, saver_timeout(&cfg));
+    if service {
+        lock::adapter::detect().hand_over_screensaver(cfg.screensaver.enabled);
+    }
+    let mut mode = Mode::Desktop;
 
     let mut we_paused = false;
     let mut last_tick = Instant::now() - TICK;
@@ -267,8 +292,6 @@ fn main() {
                 freed.extend(keys.into_iter().map(|k| (k, LOCK)));
                 if changed {
                     mirrors.set_locked(&qh, f.active());
-                    // re-decide pausing now (WE must play while locked)
-                    last_tick = Instant::now() - TICK;
                 }
             }
             for (key, who) in freed {
@@ -285,14 +308,38 @@ fn main() {
             }
         }
         mirrors.pump(&qh);
-        if RELOAD.swap(false, Ordering::SeqCst) && matches!(source, Source::Service(_)) {
+        if RELOAD.swap(false, Ordering::SeqCst) && service {
             match config::service_config() {
                 Ok(new) => {
-                    reload(stage, &cfg, &new, &mut targets);
+                    if new.screensaver.enabled != cfg.screensaver.enabled {
+                        lock::adapter::detect().hand_over_screensaver(new.screensaver.enabled);
+                    }
+                    mirrors.set_idle_timeout(&qh, saver_timeout(&new));
+                    reload(stage, &cfg, &new, mode, &mut targets, we_on);
                     cfg = new;
                 }
                 Err(e) => eprintln!("reload: {e}"),
             }
+            last_tick = Instant::now() - TICK;
+        }
+        // what the monitors show: the lock's wallpaper while the lock shows
+        // the frames, the screensaver's while idle, else the desktop's
+        let locked = feed.as_ref().is_some_and(|f| f.active());
+        let now_mode = if locked {
+            Mode::Lock
+        } else if cfg.screensaver.enabled && mirrors.idle {
+            Mode::Screensaver
+        } else {
+            Mode::Desktop
+        };
+        if now_mode != mode {
+            eprintln!("mode: {now_mode:?}");
+            mode = now_mode;
+            mirrors.set_screensaver(&qh, mode == Mode::Screensaver);
+            if we_on {
+                retarget(&cfg, mode, &mut targets);
+            }
+            // re-decide pausing now (WE must play while locked or idle)
             last_tick = Instant::now() - TICK;
         }
         if !we_on && last_tick.elapsed() >= TICK {
@@ -311,7 +358,7 @@ fn main() {
                 &mut targets,
                 &mut mirrors,
                 &mut we_paused,
-                feed.as_ref().is_some_and(|f| f.active()),
+                mode,
             );
         }
         if stats.elapsed() >= Duration::from_secs(60) {
@@ -339,7 +386,17 @@ fn main() {
 /// Applies a new Config without restarting the engine (so the desktop never
 /// shows the plain background in between): new quality settings restart WE,
 /// a new wallpaper or new property values load into the same windows.
-fn reload(stage: &dyn Stage, old: &Config, new: &Config, targets: &mut [Target]) {
+fn reload(
+    stage: &dyn Stage,
+    old: &Config,
+    new: &Config,
+    mode: Mode,
+    targets: &mut [Target],
+    we_on: bool,
+) {
+    if !we_on {
+        return;
+    }
     if !new.performance.is_empty() && we::needs_restart(&new.performance) {
         eprintln!("reload: new quality settings, restarting Wallpaper Engine");
         if we::restart(&new.performance) {
@@ -347,15 +404,28 @@ fn reload(stage: &dyn Stage, old: &Config, new: &Config, targets: &mut [Target])
         }
         for t in targets.iter_mut() {
             t.attempts = 0;
-            open_window(&new.project, t);
+            t.want = new.choice(&t.output.name, mode).clone();
+            open_window(t);
         }
-    } else if new.project != old.project || new.properties != old.properties {
-        eprintln!("reload: {}", new.project.display());
-        for t in targets.iter_mut() {
-            open_window(&new.project, t);
-        }
-    } else if new.mute != old.mute {
+        return;
+    }
+    retarget(new, mode, targets);
+    if new.mute != old.mute {
         we::control(&["-control", if new.mute { "mute" } else { "unmute" }]);
+    }
+}
+
+/// Loads into each window what its monitor should show in `mode`, where
+/// that changed (a new wallpaper or new property values). Windows already
+/// showing the right one are left alone: no reload, no flash.
+fn retarget(cfg: &Config, mode: Mode, targets: &mut [Target]) {
+    for t in targets.iter_mut() {
+        let want = cfg.choice(&t.output.name, mode);
+        if *want != t.want {
+            eprintln!("{}: {}", t.output.name, want.project.display());
+            t.want = want.clone();
+            open_window(t);
+        }
     }
 }
 
@@ -416,9 +486,9 @@ fn harmless(e: &wayland_client::backend::WaylandError) -> bool {
 }
 
 /// Asks WE to play the wallpaper in `t`'s window (opened, or reused).
-fn open_window(project: &Path, t: &mut Target) {
+fn open_window(t: &mut Target) {
     let (w, h) = (t.output.size.0.to_string(), t.output.size.1.to_string());
-    let file = we::wine_path(project);
+    let file = we::wine_path(&t.want.project);
     eprintln!(
         "{}: asking Wallpaper Engine for window {}",
         t.output.name, t.title
@@ -448,7 +518,7 @@ fn watchdog(
     targets: &mut [Target],
     mirrors: &mut Mirrors,
     we_paused: &mut bool,
-    locked: bool,
+    mode: Mode,
 ) {
     for t in targets.iter_mut() {
         if !stage.tend(&t.output) {
@@ -469,14 +539,14 @@ fn watchdog(
                         t.output.name
                     );
                 }
-                open_window(&cfg.project, t);
+                open_window(t);
             }
             continue;
         }
         t.attempts = 0;
         if !t.configured && t.opened.elapsed() > PROPS_DELAY {
             t.configured = true;
-            if !we::apply_properties(&cfg.properties, &t.title) {
+            if !we::apply_properties(&t.want.properties, &t.title) {
                 eprintln!(
                     "{}: Wallpaper Engine refused the property values",
                     t.output.name
@@ -490,12 +560,18 @@ fn watchdog(
     let battery = power::on_battery();
     if let Some(cov) = desktop.coverage() {
         for m in &mut mirrors.list {
-            m.paused = cov
-                .iter()
-                .find(|c| c.name == m.output)
-                .is_some_and(|c| should_pause(&cfg.playback, c, battery));
+            m.paused = cov.iter().find(|c| c.name == m.output).is_some_and(|c| {
+                if mode == Mode::Screensaver {
+                    // the screensaver is over every window: only a display
+                    // that is off stops it
+                    c.asleep && cfg.playback.sleep == Action::Pause
+                } else {
+                    should_pause(&cfg.playback, c, battery)
+                }
+            });
         }
     }
+    let locked = mode == Mode::Lock;
     // while the lock screen shows the wallpaper, WE keeps playing (only the
     // lock covers the monitors; "display asleep" still pauses each mirror)
     let all = !locked && !mirrors.list.is_empty() && mirrors.list.iter().all(|m| m.paused);
