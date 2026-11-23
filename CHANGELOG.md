@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/ViniciusDev26/Rustpaper/compare/v0.7.1...v0.8.0) (2026-11-23)
+
+
+### Features
+
+* **engine:** forward the user's pointer to wallpaper engine's windows ([#49](https://github.com/ViniciusDev26/Rustpaper/issues/49)) ([60f76f2](https://github.com/ViniciusDev26/Rustpaper/commit/60f76f2d920be1810fdc97790dbe7fd0b4529b7d))
+
 ## [0.7.1](https://github.com/ViniciusDev26/Rustpaper/compare/v0.7.0...v0.7.1) (2026-11-23)
 
 
