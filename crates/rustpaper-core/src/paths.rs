@@ -82,3 +82,14 @@ pub fn find_wallpaper(id: &str) -> Option<PathBuf> {
         .map(|d| d.join(id))
         .find(|d| d.join("project.json").is_file())
 }
+
+/// The executable `name` on PATH (e.g. `mpv`, which plays video wallpapers
+/// when installed).
+pub fn program(name: &str) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|d| d.join(name))
+        .find(|f| {
+            std::fs::metadata(f).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        })
+}
