@@ -273,6 +273,13 @@ true
             .spawn();
     }
 
+    /// Omarchy's Stay Awake toggle (Super+Ctrl+I, `omarchy-toggle-idle`) writes
+    /// `~/.local/state/omarchy/indicators/stay-awake`; its idle service
+    /// skips the screensaver and the lock while it exists, and so do we.
+    fn idle_inhibited(&self) -> bool {
+        state_home().is_some_and(|s| s.join("omarchy/indicators/stay-awake").exists())
+    }
+
     fn hand_over_screensaver(&self, ours: bool) {
         let Some(path) = shell_json() else { return };
         let Ok(text) = std::fs::read_to_string(&path) else {

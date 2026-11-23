@@ -251,6 +251,8 @@ fn main() {
     if service {
         lock::adapter::detect().hand_over_screensaver(cfg.screensaver.enabled);
     }
+    // the desktop's "stay awake" switch holds the screensaver off
+    let session = lock::adapter::detect();
     let mut mode = Mode::Desktop;
 
     let mut we_paused = false;
@@ -361,7 +363,7 @@ fn main() {
         let locked = feed.as_ref().is_some_and(|f| f.active());
         let now_mode = if locked {
             Mode::Lock
-        } else if cfg.screensaver.enabled && mirrors.idle {
+        } else if cfg.screensaver.enabled && mirrors.idle && !session.idle_inhibited() {
             Mode::Screensaver
         } else {
             Mode::Desktop

@@ -248,8 +248,12 @@ mod idle {
             }
             queue.dispatch_pending(&mut st).map_err(|e| e.to_string())?;
             if std::mem::take(&mut st.idled) {
-                eprintln!("lock-daemon: idle, locking");
-                super::lock(exe, None);
+                if adapter.idle_inhibited() {
+                    eprintln!("lock-daemon: idle, but the desktop says stay awake");
+                } else {
+                    eprintln!("lock-daemon: idle, locking");
+                    super::lock(exe, None);
+                }
             }
         }
     }
