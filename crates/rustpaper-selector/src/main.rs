@@ -587,6 +587,8 @@ struct PerformanceView {
     video_player: VideoPlayer,
     /// mpv is on PATH (without it, video wallpapers play in WE).
     mpv_installed: bool,
+    /// WE runs on Wine's Wayland driver (GE-Proton, `rustpaper we-proton`).
+    wine_wayland: bool,
 }
 
 #[derive(Serialize)]
@@ -611,7 +613,33 @@ fn get_performance() -> PerformanceView {
         playback_settings: performance::playback_settings(),
         video_player: st.video_player,
         mpv_installed: rustpaper_core::paths::program("mpv").is_some(),
+        wine_wayland: st.wine_wayland,
     }
+}
+
+/// "Wine's Wayland driver" in the Performance tab: `rustpaper we-proton
+/// enable|disable` (may download GE-Proton and restarts Steam; the engine
+/// then restarts WE). Returns what the engine printed.
+#[tauri::command]
+async fn set_wine_wayland(enabled: bool) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let out = std::process::Command::new(engine_path())
+            .args(["we-proton", if enabled { "enable" } else { "disable" }])
+            .output()
+            .map_err(|e| format!("rustpaper we-proton: {e}"))?;
+        let text = |b: &[u8]| String::from_utf8_lossy(b).trim().to_string();
+        if out.status.success() {
+            Ok(text(&out.stdout)
+                .lines()
+                .last()
+                .unwrap_or_default()
+                .to_string())
+        } else {
+            Err(text(&out.stderr))
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Saves WE quality settings; the engine restarts WE with them (it must be
@@ -744,6 +772,7 @@ fn main() {
             set_performance,
             set_playback,
             set_video_player,
+            set_wine_wayland,
             workshop_query,
             workshop_subscribe,
             workshop_unsubscribe,

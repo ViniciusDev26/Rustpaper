@@ -133,6 +133,39 @@ function ScreensaverSection() {
   );
 }
 
+/// Opt-in: WE on Wine's Wayland driver (GE-Proton). Applying it closes and
+/// reopens Steam, may download GE-Proton (about 600 MB) and restarts WE.
+function WineWaylandSection({ initial }: { initial: boolean }) {
+  const [on, setOn] = useState(initial);
+  const [busy, setBusy] = useState(false);
+  const change = async (next: boolean) => {
+    setBusy(true);
+    toast(next ? "Setting up GE-Proton (Steam restarts; the first time it downloads ~600 MB)…" : "Back to Steam's Proton…");
+    try {
+      const note = await api.setWineWayland(next);
+      setOn(next);
+      toast(note || (next ? "Wine's Wayland driver on" : "Wine's X11 driver back"));
+    } catch (e) {
+      toast(`Error: ${errorText(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Section
+      title="Wine's Wayland driver (advanced)"
+      note="Runs Wallpaper Engine on GE-Proton with Wine's Wayland driver, so no XWayland copies its frames: about a third of the CPU (15.8% → 5.4% of a core, 4K + 1080p) and less power. On NVIDIA the GPU load stays the same. Applying it closes and reopens Steam; the first time it downloads GE-Proton (~600 MB)."
+    >
+      <SettingRow label="Wayland driver" hint="Off gives Wallpaper Engine back Steam's own Proton.">
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={on} disabled={busy} onChange={(e) => void change(e.currentTarget.checked)} />
+          {busy ? "Applying…" : on ? "On (GE-Proton)" : "Off"}
+        </label>
+      </SettingRow>
+    </Section>
+  );
+}
+
 export function PerformanceView() {
   const [view, setView] = useState<View | null>(null);
   const [values, setValues] = useState<Record<string, SettingValue>>({});
@@ -234,6 +267,7 @@ export function PerformanceView() {
             </select>
           </SettingRow>
         </Section>
+        <WineWaylandSection initial={view.wine_wayland} />
         <ScreensaverSection />
         <Section
           title="Playback"

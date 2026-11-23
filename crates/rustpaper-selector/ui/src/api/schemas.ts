@@ -125,6 +125,8 @@ export const PerformanceView = z.object({
   // older backends: Wallpaper Engine plays videos
   video_player: VideoPlayer.catch("we"),
   mpv_installed: z.boolean().catch(false),
+  // older backends: Wine's X11 driver
+  wine_wayland: z.boolean().catch(false),
 });
 export type PerformanceView = z.infer<typeof PerformanceView>;
 
