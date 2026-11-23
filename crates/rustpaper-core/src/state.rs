@@ -136,8 +136,8 @@ pub struct State {
     /// The lock screen's wallpaper (None: the desktop's).
     pub lock_id: Option<String>,
     pub screensaver: Screensaver,
-    /// Master volume 0..100; 0 mutes (Wallpaper Engine has no volume command,
-    /// so anything above 0 plays at WE's own volume).
+    /// Master volume 0..100; 0 mutes. The engine sets it on mpv and on
+    /// Wallpaper Engine's audio streams (WE has no volume command).
     pub volume: u8,
     /// Generate and apply an Omarchy theme from each applied wallpaper.
     pub wallpaper_theme: bool,

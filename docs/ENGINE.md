@@ -231,7 +231,7 @@ says (`rustpaper_core::state`). It re-reads it on SIGHUP
 - a new wallpaper or new property values load into the same windows
   (only the windows whose wallpaper changed);
 - new quality settings restart WE (see below);
-- a mute change is sent to WE.
+- a volume or mute change reaches WE's audio streams on the next tick.
 
 The process never restarts, so the desktop never shows the plain
 background. With nothing chosen yet it exits 0, so the service does not
@@ -264,8 +264,9 @@ selector's Performance tab).
   - running on battery (a Mains adapter offline).
 - **Actions.** Each condition is Keep running or Pause. A paused monitor
   stops capturing (desktop stage) or drops the stage's frames (private
-  stage); when every monitor is paused, the engine sends
-  `-control pause` to WE (and `play` when one resumes).
+  stage); when every monitor is paused, the engine pauses WE (private
+  stage: SIGSTOP on its renderers, SIGCONT when one resumes; see "WE only
+  when needed").
 - **Defaults:** pause under fullscreen windows and when the display sleeps,
   like WE.
 - **While the lock screen shows the wallpaper** (`lock/feed.rs`, private
@@ -322,9 +323,21 @@ a monitor *renders* (the owner of a shared group, `share_plan`) in mpv:
 - **WE only when needed.** WE is started only when some monitor shows, in
   any mode (desktop, lock, screensaver when enabled), a wallpaper that is
   not a video; a reload that needs it starts it then. When no monitor shows
-  a WE window, the engine sends WE `-control pause`, so a running WE costs
-  nothing. Pausing is per renderer: each mpv pauses when every monitor it
-  feeds is paused, WE when every monitor showing one of its windows is.
+  a WE window, the engine pauses WE, so a running WE costs nothing. WE's
+  own `-control pause` does nothing to `-playInWindow` windows (measured
+  like its mute, see "Volume and mute"), so the engine stops WE's
+  renderers with SIGSTOP (`wallpaper64.exe` and its Chromium's `--type=`
+  subprocesses; Wine's services keep running) and continues them with
+  SIGCONT. Measured: the frames froze, WE took no CPU, the card went from
+  ~32 W to 24 W, and after SIGCONT WE played on with no restart
+  (2026-11-23). Every `-control` command continues WE first (a stopped WE
+  never takes it; the next tick pauses it again), and the engine continues
+  it on exit and on start (one killed while WE was stopped). Only with the
+  private stage: nothing there pings its clients, while a desktop's
+  compositor could flag a stopped window as not responding, so with a
+  desktop stage WE keeps rendering and only its audio is muted. Pausing is
+  per renderer: each mpv pauses when every monitor it feeds is paused, WE
+  when every monitor showing one of its windows is.
 - **Falls back to WE**: without mpv on PATH, with a desktop stage (mpv
   needs the stage's Wayland socket), with `video_player: "we"`, or when mpv
   cannot be started.
@@ -429,8 +442,16 @@ previous wallpaper while the new one loads with its defaults).
 - **Verified** with Lonely Cat 3299228616: `{"clockcolor":"1 0 0"}` turned its
   clock red.
 
-WE has no volume command, so `--volume 0` / `--mute` send `-control mute`
-and any other volume sends `unmute`; the volume itself is WE's own setting.
+**Volume and mute.** WE has no volume command, and its `-control
+mute|unmute` (like `pause|play`) does nothing to `-playInWindow` windows:
+with a scene playing music, the stream's peak stayed ~3400 after each one,
+also with `-location <window>` or `-monitor 0`, on Wine's X11 and Wayland
+drivers alike (2026-11-23; the selector's volume 0 had never muted WE). So
+the watchdog sets WE's audio streams (`application.name` "Wallpaper
+Engine") in the user's sound server through `pactl` (`audio.rs`): the
+user's volume, muted at 0 and while no monitor shows a WE window (a window
+a video in mpv left behind keeps playing its old wallpaper, music
+included). WE opens a stream per wallpaper, hence a check every tick.
 
 ## Measurements (desktop stage, 2026-11-22, RTX 4060 Ti, Hyprland 0.56.2)
 
@@ -459,8 +480,8 @@ on DP-1 (1920x1080), 20 s averages:
   the cursor position the desktop adapter reports. Not done yet.
 - **Explicit sync** (`wp_linux_drm_syncobj`) is not offered to the stage's
   XWayland; implicit sync showed no corruption on NVIDIA so far.
-- **Volume** is only mute/unmute (WE has no volume command); video
-  wallpapers in mpv take the real volume.
+- **Desktop stages never pause WE** (no SIGSTOP there, see "WE only when
+  needed"): under the Playback rules' Pause it keeps rendering, muted.
 - **Video wallpapers in mpv**: WE's window of a monitor that switched to a
   video keeps rendering its old wallpaper while another monitor still needs
   WE (WE pauses only when no monitor shows one of its windows). Property

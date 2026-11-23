@@ -29,6 +29,7 @@
 //!   CPU). WE is started only when some monitor needs it, and paused when
 //!   none does.
 
+mod audio;
 mod config;
 mod desktop;
 mod gbm;
@@ -281,7 +282,9 @@ fn main() {
     let session = lock::adapter::detect();
     let mut mode = Mode::Desktop;
 
-    let mut we_paused = false;
+    // a previous engine killed while WE was paused left it stopped
+    we::resume_stale();
+    let mut we_audio = audio::WeAudio::default();
     let mut last_tick = Instant::now() - TICK;
     let mut stats = Instant::now();
     let fd = conn.backend().poll_fd().as_raw_fd();
@@ -382,7 +385,6 @@ fn main() {
                         eprintln!("reload: a wallpaper needs Wallpaper Engine, starting it");
                         we_on = start_we(&new, private_stage.as_ref(), stage);
                         force = we_on;
-                        we_paused = false;
                     }
                     reload(
                         stage,
@@ -425,7 +427,8 @@ fn main() {
                 &cfg,
                 &mut targets,
                 &mut mirrors,
-                &mut we_paused,
+                private_stage.is_some(),
+                &mut we_audio,
                 mode,
                 we_on,
             );
@@ -455,6 +458,8 @@ fn main() {
         // within systemd's stop timeout (we.rs control_within)
         we::control_within(&["-control", "stop"], Duration::from_secs(8));
     }
+    // never leave WE stopped behind (the next engine reuses it)
+    we::set_paused(false);
 }
 
 /// Applies a new Config without restarting the engine (so the desktop never
@@ -493,11 +498,9 @@ fn reload(
         assign(new, mode, targets, ctx, true);
         return;
     }
-    // mpv takes the new mute/volume here too (Player::update)
+    // mpv takes the new mute/volume here too (Player::update); WE's streams
+    // on the next tick (audio.rs)
     assign(new, mode, targets, ctx, force);
-    if ctx.we_on && new.mute != old.mute {
-        we::control(&["-control", if new.mute { "mute" } else { "unmute" }]);
-    }
 }
 
 /// What [`assign`] may use.
@@ -536,8 +539,6 @@ fn start_we(cfg: &Config, private: Option<&PrivateStage>, stage: &dyn Stage) -> 
         we::restart(&cfg.performance);
     }
     stage.hide_we_ui();
-    // a previous instance may have paused WE (all monitors covered)
-    we::control(&["-control", "play"]);
     true
 }
 
@@ -785,7 +786,8 @@ fn watchdog(
     cfg: &Config,
     targets: &mut [Target],
     mirrors: &mut Mirrors,
-    we_paused: &mut bool,
+    freeze: bool,
+    we_audio: &mut audio::WeAudio,
     mode: Mode,
     we_on: bool,
 ) {
@@ -834,7 +836,6 @@ fn watchdog(
                     t.output.name
                 );
             }
-            we::control(&["-control", if cfg.mute { "mute" } else { "unmute" }]);
         }
     }
     // the user's Playback settings, per monitor; WE itself pauses when
@@ -891,12 +892,16 @@ fn watchdog(
             }
         }
     }
-    // no monitor shows a WE window (every one plays a video in mpv): WE
-    // pauses, so it costs nothing
+    // no monitor shows a WE window (every one plays a video in mpv, or the
+    // Playback rules paused them all): WE pauses, so it costs nothing
     let all = !we_needed || !we_playing;
-    if we_on && all != *we_paused {
-        *we_paused = all;
-        we::control(&["-control", if all { "pause" } else { "play" }]);
+    if we_on && freeze {
+        we::set_paused(all);
+    }
+    // muted then too: WE's own `-control mute` does nothing (audio.rs), and
+    // with a desktop stage WE is never stopped
+    if we_on {
+        we_audio.apply(cfg.volume, cfg.mute || all);
     }
     if !we_on {
         return;

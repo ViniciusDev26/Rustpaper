@@ -51,8 +51,8 @@ pub struct Config {
     pub lock: Option<Choice>,
     pub screensaver: ScreensaverConfig,
     pub mute: bool,
-    /// 0..100. WE has no volume command (it plays at its own volume unless
-    /// muted); mpv takes it as is.
+    /// 0..100: mpv takes it as is, WE's audio streams get it from the sound
+    /// server (audio.rs; WE has no volume command).
     pub volume: u8,
     pub playback: Playback,
     /// WE quality settings (sanitized); empty = leave WE's as they are.
@@ -119,8 +119,7 @@ pub fn parse_args() -> (Source, Option<String>) {
             "--service" => service = true,
             "--props" => props_file = args.next().map(PathBuf::from),
             "--mute" | "--no-audio" => mute = true,
-            // WE has no volume command: anything above 0 plays at WE's own
-            // volume (set in WE's settings); mpv plays at this volume
+            // mpv plays at this volume, WE's streams are set to it (audio.rs)
             "--volume" => {
                 volume = args
                     .next()
