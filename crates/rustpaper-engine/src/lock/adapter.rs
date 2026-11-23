@@ -70,6 +70,12 @@ pub trait LockAdapter {
         None
     }
 
+    /// The desktop's "stay awake" switch is on: no screensaver and no idle
+    /// lock, whatever the idle timers say.
+    fn idle_inhibited(&self) -> bool {
+        false
+    }
+
     /// Rustpaper's screensaver is on (`ours`): the desktop's own screensaver
     /// steps aside, or comes back when it is turned off. Idempotent; the
     /// engine calls it at start and when the setting changes.
