@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.1](https://github.com/ViniciusDev26/Rustpaper/compare/v0.7.0...v0.7.1) (2026-11-23)
+
+
+### Bug Fixes
+
+* **engine:** wallpaper engine's volume, mute and pause that work ([#47](https://github.com/ViniciusDev26/Rustpaper/issues/47)) ([39551bc](https://github.com/ViniciusDev26/Rustpaper/commit/39551bc40dc7a0a86597e82a7334858f31d476c4))
+* stage socket cleanup, wine driver switch notice ([#46](https://github.com/ViniciusDev26/Rustpaper/issues/46)) ([82254a6](https://github.com/ViniciusDev26/Rustpaper/commit/82254a6ee09a395bde852e9b5ab2331fc384d13b))
+
 ## [0.7.0](https://github.com/ViniciusDev26/Rustpaper/compare/v0.6.0...v0.7.0) (2026-11-23)
 
 
