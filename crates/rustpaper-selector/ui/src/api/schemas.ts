@@ -26,8 +26,13 @@ export const Settings = z.object({
   autostart: z.boolean(),
   volume: z.number().int().min(0).max(100),
   wallpaper_theme: z.boolean().default(false),
+  /// the desktop's lock triggers run Rustpaper's animated lock screen
+  animated_lock: z.boolean().default(false),
 });
 export type Settings = z.infer<typeof Settings>;
+
+/// set_animated_lock -> what the engine says to tell the user
+export const Note = z.string();
 
 /// One `general.properties` entry of project.json, as written by Workshop
 /// authors: loosely typed on purpose (values are numbers, strings or bools

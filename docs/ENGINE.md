@@ -20,6 +20,7 @@ commit).
  │ config.rs  CLI / state.json (--service, SIGHUP reload, --stage)        │
  │ main.rs    targets, reload, watchdog, Playback rules                   │
  │ mirror.rs  layer-shell surfaces on the user's compositor               │
+ │ lock/      the animated lock screen; feed.rs hands it the frames       │
  └──────────────┬─────────────────────────────────────┬───────────────────┘
                 │ trait Stage                         │ trait Desktop
    ┌────────────┴────────────────────┐   ┌────────────┴─────────────────────┐
@@ -190,6 +191,11 @@ selector's Performance tab).
   `-control pause` to WE (and `play` when one resumes).
 - **Defaults:** pause under fullscreen windows and when the display sleeps,
   like WE.
+- **While the lock screen shows the wallpaper** (`lock/feed.rs`, private
+  stage) WE is never paused: only the lock covers the monitors. The
+  mirror's hidden surfaces park on a 1x1 buffer, and each WE buffer goes
+  back to WE once neither the mirror nor the lock holds it
+  (docs/LOCKSCREEN.md).
 
 ## The desktop stage on Hyprland
 

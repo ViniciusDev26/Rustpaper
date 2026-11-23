@@ -43,8 +43,9 @@ with the measurement or observation that justified it.
   compositor quirk it works around, measurements, known gaps.
 - `docs/SELECTOR.md`: gallery, customization panel, engine service,
   Performance tab, persistence.
-- `docs/LOCKSCREEN.md`: animated lock screen, the routes and their
-  prerequisites (not implemented yet).
+- `docs/LOCKSCREEN.md`: the animated lock screen: the lock, the frame
+  feed, the daemon, the lock adapters (Omarchy, generic), what was
+  verified.
 - `docs/RELEASING.md`: Conventional Commits, release-please, release
   tarball and AUR packaging (`packaging/`).
 
@@ -83,6 +84,13 @@ with the measurement or observation that justified it.
     the host's dmabuf formats for the stage's XWayland.
   - `gbm.rs`: minimal libgbm FFI.
   - `power.rs`: on battery or not.
+  - `lock/`: the animated lock screen (`rustpaper lock`, `lock-daemon`,
+    `lock-setup`). `screen.rs` is the `ext-session-lock-v1` client, `ui.rs`
+    its panel, `pam.rs` minimal libpam FFI, `feed.rs` the engine -> lock
+    frame socket (dmabufs with `SCM_RIGHTS`), `daemon.rs` logind + idle.
+    Desktop-specific lock behaviour (PAM service, look, routing the
+    desktop's lock triggers) only in adapters behind `LockAdapter`
+    (`adapter.rs`): `omarchy.rs`, `generic.rs`.
 - **`rustpaper-selector`**: Tauri v2 app, binary **`rustpaper-selector`**.
   The UI lives in `ui/`: React + TypeScript + Tailwind v4 (Vite), Zustand
   stores, Zod-validated command replies (`src/api`). build.rs builds it
@@ -155,6 +163,14 @@ journalctl --user -u rustpaper -f           # its log
   `WAYLAND_DISPLAY`, `SWAYSOCK`, and without `HYPRLAND_INSTANCE_SIGNATURE`.
   The window must sit on a *visible* workspace of the headless output, or
   the nested compositor gets no frames.
+- Lock screen: **never lock the real session in a test** (it covers the
+  user's monitors). Lock a nested compositor instead, with
+  `RUSTPAPER_LOCK_ADAPTER=generic` (the Omarchy adapter's post-lock steps
+  touch the real session) and, in debug builds,
+  `RUSTPAPER_LOCK_PAM_CONFDIR=<dir>` holding a `login` file with
+  `pam_permit` / `pam_deny`; type with `WAYLAND_DISPLAY=<nested> wtype`.
+  Never run `lock-setup enable` on the user's session without asking: it
+  rewires their lock triggers.
 - When unsure about an API (wayland-client, Hyprland's Lua API, Tauri), read
   the source in `~/.cargo/registry` or `/usr/share/hypr/stubs` instead of
   guessing.

@@ -1,5 +1,5 @@
 // Engine-wide settings in the header: start on login (the engine's systemd
-// user service), master volume, theme from wallpaper. Each change is saved
+// user service), master volume, theme from wallpaper, animated lock screen. Each change is saved
 // by the backend; the running engine reloads it in place.
 import { create } from "zustand";
 import { api } from "../api/tauri";
@@ -13,7 +13,10 @@ interface SettingsState {
   /// Omarchy theme from each applied wallpaper (needs Omarchy)
   wallpaperTheme: boolean;
   omarchy: boolean;
+  /// the desktop's lock triggers run Rustpaper's animated lock screen
+  animatedLock: boolean;
   load: () => Promise<void>;
+  setAnimatedLock: (on: boolean) => Promise<void>;
   setWallpaperTheme: (on: boolean) => Promise<void>;
   setAutostart: (on: boolean) => Promise<void>;
   setVolume: (volume: number) => Promise<void>;
@@ -28,6 +31,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
   lastId: null,
   wallpaperTheme: false,
   omarchy: false,
+  animatedLock: false,
   load: async () => {
     const [s, desktop] = await Promise.all([api.getSettings(), api.desktopInfo()]);
     set({
@@ -37,7 +41,19 @@ export const useSettings = create<SettingsState>((set, get) => ({
       lastId: s.last_id,
       wallpaperTheme: s.wallpaper_theme,
       omarchy: desktop.omarchy,
+      animatedLock: s.animated_lock,
     });
+  },
+  setAnimatedLock: async (on) => {
+    const before = get().animatedLock;
+    set({ animatedLock: on });
+    try {
+      const note = await api.setAnimatedLock(on);
+      toast(on ? note || "Animated lock screen on" : "The desktop's own lock screen is back");
+    } catch (e) {
+      set({ animatedLock: before });
+      toast(errorText(e));
+    }
   },
   setWallpaperTheme: async (on) => {
     const before = get().wallpaperTheme;

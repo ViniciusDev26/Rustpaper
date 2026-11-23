@@ -16,6 +16,7 @@ import {
   Wallpapers,
   WorkshopPage,
   type WorkshopQuery,
+  Note,
 } from "./schemas";
 
 async function call<S extends z.ZodTypeAny>(
@@ -70,6 +71,8 @@ export const api = {
   desktopInfo: () => call(DesktopInfo, "desktop_info"),
   themeFromWallpaper: (id: string) => run("theme_from_wallpaper", { id }),
   setWallpaperTheme: (enabled: boolean) => run("set_wallpaper_theme", { enabled }),
+  /// resolves to the engine's note for the user
+  setAnimatedLock: (enabled: boolean) => call(Note, "set_animated_lock", { enabled }),
 };
 
 /// Result of the background theme generation after an apply: null = done,

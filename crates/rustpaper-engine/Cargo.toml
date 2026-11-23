@@ -20,3 +20,10 @@ wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 libc = "0.2.186"
 # the private stage: our own headless compositor + XWayland (stage.rs)
 smithay = { version = "0.7", default-features = false, features = ["wayland_frontend", "xwayland"] }
+# the lock screen (lock/): keyboard, its panel (shapes and text drawn on the
+# CPU), the still fallback picture, logind
+xkbcommon = { version = "0.8", default-features = false }
+tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
+ab_glyph = "0.2"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+dbus = "0.9"

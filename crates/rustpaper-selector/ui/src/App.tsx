@@ -99,6 +99,13 @@ function Header({ tab, setTab }: { tab: Tab; setTab: (t: Tab) => void }) {
           Theme from wallpaper
         </label>
       )}
+      <label
+        className={check}
+        title="The lock screen shows the live wallpaper behind the password prompt. Your desktop's lock key, idle lock and lock before suspend use Rustpaper's lock screen; off gives them back to the desktop's own."
+      >
+        <input type="checkbox" checked={settings.animatedLock} onChange={(e) => settings.setAnimatedLock(e.currentTarget.checked)} />
+        Animated lock screen
+      </label>
       <label className={check} title="Runs the wallpaper as a systemd user service (rustpaper.service) that starts with your session">
         <input type="checkbox" checked={settings.autostart} onChange={(e) => settings.setAutostart(e.currentTarget.checked)} />
         Start on login

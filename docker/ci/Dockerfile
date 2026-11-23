@@ -1,7 +1,8 @@
 # Rustpaper's CI build image: Ubuntu 24.04 + Rust toolchain + the system deps
 # of the whole workspace (rustpaper-engine needs wayland + libgbm, which it
-# links to allocate dmabufs; rustpaper-selector is a Tauri app and needs the
-# webkit2gtk/gtk -dev packages). Nothing here needs a GPU or a running
+# links to allocate dmabufs, and libpam + libdbus for its lock screen;
+# rustpaper-selector is a Tauri app and needs the webkit2gtk/gtk -dev
+# packages). Nothing here needs a GPU or a running
 # Wayland compositor.
 #
 # Published to ghcr.io by the `image` job of .github/workflows/ci.yml (which
@@ -26,6 +27,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libgbm-dev \
         libegl-dev \
         libxkbcommon-dev \
+        libpam0g-dev \
+        libdbus-1-dev \
         libwebkit2gtk-4.1-dev \
         libgtk-3-dev \
         libayatana-appindicator3-dev \

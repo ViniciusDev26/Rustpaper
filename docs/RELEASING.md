@@ -54,7 +54,8 @@ CI (`.github/workflows/ci.yml`, job *Conventional Commits*) runs commitlint
    - `rustpaper-X.Y.Z-x86_64-linux.tar.gz` (+ `.sha256`): the three binaries
      (`rustpaper`, `rustpaper-selector`, `rustpaper-workshop`),
      `lib/rustpaper/libsteam_api.so`, the `.desktop` entry, the icon,
-     LICENSE and README;
+     the lock screen's PAM service (`etc/pam.d/rustpaper-lock`), LICENSE
+     and README;
    - `rustpaper-bin.PKGBUILD` with that tarball's checksum: download it
      (`releases/latest/download/rustpaper-bin.PKGBUILD`) and run
      `makepkg -si`, which fetches the tarball.
