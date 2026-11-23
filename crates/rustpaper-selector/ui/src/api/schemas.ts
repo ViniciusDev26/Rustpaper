@@ -34,6 +34,26 @@ export type Settings = z.infer<typeof Settings>;
 /// set_animated_lock -> what the engine says to tell the user
 export const Note = z.string();
 
+/// Where a wallpaper shows (rustpaper-core state.rs Role).
+export const Role = z.enum(["desktop", "lock", "screensaver"]);
+export type Role = z.infer<typeof Role>;
+
+/// get_roles -> RolesView (main.rs): the monitors (`rustpaper outputs`) and
+/// the wallpaper chosen for each role (ids; per monitor by output name).
+export const RolesView = z.object({
+  outputs: z.array(z.object({ name: z.string(), width: z.number(), height: z.number() })),
+  desktop: z.string().nullable(),
+  monitors: z.record(z.string(), z.string()),
+  lock: z.string().nullable(),
+  screensaver: z.object({
+    enabled: z.boolean(),
+    seconds: z.number(),
+    all: z.string().nullable(),
+    monitors: z.record(z.string(), z.string()),
+  }),
+});
+export type RolesView = z.infer<typeof RolesView>;
+
 /// One `general.properties` entry of project.json, as written by Workshop
 /// authors: loosely typed on purpose (values are numbers, strings or bools
 /// depending on the property and the author).

@@ -17,7 +17,9 @@ import {
   WorkshopPage,
   type WorkshopQuery,
   Note,
+  RolesView,
 } from "./schemas";
+import type { Role } from "./schemas";
 
 async function call<S extends z.ZodTypeAny>(
   schema: S,
@@ -51,7 +53,11 @@ export const fileUrl = (path: string) => convertFileSrc(path);
 
 export const api = {
   listWallpapers: () => call(Wallpapers, "list_wallpapers"),
-  apply: (id: string) => run("apply", { id }),
+  /// role: default desktop; output: null = every monitor
+  apply: (id: string, role: Role = "desktop", output: string | null = null) => run("apply", { id, role, output }),
+  getRoles: () => call(RolesView, "get_roles"),
+  clearRole: (role: Role, output: string | null) => run("clear_role", { role, output }),
+  setScreensaver: (enabled: boolean, seconds: number) => run("set_screensaver", { enabled, seconds }),
   getProperties: (id: string) => call(PropertiesView, "get_properties", { id }),
   saveProperties: (id: string, values: Record<string, unknown>) =>
     run("save_properties", { id, values }),

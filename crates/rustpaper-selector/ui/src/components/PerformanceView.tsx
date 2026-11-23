@@ -5,6 +5,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { PerformanceView as View, Playback, PlaybackAction, QualitySetting, SettingValue } from "../api/schemas";
 import { api } from "../api/tauri";
+import { useRoles } from "../store/roles";
 import { errorText, toast } from "../store/toast";
 import { Button, field } from "./common";
 
@@ -80,6 +81,50 @@ function presetOf(view: View, values: Record<string, SettingValue>): string {
   return match?.name ?? "custom";
 }
 
+/// The screensaver switch and its delay (which wallpaper each monitor
+/// shows is chosen in the Library: Use for → Screensaver).
+function ScreensaverSection() {
+  const { roles, load, setScreensaver } = useRoles();
+  const [minutes, setMinutes] = useState<string | null>(null);
+  useEffect(() => {
+    if (!roles) void load();
+  }, [roles, load]);
+  if (!roles) return null;
+  const s = roles.screensaver;
+  const shown = minutes ?? String(Math.round(s.seconds / 6) / 10);
+  const commit = (enabled: boolean, text: string) => {
+    const m = Number(text.replace(",", "."));
+    const secs = Number.isFinite(m) && m > 0 ? Math.round(m * 60) : s.seconds;
+    setMinutes(null);
+    void setScreensaver(enabled, secs);
+  };
+  return (
+    <Section
+      title="Screensaver"
+      note="After this long without input, each monitor shows its screensaver wallpaper over your windows; any key or the mouse ends it. Pick the wallpapers in the Library (Use for → Screensaver); without one, a monitor shows its desktop wallpaper. While on, it replaces Omarchy's screensaver."
+    >
+      <SettingRow label="Screensaver" hint="Idle inhibitors (a playing video) hold it off.">
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={s.enabled} onChange={(e) => commit(e.currentTarget.checked, shown)} />
+            On
+          </label>
+          <span className="text-sm text-sub">after</span>
+          <input
+            className={`${field} w-20`}
+            inputMode="decimal"
+            value={shown}
+            onChange={(e) => setMinutes(e.currentTarget.value)}
+            onBlur={() => minutes !== null && commit(s.enabled, minutes)}
+            onKeyDown={(e) => e.key === "Enter" && commit(s.enabled, shown)}
+          />
+          <span className="text-sm text-sub">minutes</span>
+        </div>
+      </SettingRow>
+    </Section>
+  );
+}
+
 export function PerformanceView() {
   const [view, setView] = useState<View | null>(null);
   const [values, setValues] = useState<Record<string, SettingValue>>({});
@@ -149,6 +194,7 @@ export function PerformanceView() {
             </SettingRow>
           ))}
         </Section>
+        <ScreensaverSection />
         <Section
           title="Playback"
           note="When to pause the wallpaper on a monitor. Paused, it costs nothing; Wallpaper Engine itself pauses when every monitor is paused."

@@ -4,7 +4,9 @@
 // Wallpaper Engine renders it.
 import { useMemo } from "react";
 import { fileUrl } from "../api/tauri";
+import { placementsOf } from "../lib/roles";
 import { useLibrary, visibleWallpapers } from "../store/library";
+import { useRoles } from "../store/roles";
 import { Badge, Card, Thumb } from "./common";
 import { PropertiesPanel } from "./PropertiesPanel";
 
@@ -15,6 +17,7 @@ export function LibraryView() {
     [wallpapers, search, sort, subTimes],
   );
   const selected = wallpapers.find((w) => w.id === selectedId) ?? null;
+  const roles = useRoles((s) => s.roles);
 
   return (
     <>
@@ -29,8 +32,14 @@ export function LibraryView() {
                 <div className="truncate text-sm" title={w.title}>
                   {w.title || w.id}
                 </div>
-                <div className="mt-1">
+                <div className="mt-1 flex flex-wrap items-center gap-1">
                   <Badge>{w.kind}</Badge>
+                  {roles &&
+                    placementsOf(w.id, roles).map((p) => (
+                      <span key={p.label} className="rounded bg-edge px-1.5 py-0.5 text-[0.62rem] text-sub">
+                        {p.label}
+                      </span>
+                    ))}
                 </div>
               </div>
             </Card>
