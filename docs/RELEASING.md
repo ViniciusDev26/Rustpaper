@@ -33,6 +33,14 @@ proper noun: `fix(engine): sway adapter ...`, not `Sway adapter`. A subject
 that slips through is only fixable by rewriting the branch, so check before
 pushing.
 
+**PRs are squash-merged** (the repository allows nothing else): the PR
+title becomes the one commit on main, and the squash commit's body is left
+blank. So the **PR title** is what release-please reads and must be a
+Conventional Commit too (`.github/workflows/pr-title.yml` checks it, also on
+edits). Merge commits used to carry the PR title in their body, which
+release-please read as a second commit: every change of 0.5.0 and 0.6.0
+was listed twice (2026-11-23).
+
 CI (`.github/workflows/ci.yml`, job *Conventional Commits*) runs commitlint
 (`commitlint.config.mjs`) on **every commit** of a pull request. Locally:
 `npx commitlint --from origin/main`. History before 2026-11-21 used
