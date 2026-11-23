@@ -174,8 +174,11 @@ journalctl --user -u rustpaper -f           # its log
   user's monitors). Lock a nested compositor instead, with
   `RUSTPAPER_LOCK_ADAPTER=generic` (the Omarchy adapter's post-lock steps
   touch the real session) and, in debug builds,
-  `RUSTPAPER_LOCK_PAM_CONFDIR=<dir>` holding a `login` file with
-  `pam_permit` / `pam_deny`; type with `WAYLAND_DISPLAY=<nested> wtype`.
+  `RUSTPAPER_LOCK_PAM_CONFDIR=<dir>` holding the adapter's service file
+  with `pam_permit` / `pam_deny` (`rustpaper-lock` once a package
+  installed /etc/pam.d/rustpaper-lock, else `login`: write both); type
+  with `WAYLAND_DISPLAY=<nested> wtype` (`-P BackSpace -s 1500 -p
+  BackSpace` holds a key).
   Never run `lock-setup enable` on the user's session without asking: it
   rewires their lock triggers.
 - When unsure about an API (wayland-client, Hyprland's Lua API, Tauri), read
