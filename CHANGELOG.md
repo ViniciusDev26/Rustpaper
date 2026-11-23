@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/ViniciusDev26/Rustpaper/compare/v0.10.0...v0.11.0) (2026-11-23)
+
+
+### Features
+
+* **engine:** let web wallpapers take clicks ([#55](https://github.com/ViniciusDev26/Rustpaper/issues/55)) ([557f93c](https://github.com/ViniciusDev26/Rustpaper/commit/557f93c0b09c9f559a7f9d728167e3631c098d18))
+
 ## [0.10.0](https://github.com/ViniciusDev26/Rustpaper/compare/v0.9.0...v0.10.0) (2026-11-23)
 
 
