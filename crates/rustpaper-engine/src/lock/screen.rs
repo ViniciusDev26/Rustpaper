@@ -61,6 +61,64 @@ const DIM_ALPHA: u8 = 0x50;
 /// Longest still picture kept (wider ones are downscaled once).
 const STILL_MAX: u32 = 3840;
 
+/// Key repeat, client-side as Wayland wants it: after `delay` a held key
+/// repeats `rate` times a second (the compositor's `repeat_info`; until it
+/// says, the common 25/s after 600 ms).
+#[derive(Debug, Clone, PartialEq)]
+struct Repeat {
+    rate: u32,
+    delay: Duration,
+    /// The held key and when it fires next.
+    held: Option<(u32, Instant)>,
+}
+
+impl Default for Repeat {
+    fn default() -> Self {
+        Repeat {
+            rate: 25,
+            delay: Duration::from_millis(600),
+            held: None,
+        }
+    }
+}
+
+impl Repeat {
+    fn set(&mut self, rate: i32, delay_ms: i32) {
+        self.rate = rate.max(0) as u32;
+        self.delay = Duration::from_millis(delay_ms.max(0) as u64);
+        if self.rate == 0 {
+            self.held = None;
+        }
+    }
+
+    fn press(&mut self, key: u32, now: Instant) {
+        self.held = (self.rate > 0).then_some((key, now + self.delay));
+    }
+
+    fn release(&mut self, key: u32) {
+        if self.held.is_some_and(|(k, _)| k == key) {
+            self.held = None;
+        }
+    }
+
+    /// When the next repeat is due.
+    fn next(&self) -> Option<Instant> {
+        self.held.map(|(_, t)| t)
+    }
+
+    /// The key to repeat now, if one is due (and schedules the next).
+    fn due(&mut self, now: Instant) -> Option<u32> {
+        let (key, at) = self.held?;
+        if now < at {
+            return None;
+        }
+        // one repeat per call: a stalled loop does not burst
+        let interval = Duration::from_secs(1) / self.rate.max(1);
+        self.held = Some((key, now + interval));
+        Some(key)
+    }
+}
+
 /// The typed password; zeroed when cleared or dropped.
 #[derive(Default)]
 struct Secret(Vec<u8>);
@@ -171,6 +229,7 @@ struct State {
     next_id: u64,
     /// The password to check, handed to the PAM thread.
     submit: Option<Vec<u8>>,
+    repeat: Repeat,
 }
 
 pub struct Options {
@@ -222,6 +281,7 @@ pub fn run(adapter: &dyn LockAdapter, mut opts: Options) -> Result<(), String> {
         feed: FeedClient::connect(),
         next_id: 1,
         submit: None,
+        repeat: Repeat::default(),
     };
     for g in globals.contents().clone_list() {
         if g.interface == WlOutput::interface().name {
@@ -330,10 +390,15 @@ pub fn run(adapter: &dyn LockAdapter, mut opts: Options) -> Result<(), String> {
                 revents: 0,
             },
         ];
-        let until = minute
-            .min(feed_retry)
+        if let Some(key) = st.repeat.due(Instant::now()) {
+            st.key(key);
+        }
+        let until = st
+            .repeat
+            .next()
+            .map_or(minute.min(feed_retry), |r| r.min(minute).min(feed_retry))
             .saturating_duration_since(Instant::now());
-        let timeout = until.as_millis().clamp(10, 60_000) as i32;
+        let timeout = until.as_millis().clamp(1, 60_000) as i32;
         // SAFETY: three valid pollfds (a negative fd is ignored).
         let n = unsafe { libc::poll(pfds.as_mut_ptr(), 3, timeout) };
         if n > 0 && pfds[0].revents != 0 {
@@ -768,6 +833,17 @@ impl State {
         }
     }
 
+    /// Whether holding `keycode` repeats it: what the keymap says, except
+    /// Enter (a held Enter must not submit twice).
+    fn repeats(&self, keycode: u32) -> bool {
+        let Some(xkb) = &self.xkb else { return false };
+        let code = xkb::Keycode::new(keycode + 8);
+        let sym = xkb.key_get_one_sym(code).raw();
+        xkb.get_keymap().key_repeats(code)
+            && sym != xkb::keysyms::KEY_Return
+            && sym != xkb::keysyms::KEY_KP_Enter
+    }
+
     // xkbcommon names its keysym constants after X11 (KEY_Return)
     #[allow(non_upper_case_globals)]
     fn key(&mut self, keycode: u32) {
@@ -992,7 +1068,19 @@ impl Dispatch<WlKeyboard, ()> for State {
                 key,
                 state: WEnum::Value(wl_keyboard::KeyState::Pressed),
                 ..
-            } => st.key(key),
+            } => {
+                st.key(key);
+                if st.repeats(key) {
+                    st.repeat.press(key, Instant::now());
+                }
+            }
+            wl_keyboard::Event::Key {
+                key,
+                state: WEnum::Value(wl_keyboard::KeyState::Released),
+                ..
+            } => st.repeat.release(key),
+            wl_keyboard::Event::RepeatInfo { rate, delay } => st.repeat.set(rate, delay),
+            wl_keyboard::Event::Leave { .. } => st.repeat.held = None,
             wl_keyboard::Event::Modifiers {
                 mods_depressed,
                 mods_latched,
@@ -1067,6 +1155,34 @@ mod tests {
         let taken = s.take();
         assert_eq!(taken, b"ab");
         assert_eq!(s.chars(), 0);
+    }
+
+    #[test]
+    fn held_keys_repeat_after_the_delay_at_the_rate() {
+        let t0 = Instant::now();
+        let mut r = Repeat::default();
+        r.set(20, 500);
+        r.press(14, t0);
+        assert_eq!(
+            r.due(t0 + Duration::from_millis(499)),
+            None,
+            "not before the delay"
+        );
+        assert_eq!(r.due(t0 + Duration::from_millis(500)), Some(14));
+        assert_eq!(
+            r.next(),
+            Some(t0 + Duration::from_millis(550)),
+            "then every 1/20 s"
+        );
+        assert_eq!(r.due(t0 + Duration::from_millis(549)), None);
+        assert_eq!(r.due(t0 + Duration::from_millis(550)), Some(14));
+        r.release(30);
+        assert!(r.next().is_some(), "another key's release changes nothing");
+        r.release(14);
+        assert_eq!(r.due(t0 + Duration::from_secs(5)), None);
+        r.set(0, 500);
+        r.press(14, t0);
+        assert_eq!(r.next(), None, "rate 0: no repeat");
     }
 
     #[test]

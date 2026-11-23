@@ -50,6 +50,10 @@ lock triggers to route) lives in a lock adapter. Code: `crates/rustpaper-engine/
   then the adapter's picture (Omarchy: the theme background); then the
   theme's background color. If the engine goes away mid-lock, its last
   frame stays and the lock reconnects when an engine comes back.
+- **Keys:** held keys repeat at the compositor's rate and delay
+  (`wl_keyboard.repeat_info`), Enter excepted; Ctrl+Backspace, Ctrl+U or
+  Escape clear the field. Verified on a nested Sway: a held Backspace
+  emptied a 20-character field, a short press deleted one.
 - **Authentication** (`lock/pam.rs`): PAM with the adapter's service,
   every hidden prompt answered with the typed password; the password is
   zeroed after use. PAM runs on its own thread (it sleeps after a wrong
@@ -171,8 +175,6 @@ costs).
 
 - No fingerprint: Omarchy's lock has a separate fingerprint PAM flow
   (`omarchy-lock-fingerprint`); ours only asks for the password.
-- No key repeat in the password field (holding Backspace deletes one
-  character; Ctrl+Backspace, Ctrl+U or Escape clear it).
 - No blur behind the panel: a dim layer instead (blurring a live 4K
   wallpaper every frame would cost a GPU pass the lock does not have).
 - The desktop stage (`--stage desktop`) feeds no frames: the still picture
