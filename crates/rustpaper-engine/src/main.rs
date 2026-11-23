@@ -344,6 +344,16 @@ fn main() {
                     }
                 }
             }
+            // the user's pointer over a wallpaper, to the WE window it shows
+            // (a monitor sharing another's window points into that one)
+            for (output, input) in mirrors.take_pointer() {
+                let owner = targets
+                    .iter()
+                    .find(|t| t.output.name == output)
+                    .and_then(|t| t.source.clone())
+                    .unwrap_or(output);
+                p.pointer(&owner, input);
+            }
             let mut freed: Vec<(u64, u64)> = mirrors
                 .take_released()
                 .into_iter()

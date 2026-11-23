@@ -25,7 +25,8 @@
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
 
 use wayland_client::globals::{GlobalListContents, registry_queue_init};
-use wayland_client::protocol::wl_seat::WlSeat;
+use wayland_client::protocol::wl_pointer::{self, WlPointer};
+use wayland_client::protocol::wl_seat::{self, WlSeat};
 use wayland_client::protocol::{
     wl_buffer::{self, WlBuffer},
     wl_compositor::WlCompositor,
@@ -56,6 +57,10 @@ use wayland_protocols::ext::image_copy_capture::v1::client::{
     ext_image_copy_capture_manager_v1::{ExtImageCopyCaptureManagerV1, Options},
     ext_image_copy_capture_session_v1::{self, ExtImageCopyCaptureSessionV1},
 };
+use wayland_protocols::wp::cursor_shape::v1::client::{
+    wp_cursor_shape_device_v1::{Shape, WpCursorShapeDeviceV1},
+    wp_cursor_shape_manager_v1::WpCursorShapeManagerV1,
+};
 use wayland_protocols::wp::linux_dmabuf::zv1::client::{
     zwp_linux_buffer_params_v1::{self, ZwpLinuxBufferParamsV1},
     zwp_linux_dmabuf_feedback_v1::{self, ZwpLinuxDmabufFeedbackV1},
@@ -70,7 +75,7 @@ use wayland_protocols_wlr::layer_shell::v1::client::{
 };
 
 use crate::gbm;
-use crate::stage::{Frame, FramePixels, HostDmabuf};
+use crate::stage::{Frame, FramePixels, HostDmabuf, PointerInput};
 
 /// Buffers per output: one shown, one being captured into, one spare (the
 /// shown one is reusable only after the compositor releases it).
@@ -179,6 +184,17 @@ pub struct Mirrors {
     park: Option<WlBuffer>,
     idle_notifier: Option<ExtIdleNotifierV1>,
     seat: Option<WlSeat>,
+    /// The user's pointer, and the shape it gets over our surfaces. Without
+    /// `cursor_shape` the surfaces take no pointer input: the cursor would
+    /// be undefined over the wallpaper.
+    pointer: Option<WlPointer>,
+    cursor_shape: Option<WpCursorShapeManagerV1>,
+    cursor_device: Option<WpCursorShapeDeviceV1>,
+    /// The mirror the pointer is over.
+    pointer_on: Option<usize>,
+    /// Pointer input over a monitor's wallpaper since the last
+    /// `take_pointer`, for WE's window there (private stage).
+    pointer_events: Vec<(String, PointerInput)>,
     /// The current idle notification and its timeout (seconds).
     idle_watch: Option<(u32, ExtIdleNotificationV1)>,
     /// No input for the timeout (until the next input).
@@ -219,7 +235,13 @@ impl Mirrors {
             next_id: 0,
             park: None,
             idle_notifier: globals.bind(&qh, 1..=1, ()).ok(),
-            seat: globals.bind(&qh, 1..=1, ()).ok(),
+            // v5: pointer frames and axis sources
+            seat: globals.bind(&qh, 1..=5, ()).ok(),
+            pointer: None,
+            cursor_shape: globals.bind(&qh, 1..=1, ()).ok(),
+            cursor_device: None,
+            pointer_on: None,
+            pointer_events: Vec::new(),
             idle_watch: None,
             idle: false,
             screensaver: false,
@@ -282,11 +304,8 @@ impl Mirrors {
         layer.set_anchor(Anchor::Top | Anchor::Bottom | Anchor::Left | Anchor::Right);
         layer.set_exclusive_zone(-1);
         layer.set_size(0, 0);
-        // no input: clicks go to the desktop as before
-        let region = self.compositor.create_region(qh, ());
-        surface.set_input_region(Some(&region));
-        region.destroy();
         let viewport = self.viewporter.get_viewport(&surface, qh, ());
+        self.set_input(qh, &surface, capture);
         // (no buffer yet: the first captured frame is the first real commit)
         surface.commit();
         self.list.push(Mirror {
@@ -517,6 +536,30 @@ impl Mirrors {
         self.idle_watch = Some((secs, n));
     }
 
+    /// Whether the wallpaper of private-stage monitors takes the pointer.
+    fn takes_pointer(&self, capture: bool) -> bool {
+        !capture && self.cursor_shape.is_some()
+    }
+
+    /// The input region of a wallpaper surface on the desktop: the whole
+    /// surface when it forwards the pointer to WE's window (private stage;
+    /// only where no window covers the desktop, as on Windows), else none,
+    /// so clicks go to the desktop as before.
+    fn set_input(&self, qh: &QueueHandle<Self>, surface: &WlSurface, capture: bool) {
+        if self.takes_pointer(capture) {
+            surface.set_input_region(None);
+        } else {
+            let region = self.compositor.create_region(qh, ());
+            surface.set_input_region(Some(&region));
+            region.destroy();
+        }
+    }
+
+    /// Pointer input since the last call: (monitor, input).
+    pub fn take_pointer(&mut self) -> Vec<(String, PointerInput)> {
+        std::mem::take(&mut self.pointer_events)
+    }
+
     /// Raises the wallpaper over every window (screensaver), or puts it
     /// back under them. While raised it takes all input, so the click or key
     /// that ends the screensaver does not reach the window under it.
@@ -538,9 +581,7 @@ impl Mirrors {
                 m.layer.set_layer(Layer::Bottom);
                 m.layer
                     .set_keyboard_interactivity(KeyboardInteractivity::None);
-                let empty = self.compositor.create_region(qh, ());
-                m.surface.set_input_region(Some(&empty));
-                empty.destroy();
+                self.set_input(qh, &m.surface, m.capture);
             }
             m.surface.commit();
         }
@@ -847,7 +888,92 @@ impl Dispatch<ExtIdleNotificationV1, ()> for Mirrors {
 }
 
 delegate_noop!(Mirrors: ignore ExtIdleNotifierV1);
-delegate_noop!(Mirrors: ignore WlSeat);
+delegate_noop!(Mirrors: WpCursorShapeManagerV1);
+delegate_noop!(Mirrors: WpCursorShapeDeviceV1);
+
+impl Dispatch<WlSeat, ()> for Mirrors {
+    fn event(
+        s: &mut Self,
+        seat: &WlSeat,
+        e: wl_seat::Event,
+        _: &(),
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        if let wl_seat::Event::Capabilities {
+            capabilities: WEnum::Value(caps),
+        } = e
+            && caps.contains(wl_seat::Capability::Pointer)
+            && s.pointer.is_none()
+            && let Some(shapes) = &s.cursor_shape
+        {
+            let pointer = seat.get_pointer(qh, ());
+            s.cursor_device = Some(shapes.get_pointer(&pointer, qh, ()));
+            s.pointer = Some(pointer);
+        }
+    }
+}
+
+impl Dispatch<WlPointer, ()> for Mirrors {
+    fn event(
+        s: &mut Self,
+        _: &WlPointer,
+        e: wl_pointer::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let at = |s: &Self, i: usize, x: f64, y: f64| {
+            let (w, h) = s.list[i].logical;
+            PointerInput::Motion {
+                x: x / f64::from(w.max(1)),
+                y: y / f64::from(h.max(1)),
+            }
+        };
+        let input = match e {
+            wl_pointer::Event::Enter {
+                serial,
+                surface,
+                surface_x,
+                surface_y,
+            } => {
+                s.pointer_on = s.list.iter().position(|m| m.surface == surface);
+                let Some(i) = s.pointer_on else { return };
+                if let Some(d) = &s.cursor_device {
+                    d.set_shape(serial, Shape::Default);
+                }
+                at(s, i, surface_x, surface_y)
+            }
+            wl_pointer::Event::Leave { .. } => {
+                let Some(i) = s.pointer_on.take() else { return };
+                let output = s.list[i].output.clone();
+                s.pointer_events.push((output, PointerInput::Leave));
+                return;
+            }
+            wl_pointer::Event::Motion {
+                surface_x,
+                surface_y,
+                ..
+            } => {
+                let Some(i) = s.pointer_on else { return };
+                at(s, i, surface_x, surface_y)
+            }
+            wl_pointer::Event::Button { button, state, .. } => PointerInput::Button {
+                button,
+                pressed: state == WEnum::Value(wl_pointer::ButtonState::Pressed),
+            },
+            wl_pointer::Event::Axis { axis, value, .. } => PointerInput::Axis {
+                vertical: axis == WEnum::Value(wl_pointer::Axis::VerticalScroll),
+                value,
+            },
+            _ => return,
+        };
+        if let Some(i) = s.pointer_on {
+            let output = s.list[i].output.clone();
+            s.pointer_events.push((output, input));
+        }
+    }
+}
 delegate_noop!(Mirrors: WlCompositor);
 delegate_noop!(Mirrors: WlShmPool);
 delegate_noop!(Mirrors: WlRegion);

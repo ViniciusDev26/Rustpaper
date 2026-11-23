@@ -147,9 +147,13 @@ override them).
   plus `rustpaper lock` for your own keybinding). See
   [`docs/LOCKSCREEN.md`](./docs/LOCKSCREEN.md).
 
+Wallpapers that follow the cursor (parallax, eye tracking) or take clicks
+react to the mouse wherever no window covers the desktop, as on Windows.
+
 **Not yet:**
-- cursor interaction (eye tracking, parallax, clicks);
-- per-wallpaper volume (only mute);
+- cursor interaction with a desktop stage (the private stage, the default,
+  has it);
+- per-wallpaper volume (one volume for all);
 - fingerprint unlock on the lock screen (password only).
 
 Workshop JavaScript (SceneScript, web wallpapers) runs inside Wallpaper

@@ -76,7 +76,9 @@ with the measurement or observation that justified it.
   - `launch.rs`: `rustpaper we-launch %command%` (WE's Steam launch option,
     points WE at the private stage) and `rustpaper setup-steam` (writes it).
   - Debugging: `RUSTPAPER_NO_WE=1` runs only the stage and the mirror (test
-    with any X client titled `rustpaper-<output>`).
+    with any X client titled `rustpaper-<output>`);
+    `RUSTPAPER_DEBUG_POINTER=1` logs the pointer input the stage hands WE's
+    windows (leaves, buttons).
   - `proton.rs`: `rustpaper we-proton enable|disable|status`, the opt-in
     for Wine's Wayland driver (GE-Proton as WE's compatibility tool,
     `wine_wayland` in state.json; launch.rs then points WE at the stage's
