@@ -8,11 +8,13 @@
 //! imports them on the user's compositor like the mirror does. Zero copy:
 //! only descriptors and a few numbers cross the socket.
 //!
-//! - The fds of a buffer are sent the first time the client sees its key;
-//!   later frames of the same buffer carry only the key (WE cycles through
-//!   a few buffers).
-//! - The client answers `release` when its compositor released the buffer;
-//!   only then may WE reuse it (the engine also waits for the mirror).
+//! - The fds of a buffer are sent the first time the client sees its key on
+//!   a monitor; later frames of the same buffer carry only the key (WE
+//!   cycles through a few buffers). Per monitor: with shared rendering one
+//!   WE buffer shows on several monitors (main.rs).
+//! - The client answers `release` (key and monitor) when its compositor
+//!   released the buffer; only then may WE reuse it (the engine also waits
+//!   for the mirror).
 //! - `gone`: WE destroyed the buffer; the key may come back for a new one.
 //!
 //! Messages are JSON (`serde_json`); modifiers are split into two u32
@@ -176,18 +178,25 @@ fn recv(sock: RawFd) -> Recv {
 
 // ---- engine side -----------------------------------------------------------
 
-/// Who still uses one of WE's buffers; it goes back to WE when nobody does.
+/// Who still uses one of WE's buffers, as bits: one per monitor's mirror,
+/// one per monitor on the lock screen. It goes back to WE when nobody does.
 pub mod holders {
-    pub const MIRROR: u8 = 1;
-    pub const LOCK: u8 = 2;
+    /// Bit of mirror `i`.
+    pub fn mirror(i: usize) -> u64 {
+        1 << (i % 32)
+    }
+    /// Bit of mirror `i`'s monitor on the lock screen.
+    pub fn lock(i: usize) -> u64 {
+        1 << (32 + i % 32)
+    }
 }
 
 struct Client {
     fd: OwnedFd,
-    /// Keys whose fds this client has.
-    known: HashSet<u64>,
-    /// Keys it holds (sent, not yet released).
-    held: HashSet<u64>,
+    /// (monitor, key) whose fds this client has.
+    known: HashSet<(String, u64)>,
+    /// (monitor, key) it holds (sent, not yet released).
+    held: HashSet<(String, u64)>,
 }
 
 /// The engine's end: one lock client at a time (a new one replaces it).
@@ -255,7 +264,7 @@ impl FeedServer {
     /// Accepts a new client and reads releases. Returns the keys the lock no
     /// longer holds (released, or everything it held when it went away), and
     /// whether a client connected or left.
-    pub fn poll(&mut self) -> (Vec<u64>, bool) {
+    pub fn poll(&mut self) -> (Vec<(String, u64)>, bool) {
         let mut freed = Vec::new();
         let mut changed = false;
         loop {
@@ -297,9 +306,12 @@ impl FeedServer {
                         };
                         if v["t"] == "release"
                             && let Some(key) = v["key"].as_u64()
-                            && c.held.remove(&key)
+                            && let Some(output) = v["output"].as_str()
                         {
-                            freed.push(key);
+                            let k = (output.to_string(), key);
+                            if c.held.remove(&k) {
+                                freed.push(k);
+                            }
                         }
                     }
                     Recv::Empty => break,
@@ -332,7 +344,8 @@ impl FeedServer {
         else {
             return false;
         };
-        let with_fds = !c.known.contains(&frame.key);
+        let k = (frame.output.clone(), frame.key);
+        let with_fds = !c.known.contains(&k);
         let msg = json!({
             "t": "frame",
             "output": frame.output,
@@ -354,17 +367,18 @@ impl FeedServer {
             return false;
         }
         if with_fds {
-            c.known.insert(frame.key);
+            c.known.insert(k.clone());
         }
-        c.held.insert(frame.key);
+        c.held.insert(k);
         true
     }
 
     /// WE destroyed buffer `key`.
     pub fn gone(&mut self, key: u64) {
         if let Some(c) = &mut self.client
-            && c.known.remove(&key)
+            && c.known.iter().any(|(_, k)| *k == key)
         {
+            c.known.retain(|(_, k)| *k != key);
             let msg = json!({"t": "gone", "key": key});
             send(c.fd.as_raw_fd(), msg.to_string().as_bytes(), &[]);
         }
@@ -467,8 +481,8 @@ impl FeedClient {
     }
 
     /// The compositor released the buffer of `key`.
-    pub fn release(&self, key: u64) {
-        let msg = json!({"t": "release", "key": key});
+    pub fn release(&self, output: &str, key: u64) {
+        let msg = json!({"t": "release", "key": key, "output": output});
         send(self.fd.as_raw_fd(), msg.to_string().as_bytes(), &[]);
     }
 }
@@ -544,8 +558,8 @@ mod tests {
         };
         assert!(f.fds.is_empty(), "known buffers come without fds");
 
-        client.release(7);
-        assert_eq!(server.poll().0, vec![7]);
+        client.release("DP-1", 7);
+        assert_eq!(server.poll().0, vec![("DP-1".to_string(), 7)]);
         assert!(server.send(&frame(9)));
         drop(client);
         // (other tests fork: a child may hold the client's fd until its exec)
@@ -559,7 +573,11 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert!(!server.active());
-        assert_eq!(freed, vec![9], "a closed lock frees what it held");
+        assert_eq!(
+            freed,
+            vec![("DP-1".to_string(), 9)],
+            "a closed lock frees what it held"
+        );
         drop(server);
         assert!(!path.exists(), "socket removed");
         let _ = std::fs::remove_dir_all(&dir);

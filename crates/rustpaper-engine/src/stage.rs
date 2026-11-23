@@ -106,6 +106,48 @@ pub struct Frame {
     pub pixels: FramePixels,
 }
 
+impl Frame {
+    /// The same frame for monitor `output` (its own fds), when one WE
+    /// window feeds several monitors.
+    pub fn for_output(&self, output: &str) -> Option<Frame> {
+        let pixels = match &self.pixels {
+            FramePixels::Dmabuf {
+                fourcc,
+                modifier,
+                planes,
+            } => FramePixels::Dmabuf {
+                fourcc: *fourcc,
+                modifier: *modifier,
+                planes: planes
+                    .iter()
+                    .map(|p| {
+                        Some(Plane {
+                            fd: p.fd.try_clone().ok()?,
+                            offset: p.offset,
+                            stride: p.stride,
+                        })
+                    })
+                    .collect::<Option<Vec<_>>>()?,
+            },
+            FramePixels::Shm {
+                format,
+                stride,
+                data,
+            } => FramePixels::Shm {
+                format: *format,
+                stride: *stride,
+                data: data.clone(),
+            },
+        };
+        Some(Frame {
+            output: output.to_string(),
+            key: self.key,
+            size: self.size,
+            pixels,
+        })
+    }
+}
+
 pub enum StageEvent {
     Frame(Frame),
     /// The client buffer `key` was destroyed: drop anything cached for it.

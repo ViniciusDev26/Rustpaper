@@ -80,8 +80,11 @@ struct Target {
     attempts: u32,
     /// Properties/mute were sent for the current request.
     configured: bool,
-    /// The wallpaper this window should show now (its mode's choice).
+    /// The wallpaper this monitor should show now (its mode's choice).
     want: Choice,
+    /// The monitor whose WE window feeds this one (shared rendering), or
+    /// None when it shows its own window.
+    source: Option<String>,
 }
 
 fn fail(msg: impl std::fmt::Display) -> ! {
@@ -210,17 +213,15 @@ fn main() {
         .into_iter()
         .filter_map(|output| {
             stage.prepare(&output);
-            let mut t = Target {
+            let t = Target {
                 title: desktop::window_title(&output.name),
                 want: cfg.choice(&output.name, Mode::Desktop).clone(),
                 output,
                 opened: Instant::now(),
                 attempts: 0,
                 configured: false,
+                source: None,
             };
-            if we_on {
-                open_window(&mut t);
-            }
             mirrors
                 .add(&qh, &t.output.name, &t.title, private_stage.is_none())
                 .map_err(|e| eprintln!("{}: {e}", t.output.name))
@@ -228,6 +229,11 @@ fn main() {
             Some(t)
         })
         .collect();
+    // one WE window per distinct wallpaper (the private stage can show a
+    // window's buffers on several monitors; desktop stages capture each
+    // window for its own monitor)
+    let share = private_stage.is_some();
+    assign(&cfg, Mode::Desktop, &mut targets, share, true, we_on);
 
     // the lock screen shows the private stage's frames too (lock/feed.rs)
     let mut feed = private_stage
@@ -235,7 +241,7 @@ fn main() {
         .and_then(|_| lock::feed::FeedServer::bind());
     // who still uses each of WE's buffers (lock::feed::holders); a buffer
     // goes back to WE when neither the mirror nor the lock does
-    let mut holders: HashMap<u64, u8> = HashMap::new();
+    let mut holders: HashMap<u64, u64> = HashMap::new();
 
     // the screensaver: idle for its timeout (service mode hands Omarchy's
     // screensaver over to it, lock/adapter.rs)
@@ -259,20 +265,45 @@ fn main() {
             break;
         }
         if let Some(p) = &private_stage {
-            use lock::feed::holders::{LOCK, MIRROR};
+            use lock::feed::holders;
             // WE's frames to the monitors (and the lock screen); released
             // buffers back to WE
             for event in p.drain() {
                 match event {
                     StageEvent::Frame(frame) => {
-                        if matches!(frame.pixels, stage::FramePixels::Dmabuf { .. }) {
-                            let mut who = MIRROR;
-                            if feed.as_mut().is_some_and(|f| f.send(&frame)) {
-                                who |= LOCK;
+                        let dmabuf = matches!(frame.pixels, stage::FramePixels::Dmabuf { .. });
+                        // the monitors this window feeds: its own, and those
+                        // sharing it
+                        let dests: Vec<usize> = targets
+                            .iter()
+                            .filter(|t| match &t.source {
+                                None => t.output.name == frame.output,
+                                Some(src) => *src == frame.output,
+                            })
+                            .filter_map(|t| mirrors.index_of(&t.output.name))
+                            .collect();
+                        if dests.is_empty() {
+                            // a window no monitor shows now (one a shared
+                            // monitor used before): straight back to WE
+                            if dmabuf {
+                                p.release(frame.key);
                             }
-                            *holders.entry(frame.key).or_default() |= who;
+                            continue;
                         }
-                        mirrors.show(&qh, frame);
+                        for i in dests {
+                            let name = mirrors.list[i].output.clone();
+                            let Some(f) = frame.for_output(&name) else {
+                                continue;
+                            };
+                            if dmabuf {
+                                let mut who = holders::mirror(i);
+                                if feed.as_mut().is_some_and(|fd| fd.send(&f)) {
+                                    who |= holders::lock(i);
+                                }
+                                *holders.entry(frame.key).or_default() |= who;
+                            }
+                            mirrors.show(&qh, f);
+                        }
                     }
                     StageEvent::BufferGone(key) => {
                         mirrors.forget(key);
@@ -282,14 +313,17 @@ fn main() {
                     }
                 }
             }
-            let mut freed: Vec<(u64, u8)> = mirrors
+            let mut freed: Vec<(u64, u64)> = mirrors
                 .take_released()
                 .into_iter()
-                .map(|k| (k, MIRROR))
+                .map(|(i, k)| (k, holders::mirror(i)))
                 .collect();
             if let Some(f) = &mut feed {
                 let (keys, changed) = f.poll();
-                freed.extend(keys.into_iter().map(|k| (k, LOCK)));
+                freed.extend(
+                    keys.into_iter()
+                        .filter_map(|(out, k)| Some((k, holders::lock(mirrors.index_of(&out)?)))),
+                );
                 if changed {
                     mirrors.set_locked(&qh, f.active());
                 }
@@ -315,7 +349,7 @@ fn main() {
                         lock::adapter::detect().hand_over_screensaver(new.screensaver.enabled);
                     }
                     mirrors.set_idle_timeout(&qh, saver_timeout(&new));
-                    reload(stage, &cfg, &new, mode, &mut targets, we_on);
+                    reload(stage, &cfg, &new, mode, &mut targets, we_on, share);
                     cfg = new;
                 }
                 Err(e) => eprintln!("reload: {e}"),
@@ -336,9 +370,7 @@ fn main() {
             eprintln!("mode: {now_mode:?}");
             mode = now_mode;
             mirrors.set_screensaver(&qh, mode == Mode::Screensaver);
-            if we_on {
-                retarget(&cfg, mode, &mut targets);
-            }
+            assign(&cfg, mode, &mut targets, share, false, we_on);
             // re-decide pausing now (WE must play while locked or idle)
             last_tick = Instant::now() - TICK;
         }
@@ -394,6 +426,7 @@ fn reload(
     mode: Mode,
     targets: &mut [Target],
     we_on: bool,
+    share: bool,
 ) {
     if !we_on {
         return;
@@ -405,29 +438,96 @@ fn reload(
         }
         for t in targets.iter_mut() {
             t.attempts = 0;
-            t.want = new.choice(&t.output.name, mode).clone();
-            open_window(t);
         }
+        assign(new, mode, targets, share, true, true);
         return;
     }
-    retarget(new, mode, targets);
+    assign(new, mode, targets, share, false, true);
     if new.mute != old.mute {
         we::control(&["-control", if new.mute { "mute" } else { "unmute" }]);
     }
 }
 
-/// Loads into each window what its monitor should show in `mode`, where
-/// that changed (a new wallpaper or new property values). Windows already
-/// showing the right one are left alone: no reload, no flash.
-fn retarget(cfg: &Config, mode: Mode, targets: &mut [Target]) {
-    for t in targets.iter_mut() {
-        let want = cfg.choice(&t.output.name, mode);
-        if *want != t.want {
+/// Decides what each monitor shows in `mode` and which WE windows render
+/// it: monitors showing the same wallpaper at the same aspect ratio share
+/// the window of the largest one (`share_plan`), so WE renders it once.
+/// Windows whose wallpaper changed (or that start owning one) are loaded;
+/// the rest are left alone: no reload, no flash. `force` loads every owner
+/// (start, WE restarted). Without WE (`RUSTPAPER_NO_WE`) nothing is
+/// loaded, but the sharing still applies (to test it with a stand-in).
+///
+/// A window that stops being used (its monitor now shares another's) is
+/// not closed: closing WE's windows degrades it (see the top). It keeps
+/// rendering what it had until WE restarts; its frames are dropped.
+fn assign(cfg: &Config, mode: Mode, targets: &mut [Target], share: bool, force: bool, we_on: bool) {
+    let wants: Vec<Choice> = targets
+        .iter()
+        .map(|t| cfg.choice(&t.output.name, mode).clone())
+        .collect();
+    let plan = if share {
+        share_plan(
+            &targets
+                .iter()
+                .zip(&wants)
+                .map(|(t, w)| (t.output.size, w))
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        vec![None; targets.len()]
+    };
+    let names: Vec<String> = targets.iter().map(|t| t.output.name.clone()).collect();
+    for ((t, want), leader) in targets.iter_mut().zip(wants).zip(plan) {
+        let source = leader.map(|l| names[l].clone());
+        if let Some(src) = &source {
+            if t.source.as_ref() != Some(src) {
+                eprintln!(
+                    "{}: shows {src}'s window ({})",
+                    t.output.name,
+                    want.project.display()
+                );
+            }
+            t.source = source;
+            t.want = want;
+            continue;
+        }
+        let was_shared = t.source.take().is_some();
+        if force || was_shared || want != t.want {
             eprintln!("{}: {}", t.output.name, want.project.display());
-            t.want = want.clone();
-            open_window(t);
+            t.want = want;
+            if we_on {
+                open_window(t);
+            }
         }
     }
+}
+
+/// For monitors (pixel size, wallpaper), the index of the monitor whose
+/// window each one shows, None for those that render their own: equal
+/// wallpapers with aspect ratios within 1% share the largest monitor's
+/// window (scaled down by the user's compositor, no cropping or stretching).
+fn share_plan(monitors: &[((u32, u32), &Choice)]) -> Vec<Option<usize>> {
+    let aspect = |(w, h): (u32, u32)| w as f64 / h.max(1) as f64;
+    let mut plan = vec![None; monitors.len()];
+    for i in 0..monitors.len() {
+        let (size, want) = monitors[i];
+        // the largest monitor of i's group (lowest index on ties)
+        let leader = (0..monitors.len())
+            .filter(|&j| {
+                let (s, w) = monitors[j];
+                w == want && (aspect(s) / aspect(size) - 1.0).abs() < 0.01
+            })
+            .max_by_key(|&j| {
+                (
+                    monitors[j].0.0 as u64 * monitors[j].0.1 as u64,
+                    std::cmp::Reverse(j),
+                )
+            })
+            .unwrap_or(i);
+        if leader != i {
+            plan[i] = Some(leader);
+        }
+    }
+    plan
 }
 
 /// Another `rustpaper` of this user is running (the selector's handover
@@ -522,6 +622,10 @@ fn watchdog(
     mode: Mode,
 ) {
     for t in targets.iter_mut() {
+        if t.source.is_some() {
+            // shows another monitor's window: nothing to keep alive here
+            continue;
+        }
         if !stage.tend(&t.output) {
             if t.opened.elapsed() > OPEN_TIMEOUT {
                 // WE dropped the window (crash, restart) or ignored the request
@@ -581,7 +685,7 @@ fn watchdog(
         we::control(&["-control", if all { "pause" } else { "play" }]);
     }
     for (i, t) in targets.iter().enumerate() {
-        if !mirrors.capturing(i) && t.opened.elapsed() > OPEN_TIMEOUT {
+        if t.source.is_none() && !mirrors.capturing(i) && t.opened.elapsed() > OPEN_TIMEOUT {
             eprintln!(
                 "{}: window {} is not being captured",
                 t.output.name, t.title
@@ -603,6 +707,40 @@ fn should_pause(p: &Playback, c: &Coverage, on_battery: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn equal_wallpapers_at_one_aspect_share_the_largest_window() {
+        let c = |p: &str| Choice {
+            project: std::path::PathBuf::from(p),
+            properties: Default::default(),
+        };
+        let (a, b) = (c("a"), c("b"));
+        // 4K and 1080p (16:9) with the same wallpaper: the 1080p shows the 4K
+        assert_eq!(
+            share_plan(&[((3840, 2160), &a), ((1920, 1080), &a)]),
+            vec![None, Some(0)]
+        );
+        // the smaller one first: still the 4K renders
+        assert_eq!(
+            share_plan(&[((1920, 1080), &a), ((3840, 2160), &a)]),
+            vec![Some(1), None]
+        );
+        // different wallpapers: each its own
+        assert_eq!(
+            share_plan(&[((3840, 2160), &a), ((1920, 1080), &b)]),
+            vec![None, None]
+        );
+        // 16:9 and 21:9: no cropping or stretching, each its own
+        assert_eq!(
+            share_plan(&[((3840, 2160), &a), ((3440, 1440), &a)]),
+            vec![None, None]
+        );
+        // equal sizes: the first renders, the others share it
+        assert_eq!(
+            share_plan(&[((1920, 1080), &a), ((1920, 1080), &a), ((1920, 1080), &a)]),
+            vec![None, Some(0), Some(0)]
+        );
+    }
 
     #[test]
     fn playback_settings_decide_pausing() {

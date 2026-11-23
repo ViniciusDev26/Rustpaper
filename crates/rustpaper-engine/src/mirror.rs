@@ -165,9 +165,10 @@ pub struct Mirrors {
     pub host_dmabuf: HostDmabuf,
     /// Format table of the feedback being received.
     feedback_table: Vec<(u32, u64)>,
-    /// Stage buffer keys the compositor released since the last call to
-    /// `take_released`.
-    released: Vec<u64>,
+    /// (mirror index, stage buffer key) the compositor released since the
+    /// last call to `take_released`. Per mirror: one WE buffer can be on
+    /// several monitors (shared rendering, main.rs).
+    released: Vec<(usize, u64)>,
     gbm: Option<gbm::Device>,
     gbm_broken: bool,
     /// The compositor's outputs: object, name, current mode in pixels.
@@ -317,13 +318,14 @@ impl Mirrors {
     /// copied into one of our buffers. Paused monitors drop the frame (the
     /// buffer goes straight back to WE).
     pub fn show(&mut self, qh: &QueueHandle<Self>, frame: Frame) {
+        let Some(i) = self.list.iter().position(|m| m.output == frame.output) else {
+            // (main.rs only sends frames to monitors it has a mirror for)
+            return;
+        };
         let release_now = |s: &mut Self, frame: &Frame| {
             if matches!(frame.pixels, FramePixels::Dmabuf { .. }) {
-                s.released.push(frame.key);
+                s.released.push((i, frame.key));
             }
-        };
-        let Some(i) = self.list.iter().position(|m| m.output == frame.output) else {
-            return release_now(self, &frame);
         };
         if self.list[i].paused || self.list[i].locked || !self.list[i].configured {
             return release_now(self, &frame);
@@ -344,7 +346,7 @@ impl Mirrors {
                     Some(id) => id,
                     None => {
                         let Some(dmabuf) = self.dmabuf.clone() else {
-                            return self.released.push(frame.key);
+                            return self.released.push((i, frame.key));
                         };
                         let params = dmabuf.create_params(qh, ());
                         for (n, p) in planes.iter().enumerate() {
@@ -561,9 +563,14 @@ impl Mirrors {
         }
     }
 
-    /// Stage buffer keys the compositor released (WE may reuse them).
-    pub fn take_released(&mut self) -> Vec<u64> {
+    /// (mirror index, stage buffer key) the compositor released.
+    pub fn take_released(&mut self) -> Vec<(usize, u64)> {
         std::mem::take(&mut self.released)
+    }
+
+    /// The index of `output`'s mirror.
+    pub fn index_of(&self, output: &str) -> Option<usize> {
+        self.list.iter().position(|m| m.output == output)
     }
 
     /// Whether the window of mirror `i` is being captured.
@@ -902,7 +909,7 @@ impl Dispatch<WlBuffer, (usize, u64)> for Mirrors {
                 let e = &mut m.external[pos];
                 e.on_screen = false;
                 if let Some(key) = e.key {
-                    s.released.push(key);
+                    s.released.push((i, key));
                 }
                 let m = &mut s.list[i];
                 if m.external[pos].gone {
