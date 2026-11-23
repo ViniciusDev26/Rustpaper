@@ -214,9 +214,10 @@ Built from `general.properties` of project.json, in WE's `order`:
   --json`; the toast shows what the engine says (on desktops without an
   Omarchy-like setup, what to point at `rustpaper lock`).
   docs/LOCKSCREEN.md has the rest.
-- **Volume** (header slider, 0..100, default 100): 0 mutes WE and anything
-  else unmutes it, because Wallpaper Engine has no volume command (WE's own
-  volume setting applies). Applied on release of the slider.
+- **Volume** (header slider, 0..100, default 100): mpv plays at it and the
+  engine sets it on Wallpaper Engine's audio streams in the sound server
+  (WE has no volume command, docs/ENGINE.md); 0 mutes. Applied on release
+  of the slider.
 
 ## Performance tab
 

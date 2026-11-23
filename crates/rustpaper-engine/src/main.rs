@@ -29,6 +29,7 @@
 //!   CPU). WE is started only when some monitor needs it, and paused when
 //!   none does.
 
+mod audio;
 mod config;
 mod desktop;
 mod gbm;
@@ -282,6 +283,7 @@ fn main() {
     let mut mode = Mode::Desktop;
 
     let mut we_paused = false;
+    let mut we_audio = audio::WeAudio::default();
     let mut last_tick = Instant::now() - TICK;
     let mut stats = Instant::now();
     let fd = conn.backend().poll_fd().as_raw_fd();
@@ -426,6 +428,7 @@ fn main() {
                 &mut targets,
                 &mut mirrors,
                 &mut we_paused,
+                &mut we_audio,
                 mode,
                 we_on,
             );
@@ -493,11 +496,9 @@ fn reload(
         assign(new, mode, targets, ctx, true);
         return;
     }
-    // mpv takes the new mute/volume here too (Player::update)
+    // mpv takes the new mute/volume here too (Player::update); WE's streams
+    // on the next tick (audio.rs)
     assign(new, mode, targets, ctx, force);
-    if ctx.we_on && new.mute != old.mute {
-        we::control(&["-control", if new.mute { "mute" } else { "unmute" }]);
-    }
 }
 
 /// What [`assign`] may use.
@@ -786,6 +787,7 @@ fn watchdog(
     targets: &mut [Target],
     mirrors: &mut Mirrors,
     we_paused: &mut bool,
+    we_audio: &mut audio::WeAudio,
     mode: Mode,
     we_on: bool,
 ) {
@@ -834,7 +836,6 @@ fn watchdog(
                     t.output.name
                 );
             }
-            we::control(&["-control", if cfg.mute { "mute" } else { "unmute" }]);
         }
     }
     // the user's Playback settings, per monitor; WE itself pauses when
@@ -897,6 +898,12 @@ fn watchdog(
     if we_on && all != *we_paused {
         *we_paused = all;
         we::control(&["-control", if all { "pause" } else { "play" }]);
+    }
+    // the pause above leaves `-playInWindow` windows playing (audio.rs): a
+    // WE window no monitor shows (left behind by a video in mpv) would still
+    // be heard, so WE's streams are muted then too
+    if we_on {
+        we_audio.apply(cfg.volume, cfg.mute || all);
     }
     if !we_on {
         return;
