@@ -173,7 +173,8 @@ Built from `general.properties` of project.json, in WE's `order`:
 - `~/.config/rustpaper/state.json` (`rustpaper_core::state`): the
   wallpaper of each role (`last_id` = the desktop for every monitor,
   `monitors`, `lock_id`, `screensaver`), volume, "Theme from wallpaper", the Performance tab's quality
-  settings and Playback rules, and `stage` (`auto`, `desktop` or `private`;
+  settings and Playback rules, `video_player` (`mpv` or `we`), and `stage`
+  (`auto`, `desktop` or `private`;
   no UI yet, docs/ENGINE.md). The selector writes it; the engine
   (`rustpaper --service`) reads it and re-reads it on reload. The panel
   reopens the last wallpaper at startup. Unknown fields of older files
@@ -250,6 +251,13 @@ UI code.
   forced to "run" (every wallpaper window is a fullscreen app to WE).
   Defaults: pause under fullscreen windows and when the display sleeps, as
   WE does.
+- **Video wallpapers.** "Play videos with": mpv (hardware decoding, the
+  default) or Wallpaper Engine (`state.json` `video_player`,
+  `set_video_player`). WE decodes videos on the CPU under Proton (22.7% of
+  a core for a 1080p24 video, mpv 1.9%: docs/ENGINE.md, "Video wallpapers
+  in mpv"). The hint says when mpv is not installed (`mpv_installed`, from
+  PATH); without it, or without the private stage, WE plays them anyway.
+  Applied with a reload, in place.
 
 `RUSTPAPER_SELECTOR_TAB=library|store|performance` opens the selector on a
 tab (screenshots, launcher shortcuts).
@@ -310,6 +318,7 @@ values), `save_properties(id, values)`, `wallpaper_colors(id)`,
 `get_settings`, `set_autostart(enabled)`, `set_volume(volume)`,
 `set_animated_lock(enabled)`,
 `get_performance`, `set_performance(values)`, `set_playback(playback)`,
+`set_video_player(player)`,
 `workshop_query(query)`, `workshop_subscribe(id)`, `workshop_unsubscribe(id)`,
 `workshop_status(ids)`, `workshop_subscriptions()`, `get_theme`,
 `theme_from_wallpaper(id)`, `set_wallpaper_theme(enabled)`, `desktop_info`.
