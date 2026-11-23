@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/ViniciusDev26/Rustpaper/compare/v0.8.0...v0.9.0) (2026-11-23)
+
+
+### Features
+
+* **lock:** forward the pointer over the lock screen's wallpaper ([#51](https://github.com/ViniciusDev26/Rustpaper/issues/51)) ([38befca](https://github.com/ViniciusDev26/Rustpaper/commit/38befca2e50fa17e338a4f7cbbf04385a85105ac))
+
 ## [0.8.0](https://github.com/ViniciusDev26/Rustpaper/compare/v0.7.1...v0.8.0) (2026-11-23)
 
 
