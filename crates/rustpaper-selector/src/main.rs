@@ -406,6 +406,8 @@ struct SettingsView {
     autostart: bool,
     volume: u8,
     wallpaper_theme: bool,
+    /// The desktop's lock triggers run Rustpaper's animated lock screen.
+    animated_lock: bool,
 }
 
 #[tauri::command]
@@ -416,7 +418,41 @@ fn get_settings() -> SettingsView {
         autostart: service::is_enabled(),
         volume: st.volume,
         wallpaper_theme: st.wallpaper_theme,
+        animated_lock: lock_status().unwrap_or(false),
     }
+}
+
+/// `rustpaper lock-setup status --json`: the engine's lock adapter knows
+/// whether the desktop's lock triggers point at it.
+fn lock_status() -> Option<bool> {
+    let out = std::process::Command::new(engine_path())
+        .args(["lock-setup", "status", "--json"])
+        .output()
+        .ok()?;
+    let v: Value = serde_json::from_slice(&out.stdout).ok()?;
+    v["enabled"].as_bool()
+}
+
+/// "Animated lock screen": `rustpaper lock-setup enable|disable` routes the
+/// desktop's lock triggers (keybinding, idle, suspend; per desktop, see the
+/// engine's lock adapters) to Rustpaper's lock, or gives them back. Returns
+/// what the engine says to tell the user.
+#[tauri::command]
+async fn set_animated_lock(enabled: bool) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let out = std::process::Command::new(engine_path())
+            .args(["lock-setup", if enabled { "enable" } else { "disable" }])
+            .output()
+            .map_err(|e| format!("rustpaper lock-setup: {e}"))?;
+        let text = |b: &[u8]| String::from_utf8_lossy(b).trim().to_string();
+        if out.status.success() {
+            Ok(text(&out.stdout))
+        } else {
+            Err(text(&out.stderr))
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// "Start on login": enables/disables the engine's systemd user service.
@@ -601,6 +637,7 @@ fn main() {
             get_theme,
             theme_from_wallpaper,
             set_wallpaper_theme,
+            set_animated_lock,
             desktop_info
         ])
         // Closing the selector leaves the wallpaper running: systemd runs the
