@@ -10,7 +10,7 @@ members = ["crates/rustpaper-core", "crates/rustpaper-engine", "crates/rustpaper
 # One version for every crate (and the selector's tauri.conf.json), bumped by
 # release-please from Conventional Commits (docs/RELEASING.md).
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/ViniciusDev26/Rustpaper"
