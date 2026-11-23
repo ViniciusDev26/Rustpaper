@@ -3,7 +3,7 @@
 # Built from the release tag's source. pkgver and sha256sums are updated by CI
 # (.github/workflows/release.yml).
 pkgname=rustpaper
-pkgver=0.8.0 # x-release-please-version
+pkgver=0.9.0 # x-release-please-version
 pkgrel=1
 pkgdesc="Wallpaper Engine wallpapers on Wayland: the real WE under Proton, mirrored onto the desktop (+ selector)"
 arch=('x86_64')
