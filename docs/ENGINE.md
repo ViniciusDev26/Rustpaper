@@ -132,8 +132,24 @@ restarts it so Steam relaunches it onto the stage.
 
 Not yet: explicit sync (`wp_linux_drm_syncobj`) is not offered. XWayland
 then uses implicit sync, which showed no corruption on the NVIDIA driver in
-the tests. Cursor injection into our XWayland (eye tracking, parallax) is
-now possible, but not done yet.
+the tests.
+
+**Pointer.** WE's wallpapers follow the cursor (parallax, eye tracking)
+and take clicks. With the private stage the mirror's layer surfaces take
+the pointer (their whole input region) and send its position, as a
+fraction of the monitor, and its buttons and scrolls to the stage
+(`PrivateStage::pointer`). The stage's `wl_seat` pointer delivers them to
+the surface of WE's window on that monitor: XWayland turns them into the X
+pointer WE reads, and Wine's Wayland driver reads them directly. A monitor
+sharing another's window points into that window; one showing mpv's video
+sends nothing to WE. The wallpaper gets the pointer only where no window
+covers the desktop, as on Windows. Over it the cursor is the desktop's
+default (`cursor-shape-v1`; a compositor without it keeps the old empty
+input region, since the cursor would be undefined there). Verified on
+Hyprland with the Wayland driver: 十二时辰-SYKM 3496849678's sundial
+followed the mouse, and the clicks reached `rustpaper-HDMI-A-1`
+(2026-11-23). `RUSTPAPER_DEBUG_POINTER=1` logs the stage's leaves and
+buttons. Desktop stages keep the old behaviour (no input).
 
 **Stopping WE cleanly** (`we::restart`). Killing only `wallpaper64.exe`
 left Wine's helpers (`wineserver`, `winedevice.exe`, ...) and the embedded
@@ -473,11 +489,11 @@ on DP-1 (1920x1080), 20 s averages:
 
 ## Known gaps
 
-- **Cursor.** WE reads the X pointer, which never moves over a layer
-  surface, so eye-tracking and parallax wallpapers do not react and clicks
-  do nothing. The private stage makes this solvable: its XWayland is ours,
-  so the engine can feed it pointer motion (a `wl_seat` in `stage.rs`) from
-  the cursor position the desktop adapter reports. Not done yet.
+- **Pointer with desktop stages**: WE's window sits in the user's
+  compositor, which never moves its pointer there, so cursor-following
+  wallpapers do not react (the private stage forwards it, see "Pointer").
+- **No keyboard input** reaches WE's windows (WE's wallpapers rarely use
+  it).
 - **Explicit sync** (`wp_linux_drm_syncobj`) is not offered to the stage's
   XWayland; implicit sync showed no corruption on NVIDIA so far.
 - **Desktop stages never pause WE** (no SIGSTOP there, see "WE only when

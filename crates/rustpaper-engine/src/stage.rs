@@ -47,6 +47,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use smithay::backend::allocator::{Buffer as _, Format, Fourcc, Modifier};
+use smithay::backend::input::{Axis, AxisSource, ButtonState};
+use smithay::input::pointer::{AxisFrame, ButtonEvent, MotionEvent, PointerHandle};
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::output::{Mode, Output as WlOutputState, PhysicalProperties, Subpixel};
 use smithay::reexports::calloop::channel::{self, Channel, Sender};
@@ -57,7 +59,7 @@ use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_shm;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Client, Display, DisplayHandle, Resource};
-use smithay::utils::{Logical, Rectangle};
+use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER};
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{
     BufferAssignment, CompositorClientState, CompositorHandler, CompositorState, SurfaceAttributes,
@@ -194,6 +196,37 @@ impl Frame {
     }
 }
 
+/// The user's pointer over a monitor's wallpaper (the mirror's layer
+/// surface), for the WE window that monitor shows. Positions are fractions
+/// of the monitor (0..1), so a window shared by several monitors gets the
+/// right spot from each.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PointerInput {
+    Motion {
+        x: f64,
+        y: f64,
+    },
+    /// Linux button code (`BTN_LEFT`...).
+    Button {
+        button: u32,
+        pressed: bool,
+    },
+    /// Scroll: vertical or not, in surface units.
+    Axis {
+        vertical: bool,
+        value: f64,
+    },
+    Leave,
+}
+
+/// What the main thread sends the stage thread.
+enum ToStage {
+    /// The user's compositor released buffer `key`: WE may reuse it.
+    Release(u64),
+    /// Pointer input over monitor `output`.
+    Pointer(String, PointerInput),
+}
+
 pub enum StageEvent {
     Frame(Frame),
     /// The client buffer `key` was destroyed: drop anything cached for it.
@@ -208,7 +241,7 @@ pub struct PrivateStage {
     events: mpsc::Receiver<StageEvent>,
     /// Readable when `events` has something (the main loop polls it).
     notify: OwnedFd,
-    release: Sender<u64>,
+    release: Sender<ToStage>,
     /// Titles of the mapped wallpaper windows (WE's and mpv's).
     windows: Arc<Mutex<HashSet<String>>>,
     feeds: Feeds,
@@ -219,7 +252,7 @@ impl PrivateStage {
     /// XWayland is ready.
     pub fn start(outputs: &[Output], host: HostDmabuf) -> Result<Self, String> {
         let (tx, events) = mpsc::channel();
-        let (release, release_rx) = channel::channel::<u64>();
+        let (release, release_rx) = channel::channel::<ToStage>();
         let (notify, wake) = pipe().map_err(|e| format!("pipe: {e}"))?;
         let windows = Arc::new(Mutex::new(HashSet::new()));
         let feeds: Feeds = Arc::default();
@@ -304,7 +337,15 @@ impl PrivateStage {
 
     /// The user's compositor released the buffer `key`: WE may reuse it.
     pub fn release(&self, key: u64) {
-        let _ = self.release.send(key);
+        let _ = self.release.send(ToStage::Release(key));
+    }
+
+    /// The user's pointer over monitor `output`'s wallpaper: WE's window
+    /// there gets it (not mpv's: videos take no input).
+    pub fn pointer(&self, output: &str, input: PointerInput) {
+        let _ = self
+            .release
+            .send(ToStage::Pointer(output.to_string(), input));
     }
 }
 
@@ -421,6 +462,7 @@ struct State {
     _viewporter: ViewporterState,
     seat_state: SeatState<State>,
     _seat: Seat<State>,
+    pointer: PointerHandle<State>,
     /// Wine's Wayland windows (xdg_toplevel).
     toplevels: Vec<ToplevelSurface>,
     /// Toplevels already told to cover their monitor.
@@ -446,7 +488,7 @@ fn run(
     host: HostDmabuf,
     tx: mpsc::Sender<StageEvent>,
     wake: std::fs::File,
-    release_rx: Channel<u64>,
+    release_rx: Channel<ToStage>,
     windows: Arc<Mutex<HashSet<String>>>,
     feeds: Feeds,
     ready: mpsc::Sender<Result<(String, String), String>>,
@@ -509,8 +551,10 @@ fn run(
     };
 
     let mut seat_state = SeatState::new();
-    // a seat without devices: Wine expects one, the wallpaper takes no input
-    let seat = seat_state.new_wl_seat(&dh, "seat0");
+    // Wine expects a seat; its pointer carries the user's pointer over the
+    // wallpaper (mirror.rs) to WE's windows
+    let mut seat = seat_state.new_wl_seat(&dh, "seat0");
+    let pointer = seat.add_pointer();
     let mut state = State {
         handle: event_loop.handle(),
         dh: dh.clone(),
@@ -525,6 +569,7 @@ fn run(
         _viewporter: ViewporterState::new::<State>(&dh),
         seat_state,
         _seat: seat,
+        pointer,
         toplevels: Vec::new(),
         placed: HashSet::new(),
         seen: HashSet::new(),
@@ -581,12 +626,16 @@ fn run(
         )
         .map_err(|e| e.to_string())?;
     handle
-        .insert_source(release_rx, |event, _, state| {
-            if let channel::Event::Msg(key) = event
-                && let Some(buf) = state.held.remove(&key)
-            {
-                buf.release();
+        .insert_source(release_rx, |event, _, state| match event {
+            channel::Event::Msg(ToStage::Release(key)) => {
+                if let Some(buf) = state.held.remove(&key) {
+                    buf.release();
+                }
             }
+            channel::Event::Msg(ToStage::Pointer(output, input)) => {
+                state.pointer_input(&output, input);
+            }
+            channel::Event::Closed => {}
         })
         .map_err(|e| e.to_string())?;
 
@@ -682,6 +731,107 @@ impl State {
                 .filter(|t| self.output_for_title(t).is_some()),
         );
         *self.windows.lock().unwrap() = titles;
+    }
+
+    /// The user's pointer over monitor `output`: to the surface of WE's
+    /// window there (XWayland turns it into the X pointer WE reads; Wine's
+    /// Wayland driver reads it directly), at the same fraction of it.
+    fn pointer_input(&mut self, output: &str, input: PointerInput) {
+        let title = Feed::We.title(output);
+        let Some((_, rect)) = self.layout.iter().find(|(n, _)| n == output).cloned() else {
+            return;
+        };
+        let surface = if self.is_shown(output, &title) {
+            self.surfaces
+                .iter()
+                .find(|w| w.is_mapped() && w.title() == title)
+                .and_then(|w| w.wl_surface())
+                .or_else(|| {
+                    self.toplevels
+                        .iter()
+                        .find(|t| toplevel_title(t.wl_surface()).as_deref() == Some(title.as_str()))
+                        .map(|t| t.wl_surface().clone())
+                })
+        } else {
+            None
+        };
+        if std::env::var_os("RUSTPAPER_DEBUG_POINTER").is_some()
+            && !matches!(input, PointerInput::Motion { .. })
+        {
+            eprintln!(
+                "stage: pointer {input:?} on {output} -> {}",
+                if surface.is_some() {
+                    title.as_str()
+                } else {
+                    "no WE window"
+                }
+            );
+        }
+        let pointer = self.pointer.clone();
+        let serial = SERIAL_COUNTER.next_serial();
+        let time = self.started.elapsed().as_millis() as u32;
+        let origin = rect.loc.to_f64();
+        match input {
+            PointerInput::Motion { x, y } => {
+                let location = origin
+                    + Point::from((
+                        x.clamp(0.0, 1.0) * f64::from(rect.size.w),
+                        y.clamp(0.0, 1.0) * f64::from(rect.size.h),
+                    ));
+                // no WE window shown there (mpv's video, or none yet): the
+                // pointer leaves WE's
+                let focus = surface.map(|s| (s, origin));
+                pointer.motion(
+                    self,
+                    focus,
+                    &MotionEvent {
+                        location,
+                        serial,
+                        time,
+                    },
+                );
+            }
+            PointerInput::Leave => {
+                let location = pointer.current_location();
+                pointer.motion(
+                    self,
+                    None,
+                    &MotionEvent {
+                        location,
+                        serial,
+                        time,
+                    },
+                );
+            }
+            PointerInput::Button { button, pressed } => {
+                let state = if pressed {
+                    ButtonState::Pressed
+                } else {
+                    ButtonState::Released
+                };
+                pointer.button(
+                    self,
+                    &ButtonEvent {
+                        serial,
+                        time,
+                        button,
+                        state,
+                    },
+                );
+            }
+            PointerInput::Axis { vertical, value } => {
+                let axis = if vertical {
+                    Axis::Vertical
+                } else {
+                    Axis::Horizontal
+                };
+                let frame = AxisFrame::new(time)
+                    .source(AxisSource::Wheel)
+                    .value(axis, value);
+                pointer.axis(self, frame);
+            }
+        }
+        pointer.frame(self);
     }
 
     /// The monitor of a wallpaper window's surface, and the window's title.
