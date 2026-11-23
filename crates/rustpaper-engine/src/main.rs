@@ -379,7 +379,8 @@ fn main() {
     // windows is unreliable, see the top). The last engine out stops WE's
     // wallpapers so they cost nothing while no wallpaper is shown.
     if we_on && !other_engine_running() {
-        we::control(&["-control", "stop"]);
+        // within systemd's stop timeout (we.rs control_within)
+        we::control_within(&["-control", "stop"], Duration::from_secs(8));
     }
 }
 

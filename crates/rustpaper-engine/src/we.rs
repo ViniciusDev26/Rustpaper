@@ -60,16 +60,28 @@ pub fn wine_path(p: &Path) -> String {
 /// Sends `args` to the running WE. False when WE is not running or the
 /// control instance failed.
 pub fn control(args: &[&str]) -> bool {
+    control_within(args, CONTROL_TIMEOUT)
+}
+
+/// How long a `-control` command may take. It is delivered in ~1 s, but a
+/// busy WE can hold it much longer.
+const CONTROL_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// [`control`], giving up after `limit`. The engine's exit uses a short
+/// one: systemd stops the service after its TimeoutStopSec (20 s), and a
+/// `-control stop` that took that long once got the engine SIGKILLed and
+/// the service marked failed (2026-11-22).
+pub fn control_within(args: &[&str], limit: Duration) -> bool {
     let Some(dir) = rustpaper_core::paths::we_dir() else {
         return false;
     };
     let mut argv = vec![wine_path(&dir.join("wallpaper64.exe"))];
     argv.extend(args.iter().map(|a| a.to_string()));
-    run_in_we(&argv)
+    run_in_we(&argv, limit)
 }
 
 /// Runs `wine <argv...>` inside the running WE's container and wineserver.
-fn run_in_we(argv: &[String]) -> bool {
+fn run_in_we(argv: &[String], limit: Duration) -> bool {
     let Some(pid) = pid() else {
         return false;
     };
@@ -114,7 +126,7 @@ fn run_in_we(argv: &[String]) -> bool {
         return false;
     };
     // it exits once the command is delivered (~1 s); never hang on it
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + limit;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => return status.success(),
@@ -324,7 +336,10 @@ pub fn apply_properties(props: &serde_json::Map<String, serde_json::Value>, wind
     if std::fs::create_dir_all(&cache).is_err() || std::fs::write(&bat, line).is_err() {
         return false;
     }
-    let ok = run_in_we(&["cmd".into(), "/c".into(), wine_path(&bat)]);
+    let ok = run_in_we(
+        &["cmd".into(), "/c".into(), wine_path(&bat)],
+        CONTROL_TIMEOUT,
+    );
     let _ = std::fs::remove_file(&bat);
     ok
 }
