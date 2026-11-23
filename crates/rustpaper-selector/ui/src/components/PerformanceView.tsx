@@ -140,7 +140,11 @@ function WineWaylandSection({ initial }: { initial: boolean }) {
   const [busy, setBusy] = useState(false);
   const change = async (next: boolean) => {
     setBusy(true);
-    toast(next ? "Setting up GE-Proton (Steam restarts; the first time it downloads ~600 MB)…" : "Back to Steam's Proton…");
+    toast(
+      next
+        ? "Setting up GE-Proton (Steam restarts; the first time it may download ~600 MB)…"
+        : "Back to Steam's Proton (Steam restarts)…",
+    );
     try {
       const note = await api.setWineWayland(next);
       setOn(next);
@@ -154,7 +158,7 @@ function WineWaylandSection({ initial }: { initial: boolean }) {
   return (
     <Section
       title="Wine's Wayland driver (advanced)"
-      note="Runs Wallpaper Engine on GE-Proton with Wine's Wayland driver, so no XWayland copies its frames: about a third of the CPU (15.8% → 5.4% of a core, 4K + 1080p) and less power. On NVIDIA the GPU load stays the same. Applying it closes and reopens Steam; the first time it downloads GE-Proton (~600 MB)."
+      note="Runs Wallpaper Engine on GE-Proton with Wine's Wayland driver, so no XWayland copies its frames: about a quarter of the CPU (17.1% → 4.7% of a core, 4K + 1080p) and a little less power. On NVIDIA the GPU load stays the same. Applying it closes and reopens Steam, and the wallpaper pauses until Wallpaper Engine is back: about 2 minutes the first time (Steam updates its Wine prefix; GE-Proton may also need a ~600 MB download), under a minute after."
     >
       <SettingRow label="Wayland driver" hint="Off gives Wallpaper Engine back Steam's own Proton.">
         <label className="flex items-center gap-2 text-sm">

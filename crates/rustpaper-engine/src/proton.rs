@@ -9,7 +9,8 @@
 //! Measured on the real session (4K + 1080p sharing one window, RTX 4060
 //! Ti, 2026-11-23): CPU 15.8% -> 5.4% of a core, the card 37.8 W -> 33.3 W,
 //! the whole GPU unchanged (35.8% -> 35.0%: NVIDIA's Wayland Vulkan path
-//! does the copy XWayland did).
+//! does the copy XWayland did). Again with 0.7.0 installed: CPU 17.1% ->
+//! 4.7%, the card 33.0 W -> 31.7 W.
 //!
 //! `enable` uses the newest GE-Proton in Steam's `compatibilitytools.d`, or
 //! downloads the latest release (its published SHA-512 checked), forces it
@@ -201,7 +202,11 @@ fn enable() -> Result<(), String> {
     };
     set_tool(Some(&tool))?;
     save(true)?;
-    println!("Wallpaper Engine runs on Wine's Wayland driver ({tool}) from its next start.");
+    // the first start on GE-Proton updates WE's Wine prefix: ~2 min, 2026-11-23
+    println!(
+        "Wallpaper Engine restarts on Wine's Wayland driver ({tool}); the wallpaper pauses until \
+         it is back (about 2 minutes the first time, under a minute after)."
+    );
     Ok(())
 }
 
@@ -212,7 +217,10 @@ fn disable() -> Result<(), String> {
         set_tool(None)?;
     }
     save(false)?;
-    println!("Wallpaper Engine runs on Wine's X11 driver from its next start.");
+    println!(
+        "Wallpaper Engine restarts on Wine's X11 driver; the wallpaper pauses until it is back \
+         (under a minute)."
+    );
     Ok(())
 }
 
