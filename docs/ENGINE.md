@@ -211,7 +211,13 @@ subsurface, whose dmabufs the stage forwards as they are. Measured on the
 real session (4K + 1080p sharing one window, a copy of WE with the same
 wallpaper, 2026-11-23): CPU 15.8% -> 5.4% of a core (XWayland 9.5% -> 0),
 the card 37.8 W -> 33.3 W, the whole GPU 35.8% -> 35.0% (WE's own GPU time
-rose from 0.9% to 7.9%: NVIDIA's Wayland Vulkan path copies too). Hence an
+rose from 0.9% to 7.9%: NVIDIA's Wayland Vulkan path copies too). Again
+with the installed 0.7.0 and the user's own WE, both drivers in turn: CPU
+17.1% -> 4.7% (XWayland 10.5% -> 0), the card 33.0 W -> 31.7 W, the whole
+GPU 36.6% -> 38.2% (noise). The first start on GE-Proton takes about 2
+minutes (Steam runs WE's install script and `wineboot` updates the prefix
+to GE's Wine; the engine's start timeout fires once and it asks again);
+later switches pause the wallpaper for 30 s to a minute. Hence an
 opt-in (`rustpaper we-proton enable`, Performance tab), off by default.
 With it on, `we-launch` sets `WAYLAND_DISPLAY` to the stage's socket and
 `PROTON_ENABLE_WAYLAND=1` and removes `DISPLAY`, and the engine checks

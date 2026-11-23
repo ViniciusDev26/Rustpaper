@@ -41,6 +41,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
 use std::os::fd::{AsRawFd, OwnedFd};
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -319,6 +320,48 @@ impl Drop for PrivateStage {
         {
             let _ = std::fs::remove_file(file);
         }
+        // the listening socket lives on the stage thread, which the process
+        // ends without unwinding: its own cleanup never runs
+        if let Some(dir) = runtime_dir() {
+            let socket = dir.join(&self.socket);
+            let _ = std::fs::remove_file(socket.with_extension("lock"));
+            let _ = std::fs::remove_file(socket);
+        }
+    }
+}
+
+fn runtime_dir() -> Option<PathBuf> {
+    std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from)
+}
+
+/// Removes the `rustpaper-stage-<pid>` sockets in `dir` whose engine is
+/// gone (killed, crashed, or from before the cleanup in `Drop`: ten of them
+/// had piled up on the dev machine, 2026-11-23). A live engine holds the
+/// exclusive flock on the socket's `.lock` (wayland-server takes it before
+/// binding), so a lock we can take has no owner.
+fn remove_stale_sockets(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(base) = name
+            .to_str()
+            .and_then(|n| n.strip_prefix("rustpaper-stage-"))
+            .and_then(|n| n.strip_suffix(".lock"))
+        else {
+            continue;
+        };
+        let lock = entry.path();
+        let Ok(file) = std::fs::File::open(&lock) else {
+            continue;
+        };
+        // SAFETY: flock on a file we just opened; released when it closes.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            continue;
+        }
+        let _ = std::fs::remove_file(dir.join(format!("rustpaper-stage-{base}")));
+        let _ = std::fs::remove_file(&lock);
     }
 }
 
@@ -498,6 +541,9 @@ fn run(
     let handle = event_loop.handle();
     // Wine's Wayland driver (launch.rs points WE at it) and mpv (video.rs)
     // connect here
+    if let Some(dir) = runtime_dir() {
+        remove_stale_sockets(&dir);
+    }
     let socket =
         ListeningSocketSource::with_name(&format!("rustpaper-stage-{}", std::process::id()))
             .map_err(|e| format!("stage Wayland socket: {e}"))?;
@@ -1069,3 +1115,44 @@ delegate_xwayland_shell!(State);
 delegate_xdg_shell!(State);
 delegate_viewporter!(State);
 delegate_seat!(State);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stale_sockets_go_live_ones_stay() {
+        let dir = std::env::temp_dir().join(format!("rp-stage-sockets-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["rustpaper-stage-1", "rustpaper-stage-2", "wayland-1"] {
+            std::fs::write(dir.join(name), "").unwrap();
+            std::fs::write(dir.join(format!("{name}.lock")), "").unwrap();
+        }
+        // rustpaper-stage-2's engine is alive: it holds the lock
+        let live = std::fs::File::open(dir.join("rustpaper-stage-2.lock")).unwrap();
+        // SAFETY: flock on our own open file.
+        assert_eq!(
+            unsafe { libc::flock(live.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+        remove_stale_sockets(&dir);
+        let mut left: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(
+            left,
+            [
+                "rustpaper-stage-2",
+                "rustpaper-stage-2.lock",
+                "wayland-1",
+                "wayland-1.lock"
+            ]
+        );
+        drop(live);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
