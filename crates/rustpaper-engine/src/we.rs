@@ -8,6 +8,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value};
@@ -88,6 +89,9 @@ pub fn control_within(args: &[&str], limit: Duration) -> bool {
 
 /// Runs `wine <argv...>` inside the running WE's container and wineserver.
 fn run_in_we(argv: &[String], limit: Duration) -> bool {
+    // a stopped WE would never take the command (the watchdog pauses it
+    // again on its next tick when nothing needs it)
+    set_paused(false);
     let Some(pid) = pid() else {
         return false;
     };
@@ -243,6 +247,49 @@ fn we_processes() -> Vec<u32> {
         .collect()
 }
 
+/// WE paused with SIGSTOP by [`set_paused`].
+static PAUSED: AtomicBool = AtomicBool::new(false);
+
+/// What renders WE's wallpapers: the renderer itself and, for web
+/// wallpapers, its embedded Chromium's subprocesses (`--type=gpu-process`,
+/// `--type=renderer`...). Wine's own services stay running.
+fn renderers() -> Vec<u32> {
+    we_processes()
+        .into_iter()
+        .filter(|&pid| {
+            let line = cmdline(pid);
+            let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
+            (comm.trim_end() == WE_COMM && !line.contains("-control")) || line.contains("--type=")
+        })
+        .collect()
+}
+
+/// Pauses WE (SIGSTOP on its renderers) or resumes it. WE's own
+/// `-control pause` does nothing to the windows we open with
+/// `-playInWindow` (audio.rs has the measurement), so a WE window no monitor
+/// showed kept rendering, and so did WE under the Playback rules' Pause.
+/// Stopped, WE's frames freeze where they are and it takes no CPU; the card
+/// went from ~32 W to 24 W, and after SIGCONT it played on with no restart
+/// (2026-11-23). Only with the private stage: nothing there pings its
+/// clients, while a desktop's compositor could flag a stopped window as not
+/// responding.
+pub fn set_paused(paused: bool) {
+    if PAUSED.swap(paused, Ordering::SeqCst) == paused {
+        return;
+    }
+    signal_all(
+        &renderers(),
+        if paused { libc::SIGSTOP } else { libc::SIGCONT },
+    );
+    eprintln!("we: {}", if paused { "paused" } else { "resumed" });
+}
+
+/// Resumes a WE that an engine left stopped (killed while it was paused).
+pub fn resume_stale() {
+    PAUSED.store(false, Ordering::SeqCst);
+    signal_all(&renderers(), libc::SIGCONT);
+}
+
 fn signal_all(pids: &[u32], sig: libc::c_int) {
     for &pid in pids {
         // SAFETY: plain kill(2) on pids just read from /proc.
@@ -256,6 +303,8 @@ fn signal_all(pids: &[u32], sig: libc::c_int) {
 /// ("WaitingPrevProcess" -> AppError_16 in its console log) until they were
 /// gone (2026-11-22). SIGTERM first, SIGKILL after 10 s.
 fn stop_all() {
+    // a stopped process only acts on SIGTERM once continued
+    resume_stale();
     let t = Instant::now();
     signal_all(&we_processes(), libc::SIGTERM);
     while !we_processes().is_empty() {
