@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.6.0](https://github.com/ViniciusDev26/Rustpaper/compare/v0.5.0...v0.6.0) (2026-11-23)
+
+
+### Features
+
+* **engine:** key repeat in the lock screen's password field ([2b720ba](https://github.com/ViniciusDev26/Rustpaper/commit/2b720ba72cd473c293bd937469302a261625bf8e))
+* **engine:** key repeat in the lock screen's password field ([3f3e11c](https://github.com/ViniciusDev26/Rustpaper/commit/3f3e11ceb560788ee4b44bbd623e1eb015baf791))
+
+
+### Bug Fixes
+
+* **engine:** stop Wallpaper Engine within systemd's stop timeout ([bf07005](https://github.com/ViniciusDev26/Rustpaper/commit/bf0700524942f12e85822d2b5a853945860bb440))
+* **engine:** stop Wallpaper Engine within systemd's stop timeout ([d9087e5](https://github.com/ViniciusDev26/Rustpaper/commit/d9087e581fff85c10861c7c0df933fd4cafb8fb5))
+* **packaging:** no debug split package for rustpaper-bin ([318b9ac](https://github.com/ViniciusDev26/Rustpaper/commit/318b9ac6be7defd55b5e9de50a7f57fc472a1d9e))
+
 ## [0.5.0](https://github.com/ViniciusDev26/Rustpaper/compare/v0.4.0...v0.5.0) (2026-11-23)
 
 
