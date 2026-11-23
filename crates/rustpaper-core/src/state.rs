@@ -7,7 +7,14 @@
 //
 // Unknown fields are ignored and missing ones take their defaults, so older
 // state files (with `autostart`, `no_scripts`) still load.
+//
+// Wallpapers by role: the desktop (one for every monitor, `last_id`, plus
+// per-monitor overrides), the lock screen and the screensaver (one for
+// every monitor plus overrides). Each falls back to the next: a monitor's
+// screensaver -> the screensaver for all -> that monitor's desktop -> the
+// desktop for all; the lock screen -> the desktop.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -70,11 +77,51 @@ pub enum StageChoice {
     Private,
 }
 
+/// The screensaver: after `seconds` without input, every monitor shows its
+/// screensaver wallpaper over the windows until the next input.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct Screensaver {
+    pub enabled: bool,
+    pub seconds: u32,
+    /// For every monitor without its own (None: the desktop's wallpaper).
+    pub all: Option<String>,
+    /// Output name -> wallpaper id.
+    pub monitors: BTreeMap<String, String>,
+}
+
+impl Default for Screensaver {
+    fn default() -> Self {
+        // 150 s: Omarchy's screensaver default
+        Screensaver {
+            enabled: false,
+            seconds: 150,
+            all: None,
+            monitors: BTreeMap::new(),
+        }
+    }
+}
+
+/// Where a wallpaper shows (the selector's "Use for").
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    Desktop,
+    Lock,
+    Screensaver,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
 pub struct State {
-    /// Workshop id of the wallpaper on screen.
+    /// Workshop id of the desktop wallpaper of every monitor without its
+    /// own (`monitors`).
     pub last_id: Option<String>,
+    /// Desktop wallpaper per monitor: output name -> wallpaper id.
+    pub monitors: BTreeMap<String, String>,
+    /// The lock screen's wallpaper (None: the desktop's).
+    pub lock_id: Option<String>,
+    pub screensaver: Screensaver,
     /// Master volume 0..100; 0 mutes (Wallpaper Engine has no volume command,
     /// so anything above 0 plays at WE's own volume).
     pub volume: u8,
@@ -93,11 +140,95 @@ impl Default for State {
     fn default() -> Self {
         State {
             last_id: None,
+            monitors: BTreeMap::new(),
+            lock_id: None,
+            screensaver: Screensaver::default(),
             volume: 100,
             wallpaper_theme: false,
             performance: Map::new(),
             playback: Playback::default(),
             stage: StageChoice::Auto,
+        }
+    }
+}
+
+impl State {
+    /// The desktop wallpaper of monitor `output`.
+    pub fn desktop_for(&self, output: &str) -> Option<&str> {
+        self.monitors
+            .get(output)
+            .or(self.last_id.as_ref())
+            .map(String::as_str)
+    }
+
+    /// The lock screen's wallpaper on monitor `output`.
+    pub fn lock_for(&self, output: &str) -> Option<&str> {
+        self.lock_id.as_deref().or_else(|| self.desktop_for(output))
+    }
+
+    /// The screensaver's wallpaper on monitor `output`.
+    pub fn screensaver_for(&self, output: &str) -> Option<&str> {
+        self.screensaver
+            .monitors
+            .get(output)
+            .or(self.screensaver.all.as_ref())
+            .map(String::as_str)
+            .or_else(|| self.desktop_for(output))
+    }
+
+    /// Wallpaper `id` shows somewhere (its property changes need a reload).
+    pub fn uses(&self, id: &str) -> bool {
+        let id = Some(id);
+        self.last_id.as_deref() == id
+            || self.lock_id.as_deref() == id
+            || self.screensaver.all.as_deref() == id
+            || self.monitors.values().any(|v| Some(v.as_str()) == id)
+            || self
+                .screensaver
+                .monitors
+                .values()
+                .any(|v| Some(v.as_str()) == id)
+    }
+
+    /// Shows `id` as `role` on `output` (None: every monitor, replacing the
+    /// per-monitor choices of that role).
+    pub fn assign(&mut self, role: Role, output: Option<&str>, id: &str) {
+        let id = id.to_string();
+        match (role, output) {
+            (Role::Desktop, None) => {
+                self.last_id = Some(id);
+                self.monitors.clear();
+            }
+            (Role::Desktop, Some(o)) => {
+                self.monitors.insert(o.to_string(), id);
+            }
+            (Role::Lock, _) => self.lock_id = Some(id),
+            (Role::Screensaver, None) => {
+                self.screensaver.all = Some(id);
+                self.screensaver.monitors.clear();
+                self.screensaver.enabled = true;
+            }
+            (Role::Screensaver, Some(o)) => {
+                self.screensaver.monitors.insert(o.to_string(), id);
+                self.screensaver.enabled = true;
+            }
+        }
+    }
+
+    /// Removes the choice of `role` on `output` (None: the one for every
+    /// monitor), so the fallback shows. The desktop for all stays (it is
+    /// what everything falls back to).
+    pub fn unassign(&mut self, role: Role, output: Option<&str>) {
+        match (role, output) {
+            (Role::Desktop, None) => {}
+            (Role::Desktop, Some(o)) => {
+                self.monitors.remove(o);
+            }
+            (Role::Lock, _) => self.lock_id = None,
+            (Role::Screensaver, None) => self.screensaver.all = None,
+            (Role::Screensaver, Some(o)) => {
+                self.screensaver.monitors.remove(o);
+            }
         }
     }
 }
@@ -194,5 +325,54 @@ mod tests {
         assert!(properties_file("2068329709").is_some());
         assert!(properties_file("../etc").is_none());
         assert!(properties_file("").is_none());
+    }
+}
+
+#[cfg(test)]
+mod role_tests {
+    use super::*;
+
+    #[test]
+    fn roles_fall_back_in_order() {
+        let mut s = State {
+            last_id: Some("all".into()),
+            ..Default::default()
+        };
+        assert_eq!(s.desktop_for("DP-1"), Some("all"));
+        assert_eq!(s.lock_for("DP-1"), Some("all"), "lock: the desktop's");
+        assert_eq!(s.screensaver_for("DP-1"), Some("all"));
+        s.assign(Role::Desktop, Some("DP-1"), "dp");
+        assert_eq!(s.desktop_for("DP-1"), Some("dp"));
+        assert_eq!(s.desktop_for("HDMI-A-1"), Some("all"));
+        assert_eq!(
+            s.screensaver_for("DP-1"),
+            Some("dp"),
+            "screensaver: the monitor's desktop"
+        );
+        s.assign(Role::Screensaver, None, "saver");
+        assert!(s.screensaver.enabled, "assigning turns the screensaver on");
+        assert_eq!(s.screensaver_for("DP-1"), Some("saver"));
+        s.assign(Role::Screensaver, Some("HDMI-A-1"), "hdmi-saver");
+        assert_eq!(s.screensaver_for("HDMI-A-1"), Some("hdmi-saver"));
+        s.assign(Role::Lock, None, "lock");
+        assert_eq!(s.lock_for("HDMI-A-1"), Some("lock"));
+        assert!(s.uses("hdmi-saver") && s.uses("dp") && !s.uses("other"));
+        s.unassign(Role::Screensaver, Some("HDMI-A-1"));
+        assert_eq!(s.screensaver_for("HDMI-A-1"), Some("saver"));
+        s.assign(Role::Desktop, None, "new");
+        assert!(
+            s.monitors.is_empty(),
+            "all monitors replaces the per-monitor choices"
+        );
+        assert_eq!(s.desktop_for("DP-1"), Some("new"));
+    }
+
+    #[test]
+    fn old_state_files_still_load() {
+        let s: State =
+            serde_json::from_str(r#"{"last_id":"1","volume":50,"autostart":true}"#).unwrap();
+        assert_eq!(s.last_id.as_deref(), Some("1"));
+        assert!(s.monitors.is_empty() && s.lock_id.is_none() && !s.screensaver.enabled);
+        assert_eq!(s.screensaver.seconds, 150);
     }
 }
