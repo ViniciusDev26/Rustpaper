@@ -9,9 +9,13 @@ on:
   pull_request:
     branches: [main]
     types: [opened, edited, synchronize, reopened]
+  # the release PR (pushed with GITHUB_TOKEN, see ci.yml): release.yml
+  # dispatches this on its branch
+  workflow_dispatch:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   title:
@@ -25,6 +29,11 @@ jobs:
       - name: Check the title
         env:
           TITLE: ${{ github.event.pull_request.title }}
+          GH_TOKEN: ${{ github.token }}
         run: |
+          if [ -z "$TITLE" ]; then
+            # dispatched: the open PR of this branch
+            TITLE=$(gh pr view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json title --jq .title)
+          fi
           npm install --no-save --no-audit --no-fund @commitlint/cli@19 @commitlint/config-conventional@19
           printf '%s\n' "$TITLE" | npx --no-install commitlint --verbose

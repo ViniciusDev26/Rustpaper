@@ -104,10 +104,17 @@ CI (`.github/workflows/ci.yml`, job *Conventional Commits*) runs commitlint
   (`ssh-keygen -t ed25519 -f aur -C rustpaper-ci`, then
   `gh secret set AUR_SSH_PRIVATE_KEY < aur`). The first publish creates the
   packages.
-- Pushes made with `GITHUB_TOKEN` (the `Cargo.lock` commit on the release PR)
-  do not trigger other workflows, so CI does not run again on that commit.
-  The PR's earlier commits were checked; push an empty commit to re-run CI
-  if needed.
+- **`main` is protected** (repository ruleset `main`): changes only through
+  a PR, squash only, no force pushes or deletion, and these checks must
+  pass: *Conventional PR title*, *Conventional Commits*, *Format*, *Clippy*,
+  *Build and test*, *UI*.
+- Pushes made with `GITHUB_TOKEN` (release-please's release PR and the
+  `Cargo.lock` commit on it) start no `pull_request` run, so the release PR
+  would never get those checks. The `lockfile` job dispatches `ci.yml` and
+  `pr-title.yml` on its branch (`workflow_dispatch`, the one event
+  `GITHUB_TOKEN` may start); jobs that only apply to PRs are skipped, which
+  counts as passing. A dispatched CI run builds its image as `:run-<id>`,
+  never `:latest`.
 
 ## Testing the packaging locally
 
