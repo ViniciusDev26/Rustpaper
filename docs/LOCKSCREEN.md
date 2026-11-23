@@ -36,7 +36,9 @@ lock triggers to route) lives in a lock adapter. Code: `crates/rustpaper-engine/
   buffer, only when it changes).
 - **The frames** (`lock/feed.rs`): the engine sends the private stage's
   dmabufs over a Unix seqpacket socket with `SCM_RIGHTS`. Each buffer's
-  fds cross once; later frames of the same buffer carry only its key. The
+  fds cross once per monitor; later frames of the same buffer carry only
+  its key. Releases name the monitor: one WE buffer can show on several
+  monitors (docs/ENGINE.md, "One render per wallpaper"). The
   lock imports them on the user's compositor like the mirror does: zero
   copy, no rendering of its own. The socket is per Wayland display and only
   accepts peers of the same uid.

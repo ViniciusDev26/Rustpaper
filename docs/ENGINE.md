@@ -172,6 +172,21 @@ back. The screensaver was verified on a nested Sway (raised over a
 terminal after the timeout, lowered by a key, the key not delivered, focus
 back on the terminal).
 
+**One render per wallpaper** (private stage; `main.rs` `assign` and
+`share_plan`). Monitors that show the same wallpaper (same project and
+property values) at aspect ratios within 1% share one WE window: the
+largest monitor's. Its frames go to every monitor of the group, each
+mirror scaling them to its monitor (`wp_viewport`, on the user's
+compositor's GPU), so WE renders the wallpaper once instead of once per
+monitor (with two monitors, half the WE cost). Different aspect ratios keep
+a window each: sharing would crop or stretch. Each WE buffer goes back to WE
+once every surface showing it (one bit per monitor's mirror and per
+monitor on the lock screen) released it. A window a monitor stops using is
+not closed (closing degrades WE, above): it keeps rendering what it had
+until WE restarts, and its frames are dropped. Verified on a nested Sway
+with two outputs (2026-11-23): one test window shown on both, the lock
+screen showing it on both, buffers flowing after an unlock.
+
 **Service mode.** `rustpaper --service` (the systemd user service the
 selector manages, docs/SELECTOR.md) shows what `~/.config/rustpaper/state.json`
 says (`rustpaper_core::state`). It re-reads it on SIGHUP

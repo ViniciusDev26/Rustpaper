@@ -728,7 +728,7 @@ impl State {
     fn show_frame(&mut self, qh: &QueueHandle<Self>, f: FeedFrame) {
         let release = |st: &Self, key| {
             if let Some(feed) = &st.feed {
-                feed.release(key);
+                feed.release(&f.output, key);
             }
         };
         let Some(i) = self
@@ -814,22 +814,22 @@ impl State {
     }
 
     fn released(&mut self, id: u64) {
-        let mut key = None;
+        let mut done = None;
         for o in &mut self.outputs {
             if let Some(pos) = o.live.iter().position(|b| b.id == id) {
                 let b = &mut o.live[pos];
                 b.on_screen = false;
-                key = Some((b.key, b.gone));
+                done = Some((o.name.clone(), b.key, b.gone));
                 if b.gone {
                     b.buffer.destroy();
                     o.live.remove(pos);
                 }
             }
         }
-        if let (Some((key, gone)), Some(feed)) = (key, &self.feed)
+        if let (Some((output, key, gone)), Some(feed)) = (done, &self.feed)
             && !gone
         {
-            feed.release(key);
+            feed.release(&output, key);
         }
     }
 
