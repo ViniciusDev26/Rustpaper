@@ -18,7 +18,8 @@ stores, every command reply validated with Zod.
   `src/api/tauri.ts`: typed wrappers of the commands, which reject with
   the Rust error string or on a reply that doesn't match its schema.
 - `src/store/`: `library` (wallpapers, selection, search, order,
-  unsubscribe), `settings` (volume, autostart, theme from wallpaper),
+  unsubscribe), `settings` (volume, autostart, theme from wallpaper,
+  animated lock screen),
   `workshop` (queries, subscriptions, download polling), `toast`.
 - `src/components/`: `LibraryView`, `PropertiesPanel` + `PropertyControl`
   (one control per WE property type), `WorkshopView`, `PerformanceView`,
@@ -173,6 +174,13 @@ Built from `general.properties` of project.json, in WE's `order`:
   engine (`rustpaper --service`, handed over after 2.5 s), and "Start on
   login" reports an error.
 - Closing the selector leaves the wallpaper running (systemd owns it).
+- **Animated lock screen** (header checkbox) = `rustpaper lock-setup
+  enable|disable`: the engine's lock adapter routes the desktop's lock
+  triggers to Rustpaper's lock screen (Omarchy: lock key, lid, menu, idle,
+  suspend), or gives them back. The checkbox shows `lock-setup status
+  --json`; the toast shows what the engine says (on desktops without an
+  Omarchy-like setup, what to point at `rustpaper lock`).
+  docs/LOCKSCREEN.md has the rest.
 - **Volume** (header slider, 0..100, default 100): 0 mutes WE and anything
   else unmutes it, because Wallpaper Engine has no volume command (WE's own
   volume setting applies). Applied on release of the slider.
@@ -266,6 +274,7 @@ helper `crates/rustpaper-workshop`).
 `list_wallpapers`, `apply(id)`, `get_properties(id)` (definitions + saved
 values), `save_properties(id, values)`, `wallpaper_colors(id)`,
 `get_settings`, `set_autostart(enabled)`, `set_volume(volume)`,
+`set_animated_lock(enabled)`,
 `get_performance`, `set_performance(values)`, `set_playback(playback)`,
 `workshop_query(query)`, `workshop_subscribe(id)`, `workshop_unsubscribe(id)`,
 `workshop_status(ids)`, `workshop_subscriptions()`, `get_theme`,

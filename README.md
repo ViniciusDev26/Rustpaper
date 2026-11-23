@@ -115,12 +115,17 @@ override them).
 - **Desktop integration**: runs as a systemd user service ("Start on
   login"), changes apply in place without flashing, Omarchy theme from the
   wallpaper's colors.
+- **Animated lock screen**: the live wallpaper behind the password prompt,
+  on any compositor with `ext-session-lock-v1`. One switch in the selector
+  routes your desktop's lock key, idle lock and lock before suspend to it
+  (Omarchy fully; elsewhere logind's `loginctl lock-session` and suspend,
+  plus `rustpaper lock` for your own keybinding). See
+  [`docs/LOCKSCREEN.md`](./docs/LOCKSCREEN.md).
 
 **Not yet:**
 - cursor interaction (eye tracking, parallax, clicks);
 - per-wallpaper volume (only mute);
-- an animated lock screen (prerequisites in
-  [`docs/LOCKSCREEN.md`](./docs/LOCKSCREEN.md)).
+- fingerprint unlock on the lock screen (password only).
 
 Workshop JavaScript (SceneScript, web wallpapers) runs inside Wallpaper
 Engine as it does on Windows: **not sandboxed**.
