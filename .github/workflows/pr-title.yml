@@ -1,0 +1,39 @@
+name: PR title
+
+# PRs are squash-merged (the only merge method allowed): the PR title becomes
+# the commit on main, so it must follow Conventional Commits like every
+# commit (commitlint.config.mjs). release-please reads that commit; the
+# squash commit's body is left blank so nothing else is read twice. Runs on
+# title edits too, without re-running the whole CI.
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, edited, synchronize, reopened]
+  # the release PR (pushed with GITHUB_TOKEN, see ci.yml): release.yml
+  # dispatches this on its branch
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  title:
+    name: Conventional PR title
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check the title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -z "$TITLE" ]; then
+            # dispatched: the open PR of this branch
+            TITLE=$(gh pr view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json title --jq .title)
+          fi
+          npm install --no-save --no-audit --no-fund @commitlint/cli@19 @commitlint/config-conventional@19
+          printf '%s\n' "$TITLE" | npx --no-install commitlint --verbose

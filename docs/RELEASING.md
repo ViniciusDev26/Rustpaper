@@ -33,6 +33,14 @@ proper noun: `fix(engine): sway adapter ...`, not `Sway adapter`. A subject
 that slips through is only fixable by rewriting the branch, so check before
 pushing.
 
+**PRs are squash-merged** (the repository allows nothing else): the PR
+title becomes the one commit on main, and the squash commit's body is left
+blank. So the **PR title** is what release-please reads and must be a
+Conventional Commit too (`.github/workflows/pr-title.yml` checks it, also on
+edits). Merge commits used to carry the PR title in their body, which
+release-please read as a second commit: every change of 0.5.0 and 0.6.0
+was listed twice (2026-11-23).
+
 CI (`.github/workflows/ci.yml`, job *Conventional Commits*) runs commitlint
 (`commitlint.config.mjs`) on **every commit** of a pull request. Locally:
 `npx commitlint --from origin/main`. History before 2026-11-21 used
@@ -96,10 +104,17 @@ CI (`.github/workflows/ci.yml`, job *Conventional Commits*) runs commitlint
   (`ssh-keygen -t ed25519 -f aur -C rustpaper-ci`, then
   `gh secret set AUR_SSH_PRIVATE_KEY < aur`). The first publish creates the
   packages.
-- Pushes made with `GITHUB_TOKEN` (the `Cargo.lock` commit on the release PR)
-  do not trigger other workflows, so CI does not run again on that commit.
-  The PR's earlier commits were checked; push an empty commit to re-run CI
-  if needed.
+- **`main` is protected** (repository ruleset `main`): changes only through
+  a PR, squash only, no force pushes or deletion, and these checks must
+  pass: *Conventional PR title*, *Conventional Commits*, *Format*, *Clippy*,
+  *Build and test*, *UI*.
+- Pushes made with `GITHUB_TOKEN` (release-please's release PR and the
+  `Cargo.lock` commit on it) start no `pull_request` run, so the release PR
+  would never get those checks. The `lockfile` job dispatches `ci.yml` and
+  `pr-title.yml` on its branch (`workflow_dispatch`, the one event
+  `GITHUB_TOKEN` may start); jobs that only apply to PRs are skipped, which
+  counts as passing. A dispatched CI run builds its image as `:run-<id>`,
+  never `:latest`.
 
 ## Testing the packaging locally
 

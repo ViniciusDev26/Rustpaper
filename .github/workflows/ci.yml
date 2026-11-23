@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # The release PR's commits are pushed with GITHUB_TOKEN, which triggers no
+  # pull_request run; release.yml dispatches this workflow on that branch so
+  # main's required checks exist on the PR's head commit.
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -80,6 +84,9 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             echo "image=${{ env.IMAGE }}:pr-${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # a dispatched run (the release PR) never overwrites :latest
+            echo "image=${{ env.IMAGE }}:run-${{ github.run_id }}" >> "$GITHUB_OUTPUT"
           else
             echo "image=${{ env.IMAGE }}:latest" >> "$GITHUB_OUTPUT"
           fi
