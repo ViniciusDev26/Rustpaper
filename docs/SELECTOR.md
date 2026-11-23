@@ -97,8 +97,39 @@ The engine binary is the one next to the selector
   test corpus (`rustpaper_core::paths::wallpaper_dirs`), sorted by title, with
   a search box. Previews are served through Tauri's asset protocol; the
   allowed scope is set at startup to exactly those folders.
-- Clicking a card applies it and opens its panel. Every type is supported:
-  the real Wallpaper Engine plays it (docs/ENGINE.md).
+- Clicking a card applies it (desktop, every monitor) and opens its panel.
+  Every type is supported: the real Wallpaper Engine plays it
+  (docs/ENGINE.md).
+- Each card carries where the wallpaper is used ("Desktop · DP-1", "Lock
+  screen", "Screensaver"...).
+
+## Where each wallpaper shows (desktop, lock screen, screensaver)
+
+The panel's **Use for…** menu puts the selected wallpaper:
+- on the **desktop** of every monitor (what Apply and a card click do), or
+  of one monitor;
+- on the **lock screen** (docs/LOCKSCREEN.md);
+- as the **screensaver** of every monitor, or of one.
+
+Per-monitor entries appear with more than one monitor; the names come from
+`rustpaper outputs` (the engine's desktop adapter). Below the menu, the
+places it is used, each removable with ×: the fallback then shows. Each
+role falls back to the next: a monitor's screensaver -> the screensaver for
+all -> that monitor's desktop -> the desktop for all; the lock screen ->
+the desktop. The desktop for all cannot be removed: everything falls back
+to it. Pure helpers in `ui/src/lib/roles.ts` (unit-tested), store
+`ui/src/store/roles.ts`.
+
+The engine shows them by mode (docs/ENGINE.md, "What each monitor shows"):
+the desktop's; while idle the screensaver's, raised over every window;
+while the lock screen shows the frames, the lock's. A window is reloaded
+only when its wallpaper changes.
+
+**Screensaver** (Performance tab): on/off and the delay in minutes
+(default 2.5, Omarchy's). Picking a screensaver wallpaper turns it on. On
+Omarchy, while it is on, Omarchy's own screensaver is off (shell.json
+`idle.screensaver` set to 0, restored when it is turned off; the lock
+adapter does it, docs/LOCKSCREEN.md).
 
 ## Customization panel
 
@@ -139,8 +170,9 @@ Built from `general.properties` of project.json, in WE's `order`:
 
 ## Persistence
 
-- `~/.config/rustpaper/state.json` (`rustpaper_core::state`): the wallpaper
-  on screen, volume, "Theme from wallpaper", the Performance tab's quality
+- `~/.config/rustpaper/state.json` (`rustpaper_core::state`): the
+  wallpaper of each role (`last_id` = the desktop for every monitor,
+  `monitors`, `lock_id`, `screensaver`), volume, "Theme from wallpaper", the Performance tab's quality
   settings and Playback rules, and `stage` (`auto`, `desktop` or `private`;
   no UI yet, docs/ENGINE.md). The selector writes it; the engine
   (`rustpaper --service`) reads it and re-reads it on reload. The panel
@@ -271,7 +303,9 @@ helper `crates/rustpaper-workshop`).
 
 ## Commands (Rust -> UI)
 
-`list_wallpapers`, `apply(id)`, `get_properties(id)` (definitions + saved
+`list_wallpapers`, `apply(id, role, output)` (role default desktop, output
+null = every monitor), `get_roles`, `clear_role(role, output)`,
+`set_screensaver(enabled, seconds)`, `get_properties(id)` (definitions + saved
 values), `save_properties(id, values)`, `wallpaper_colors(id)`,
 `get_settings`, `set_autostart(enabled)`, `set_volume(volume)`,
 `set_animated_lock(enabled)`,

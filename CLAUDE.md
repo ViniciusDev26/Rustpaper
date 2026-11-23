@@ -55,7 +55,8 @@ with the measurement or observation that justified it.
   - `paths`: Steam library, WE install, Workshop dir.
   - `project`: project.json.
   - `state`: `~/.config/rustpaper/state.json`, the selector's decisions,
-    which the engine reads.
+    which the engine reads: the wallpaper of each role (desktop per
+    monitor, lock screen, screensaver) and their fallbacks.
   - `steam`: Steam's `localconfig.vdf` (KeyValues reader/writer), for WE's
     launch option.
   - `performance`: WE's quality settings and the Playback conditions as
@@ -163,6 +164,12 @@ journalctl --user -u rustpaper -f           # its log
   `WAYLAND_DISPLAY`, `SWAYSOCK`, and without `HYPRLAND_INSTANCE_SIGNATURE`.
   The window must sit on a *visible* workspace of the headless output, or
   the nested compositor gets no frames.
+- Roles/modes with WE without touching the user's choices: run the engine
+  with `XDG_CONFIG_HOME=<tmp>` holding its own `rustpaper/state.json`. A
+  script connecting to `$XDG_RUNTIME_DIR/rustpaper/feed-*.sock` (and
+  answering `release` for each frame) stands in for the lock. Test the
+  screensaver nested only: on the real session it would cover the user's
+  monitors.
 - Lock screen: **never lock the real session in a test** (it covers the
   user's monitors). Lock a nested compositor instead, with
   `RUSTPAPER_LOCK_ADAPTER=generic` (the Omarchy adapter's post-lock steps

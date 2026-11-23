@@ -148,11 +148,36 @@ within minutes:
 - later `closeWallpaper` did nothing at all;
 - new windows came up black, or pixelated with a wrong clock, at ~3 fps.
 
+**What each monitor shows** (`config.rs` `Config::choice`, `main.rs`
+`retarget`). Each monitor has a wallpaper per mode, chosen in the selector
+(docs/SELECTOR.md, "Where each wallpaper shows"):
+- **Desktop**: its own, else the one for every monitor;
+- **Screensaver**, while idle: its screensaver wallpaper, else the
+  screensaver for all, else its desktop's. The mirror's layer surfaces are
+  raised from Bottom to Overlay with all input (`Mirrors::set_screensaver`,
+  `zwlr_layer_surface.set_layer`), so the wallpaper covers every window;
+  the first key or click ends it and does not reach the window under it.
+  Idle comes from `ext-idle-notify-v1` (idle inhibitors, e.g. a playing
+  video, hold it off). Only "display asleep" pauses it;
+- **Lock**, while the lock screen shows the frames (`lock/feed.rs`): the
+  lock screen's wallpaper, else its desktop's.
+
+The engine checks the mode every loop and loads into each window what it
+should show, only where that changed: same-wallpaper monitors are never
+reloaded. A switch takes WE 1-3 s to load, during which the window keeps
+showing the previous wallpaper. Verified with WE (2026-11-22): DP-1 and
+HDMI-A-1 showing different wallpapers; a lock client connecting loaded the
+lock wallpaper into both windows, and leaving gave each its desktop one
+back. The screensaver was verified on a nested Sway (raised over a
+terminal after the timeout, lowered by a key, the key not delivered, focus
+back on the terminal).
+
 **Service mode.** `rustpaper --service` (the systemd user service the
 selector manages, docs/SELECTOR.md) shows what `~/.config/rustpaper/state.json`
 says (`rustpaper_core::state`). It re-reads it on SIGHUP
 (`systemctl --user reload rustpaper`) and applies the change in place:
-- a new wallpaper or new property values load into the same windows;
+- a new wallpaper or new property values load into the same windows
+  (only the windows whose wallpaper changed);
 - new quality settings restart WE (see below);
 - a mute change is sent to WE.
 
