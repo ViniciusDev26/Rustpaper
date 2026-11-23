@@ -9,6 +9,7 @@
 #     rustpaper-<version>/lib/rustpaper/libsteam_api.so   (Steamworks, for rustpaper-workshop)
 #     rustpaper-<version>/share/applications/rustpaper.desktop
 #     rustpaper-<version>/share/icons/hicolor/128x128/apps/rustpaper.png
+#     rustpaper-<version>/etc/pam.d/rustpaper-lock          (the lock screen's PAM service)
 #     rustpaper-<version>/LICENSE, README.md
 #
 # plus its .sha256. The version comes from the workspace Cargo.toml.
@@ -35,6 +36,8 @@ for b in "${bins[@]}"; do install -m 755 "$repo/target/release/$b" "$root/bin/$b
 # rustpaper-workshop's RUNPATH has $ORIGIN/../lib/rustpaper (its build.rs)
 install -m 755 "$repo/target/release/libsteam_api.so" "$root/lib/rustpaper/libsteam_api.so"
 install -m 644 "$repo/packaging/rustpaper.desktop" "$root/share/applications/rustpaper.desktop"
+# the lock screen's PAM service (/etc/pam.d/rustpaper-lock)
+install -Dm644 "$repo/packaging/pam/rustpaper-lock" "$root/etc/pam.d/rustpaper-lock"
 install -m 644 "$repo/crates/rustpaper-selector/icons/128x128.png" \
     "$root/share/icons/hicolor/128x128/apps/rustpaper.png"
 install -m 644 "$repo/LICENSE" "$repo/README.md" "$root/"

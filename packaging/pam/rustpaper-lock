@@ -1,0 +1,5 @@
+#%PAM-1.0
+# Rustpaper's lock screen (`rustpaper lock`): the user's login password,
+# with the system's login policy (faillock and friends). Installed as
+# /etc/pam.d/rustpaper-lock; without it the lock uses `login` directly.
+auth include login

@@ -62,7 +62,7 @@ jobs:
       - name: Install build dependencies
         run: |
           pacman -Syu --noconfirm --needed git rust pkgconf github-cli nodejs npm \
-            gtk3 webkit2gtk-4.1 libglvnd libxkbcommon wayland
+            gtk3 webkit2gtk-4.1 libglvnd libxkbcommon wayland pam dbus
       - uses: actions/checkout@v4
       - name: Build the tarball
         run: ./packaging/dist.sh dist

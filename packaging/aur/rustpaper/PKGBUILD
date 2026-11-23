@@ -10,7 +10,8 @@ arch=('x86_64')
 url="https://github.com/ViniciusDev26/Rustpaper"
 license=('MIT')
 depends=('gcc-libs' 'glibc' 'gtk3' 'libglvnd' 'libxkbcommon' 'wayland' 'webkit2gtk-4.1'
-         'mesa' 'util-linux' 'xorg-xwayland' 'steam')
+         'mesa' 'util-linux' 'xorg-xwayland' 'steam' 'pam' 'dbus')
+backup=('etc/pam.d/rustpaper-lock')
 makedepends=('cargo' 'pkgconf' 'nodejs' 'npm')
 conflicts=('rustpaper-bin')
 source=("$pkgname-$pkgver.tar.gz::https://github.com/ViniciusDev26/Rustpaper/archive/refs/tags/v$pkgver.tar.gz")
@@ -44,5 +45,7 @@ package() {
     install -Dm644 packaging/rustpaper.desktop "$pkgdir/usr/share/applications/rustpaper.desktop"
     install -Dm644 crates/rustpaper-selector/icons/128x128.png \
         "$pkgdir/usr/share/icons/hicolor/128x128/apps/rustpaper.png"
+    # the lock screen's PAM service
+    install -Dm644 packaging/pam/rustpaper-lock "$pkgdir/etc/pam.d/rustpaper-lock"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
