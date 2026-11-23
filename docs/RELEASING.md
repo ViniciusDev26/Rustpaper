@@ -59,7 +59,15 @@ CI (`.github/workflows/ci.yml`, job *Conventional Commits*) runs commitlint
    - `rustpaper-bin.PKGBUILD` with that tarball's checksum: download it
      (`releases/latest/download/rustpaper-bin.PKGBUILD`) and run
      `makepkg -si`, which fetches the tarball.
-4. `aur` publishes `rustpaper-bin` (the tarball) and `rustpaper` (built from
+4. `pacman-repo` (Arch container) builds `rustpaper-bin` from the release's
+   tarball and PKGBUILD (`packaging/pacman-repo.sh`), signs the package and
+   a one-package repository database with the `PACMAN_GPG_KEY` key, and
+   uploads them, with the public key `rustpaper.gpg`, to the `pacman-repo`
+   release: a prerelease that is never "latest", so `releases/latest`
+   stays the version. The new package goes up first, then the database,
+   then the old package is removed. The release notes carry the key's
+   fingerprint. Skipped (a notice in the run) while the secret is not set.
+5. `aur` publishes `rustpaper-bin` (the tarball) and `rustpaper` (built from
    the tag's source) to the AUR, with checksums from `updpkgsums`. It is
    skipped (a notice in the run) while the `AUR_SSH_PRIVATE_KEY` secret is
    not set.
@@ -69,6 +77,19 @@ CI (`.github/workflows/ci.yml`, job *Conventional Commits*) runs commitlint
 - **Repository settings -> Actions -> General -> Workflow permissions:**
   enable *Allow GitHub Actions to create and approve pull requests*, or
   release-please cannot open its PR.
+- **pacman repository:** a signing key without passphrase (GitHub keeps
+  the secret), stored as `PACMAN_GPG_KEY`:
+
+  ```sh
+  export GNUPGHOME=$(mktemp -d)
+  gpg --batch --passphrase '' --quick-gen-key "Rustpaper packages" ed25519 sign never
+  gpg --armor --export-secret-keys | gh secret set PACMAN_GPG_KEY
+  gpg --list-secret-keys --with-colons | awk -F: '/^fpr/{print $10; exit}'  # the fingerprint
+  ```
+
+  Keep a backup of `$GNUPGHOME` somewhere safe: a new key means every user
+  imports and signs it again. The next release creates the `pacman-repo`
+  release.
 - **AUR** (when registration is open): create an account at
   <https://aur.archlinux.org>, add an SSH public key to it, and store the
   private key as the repository secret `AUR_SSH_PRIVATE_KEY`
@@ -86,6 +107,15 @@ CI (`.github/workflows/ci.yml`, job *Conventional Commits*) runs commitlint
 ./packaging/dist.sh /tmp/dist                    # the release tarball
 cd packaging/aur/rustpaper-bin && makepkg -f     # needs a published release
 ```
+
+The pacman repository: put a release's tarball and `rustpaper-bin.PKGBUILD`
+in a folder and run `packaging/pacman-repo.sh <folder> <out> <fingerprint>`
+with a throwaway key in `GNUPGHOME`. Checked that way (2026-11-23): pacman,
+with a keyring of its own and `SigLevel = Required DatabaseRequired`,
+verified the database signature against the imported key (only the local
+trust step, `pacman-key --lsign-key`, needs root; the rest of the check
+used `TrustAll`), then listed and downloaded `rustpaper-bin` with its
+signature checked, and refused a modified package.
 
 To try a PKGBUILD before a release exists, copy it next to a local tarball
 and point `source=` at the file (that is how both were checked).

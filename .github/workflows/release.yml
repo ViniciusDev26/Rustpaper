@@ -2,8 +2,9 @@ name: Release
 
 # Conventional Commits on main -> release-please keeps a "release PR" open
 # (version bump + CHANGELOG). Merging it tags vX.Y.Z and creates the GitHub
-# release; then the prebuilt tarball is attached and the AUR packages are
-# updated. See docs/RELEASING.md.
+# release; then the prebuilt tarball is attached, the pacman repository
+# (the `pacman-repo` release) and the AUR packages are updated. See
+# docs/RELEASING.md.
 
 on:
   push:
@@ -73,6 +74,68 @@ jobs:
             packaging/aur/rustpaper-bin/PKGBUILD > dist/rustpaper-bin.PKGBUILD
       - name: Attach to the release
         run: gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+
+  # Rustpaper's own pacman repository: rustpaper-bin, signed, in the assets
+  # of the fixed `pacman-repo` release (a prerelease, never "latest", so
+  # releases/latest stays the version). Needs the PACMAN_GPG_KEY secret (an
+  # armored signing key without passphrase); skipped until it is set.
+  pacman-repo:
+    needs: [release-please, build]
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    env:
+      TAG: ${{ needs.release-please.outputs.tag_name }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO_TAG: pacman-repo
+    steps:
+      - id: key
+        env:
+          KEY: ${{ secrets.PACMAN_GPG_KEY }}
+        run: |
+          if [ -n "$KEY" ]; then echo "ok=true" >> "$GITHUB_OUTPUT"
+          else echo "::notice::PACMAN_GPG_KEY not set: not updating the pacman repository"; fi
+      - uses: actions/checkout@v4
+        if: steps.key.outputs.ok == 'true'
+      - name: Build and sign the repository
+        if: steps.key.outputs.ok == 'true'
+        env:
+          KEY: ${{ secrets.PACMAN_GPG_KEY }}
+        run: |
+          pacman -Syu --noconfirm --needed github-cli git
+          # makepkg refuses root: a builder user with its own keyring
+          useradd -m builder
+          mkdir -p release out && chown builder release out
+          gh release download "$TAG" -p 'rustpaper-*-x86_64-linux.tar.gz' -p rustpaper-bin.PKGBUILD \
+            -D release --repo "$GITHUB_REPOSITORY"
+          chown -R builder release
+          printf '%s\n' "$KEY" | su builder -c 'gpg --batch --import'
+          fpr=$(su builder -c "gpg --list-secret-keys --with-colons" | awk -F: '/^fpr/{print $10; exit}')
+          echo "FPR=$fpr" >> "$GITHUB_ENV"
+          su builder -c "./packaging/pacman-repo.sh release out $fpr"
+      - name: Publish to the pacman-repo release
+        if: steps.key.outputs.ok == 'true'
+        run: |
+          git config --global --add safe.directory "$PWD"
+          notes="Rustpaper's pacman repository (rustpaper-bin, the latest release). Signing key fingerprint: $FPR. Setup: README, Install."
+          if ! gh release view "$REPO_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$REPO_TAG" --repo "$GITHUB_REPOSITORY" --title "pacman repository" \
+              --notes "$notes" --prerelease --latest=false --target "$GITHUB_SHA"
+          else
+            gh release edit "$REPO_TAG" --repo "$GITHUB_REPOSITORY" --notes "$notes"
+          fi
+          # the package first, then the database that names it, then the old
+          # package goes: a user syncing meanwhile always finds what the
+          # database lists
+          pkg=$(cd out && ls rustpaper-bin-*.pkg.tar.zst)
+          gh release upload "$REPO_TAG" "out/$pkg" "out/$pkg.sig" --clobber --repo "$GITHUB_REPOSITORY"
+          gh release upload "$REPO_TAG" out/rustpaper.db out/rustpaper.db.sig out/rustpaper.files \
+            out/rustpaper.files.sig out/rustpaper.gpg --clobber --repo "$GITHUB_REPOSITORY"
+          for a in $(gh release view "$REPO_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name'); do
+            case "$a" in
+              "$pkg" | "$pkg.sig") ;;
+              rustpaper-bin-*.pkg.tar.zst*) gh release delete-asset "$REPO_TAG" "$a" --yes --repo "$GITHUB_REPOSITORY" ;;
+            esac
+          done
 
   # Needs the AUR_SSH_PRIVATE_KEY secret (an AUR account's SSH key); skipped
   # until it is configured.

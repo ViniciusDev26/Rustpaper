@@ -57,9 +57,23 @@ your own copy of **Wallpaper Engine**, purchased on Steam.
 
 1. **Wallpaper Engine**: install it in Steam, force Proton for it, and
    launch it once to get past its first-run dialog.
-2. **Rustpaper** (Arch Linux): each
+2. **Rustpaper** (Arch Linux): from Rustpaper's own pacman repository,
+   so `pacman -Syu` keeps it up to date. Once:
+
+   ```sh
+   # the repository's signing key (its fingerprint is in the notes of the
+   # pacman-repo release: compare it before signing it locally)
+   curl -sL https://github.com/ViniciusDev26/Rustpaper/releases/download/pacman-repo/rustpaper.gpg -o /tmp/rustpaper.gpg
+   sudo pacman-key --add /tmp/rustpaper.gpg
+   sudo pacman-key --lsign-key <fingerprint>
+   printf '\n[rustpaper]\nServer = https://github.com/ViniciusDev26/Rustpaper/releases/download/pacman-repo\n' \
+     | sudo tee -a /etc/pacman.conf
+   sudo pacman -Sy rustpaper-bin
+   ```
+
+   Or without the repository (no automatic updates): each
    [GitHub release](https://github.com/ViniciusDev26/Rustpaper/releases)
-   carries prebuilt binaries and a ready `rustpaper-bin.PKGBUILD`:
+   carries a ready `rustpaper-bin.PKGBUILD`:
 
    ```sh
    mkdir rustpaper && cd rustpaper
@@ -68,8 +82,8 @@ your own copy of **Wallpaper Engine**, purchased on Steam.
    ```
 
    (makepkg downloads the release tarball itself. AUR packages
-   `rustpaper-bin` / `rustpaper` will follow; their PKGBUILDs are in
-   `packaging/aur/`.)
+   `rustpaper-bin` / `rustpaper` will follow once the AUR takes new
+   accounts again; their PKGBUILDs are in `packaging/aur/`.)
 
    **From source**, for your user: `./scripts/install.sh` (needs a Rust
    toolchain, pinned in `mise.toml`, and Node.js 20+ with npm for the
