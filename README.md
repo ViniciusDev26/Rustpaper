@@ -71,6 +71,10 @@ your own copy of **Wallpaper Engine**, purchased on Steam.
    sudo pacman -Sy rustpaper-bin
    ```
 
+   Updates then come with the system's: `sudo pacman -Syu`, or on Omarchy
+   `omarchy update` (Omarchy refuses direct `pacman -Syu` system upgrades;
+   installing with `pacman -Sy rustpaper-bin` is fine).
+
    Or without the repository (no automatic updates): each
    [GitHub release](https://github.com/ViniciusDev26/Rustpaper/releases)
    carries a ready `rustpaper-bin.PKGBUILD`:
