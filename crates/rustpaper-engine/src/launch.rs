@@ -8,6 +8,11 @@
 //! (`DISPLAY`) and drop `WAYLAND_DISPLAY`, so Proton uses X11 and not the
 //! host's Wayland socket. Otherwise WE runs exactly as without us. Either
 //! way we replace ourselves with the command Steam gave (`exec`).
+//!
+//! With `wine_wayland` on (state.json, `rustpaper we-proton enable`: WE's
+//! compatibility tool is then GE-Proton) WE uses Wine's Wayland driver on
+//! the stage's Wayland socket instead (`PROTON_ENABLE_WAYLAND=1`, no
+//! `DISPLAY`), with no XWayland in between (docs/ENGINE.md).
 
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
@@ -62,6 +67,19 @@ pub fn setup_steam() -> Result<(), String> {
         println!("already set: {option}");
         return Ok(());
     }
+    with_steam_closed(|| {
+        for f in &files {
+            steam::write_launch_options(f, app, &option)?;
+            println!("{}: LaunchOptions = {option}", f.display());
+        }
+        Ok(())
+    })
+}
+
+/// Runs `write` with Steam closed (it rewrites its config files on exit):
+/// a running Steam is closed (`steam -shutdown`) and started again after.
+pub fn with_steam_closed(write: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+    use rustpaper_core::steam;
     let was_running = steam::steam_running();
     if was_running {
         println!("closing Steam to write its config...");
@@ -74,10 +92,7 @@ pub fn setup_steam() -> Result<(), String> {
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
     }
-    for f in &files {
-        steam::write_launch_options(f, app, &option)?;
-        println!("{}: LaunchOptions = {option}", f.display());
-    }
+    let result = write();
     if was_running {
         println!("starting Steam again");
         let _ = Command::new("steam")
@@ -87,7 +102,39 @@ pub fn setup_steam() -> Result<(), String> {
             .stderr(std::process::Stdio::null())
             .spawn();
     }
-    Ok(())
+    result
+}
+
+/// The stage's Wayland socket, when one is up.
+pub fn active_wayland() -> Option<String> {
+    let name = std::fs::read_to_string(wayland_file()?).ok()?;
+    let name = name.trim().to_string();
+    let runtime = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR")?);
+    (!name.is_empty() && !name.contains('/') && runtime.join(&name).exists()).then_some(name)
+}
+
+/// WE's environment on the private stage: (variables to set, to remove).
+/// Nothing when no stage is up.
+fn stage_env(
+    display: Option<String>,
+    wayland: Option<String>,
+    wine_wayland: bool,
+) -> (Vec<(&'static str, String)>, Vec<&'static str>) {
+    match (wine_wayland, wayland, display) {
+        (true, Some(socket), _) => (
+            vec![
+                ("WAYLAND_DISPLAY", socket),
+                ("PROTON_ENABLE_WAYLAND", "1".into()),
+                ("RUSTPAPER_STAGE", "1".into()),
+            ],
+            vec!["DISPLAY"],
+        ),
+        (_, _, Some(display)) => (
+            vec![("DISPLAY", display), ("RUSTPAPER_STAGE", "1".into())],
+            vec!["WAYLAND_DISPLAY"],
+        ),
+        _ => (Vec::new(), Vec::new()),
+    }
 }
 
 pub fn run(command: &[String]) -> ! {
@@ -99,13 +146,44 @@ pub fn run(command: &[String]) -> ! {
     };
     let mut cmd = Command::new(program);
     cmd.args(args);
-    if let Some(display) = active_display() {
-        eprintln!("rustpaper we-launch: Wallpaper Engine on the private stage ({display})");
-        cmd.env("DISPLAY", &display)
-            .env_remove("WAYLAND_DISPLAY")
-            .env("RUSTPAPER_STAGE", "1");
+    let wine_wayland = rustpaper_core::state::load().wine_wayland;
+    let (set, remove) = stage_env(active_display(), active_wayland(), wine_wayland);
+    if !set.is_empty() {
+        eprintln!("rustpaper we-launch: Wallpaper Engine on the private stage ({set:?})");
+    }
+    for (k, v) in set {
+        cmd.env(k, v);
+    }
+    for k in remove {
+        cmd.env_remove(k);
     }
     let err = cmd.exec();
     eprintln!("rustpaper we-launch: {program}: {err}");
     std::process::exit(127);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn we_gets_the_stage_it_can_use() {
+        let x11 = stage_env(Some(":1".into()), Some("rustpaper-stage-7".into()), false);
+        assert!(x11.0.contains(&("DISPLAY", ":1".to_string())));
+        assert_eq!(x11.1, vec!["WAYLAND_DISPLAY"]);
+        let way = stage_env(Some(":1".into()), Some("rustpaper-stage-7".into()), true);
+        assert!(
+            way.0
+                .contains(&("WAYLAND_DISPLAY", "rustpaper-stage-7".to_string()))
+        );
+        assert!(way.0.contains(&("PROTON_ENABLE_WAYLAND", "1".to_string())));
+        assert_eq!(way.1, vec!["DISPLAY"]);
+        // asked for Wayland but no socket (older engine): X11 as before
+        let fallback = stage_env(Some(":1".into()), None, true);
+        assert!(fallback.0.contains(&("DISPLAY", ":1".to_string())));
+        assert!(
+            stage_env(None, None, true).0.is_empty(),
+            "no stage: untouched"
+        );
+    }
 }

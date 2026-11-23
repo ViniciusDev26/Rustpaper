@@ -70,6 +70,8 @@ export const api = {
   setPerformance: (values: Record<string, unknown>) => run("set_performance", { values }),
   setPlayback: (playback: Playback) => run("set_playback", { playback }),
   setVideoPlayer: (player: VideoPlayer) => run("set_video_player", { player }),
+  /// resolves to the engine's note for the user
+  setWineWayland: (enabled: boolean) => call(Note, "set_wine_wayland", { enabled }),
   workshopQuery: (query: WorkshopQuery) => call(WorkshopPage, "workshop_query", { query }),
   workshopSubscribe: (id: string) => run("workshop_subscribe", { id }),
   workshopUnsubscribe: (id: string) => run("workshop_unsubscribe", { id }),

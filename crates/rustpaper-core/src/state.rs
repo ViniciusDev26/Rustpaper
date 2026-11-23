@@ -149,6 +149,9 @@ pub struct State {
     pub playback: Playback,
     pub stage: StageChoice,
     pub video_player: VideoPlayer,
+    /// WE runs on Wine's Wayland driver (GE-Proton, `rustpaper we-proton`):
+    /// no XWayland in between. Off by default.
+    pub wine_wayland: bool,
 }
 
 impl Default for State {
@@ -164,6 +167,7 @@ impl Default for State {
             playback: Playback::default(),
             stage: StageChoice::Auto,
             video_player: VideoPlayer::Mpv,
+            wine_wayland: false,
         }
     }
 }

@@ -198,6 +198,79 @@ pub fn set_launch_options(doc: &mut Vec<(String, Vdf)>, appid: &str, options: &s
     }
 }
 
+const COMPAT_PATH: [&str; 5] = [
+    "InstallConfigStore",
+    "Software",
+    "Valve",
+    "Steam",
+    "CompatToolMapping",
+];
+
+/// The compatibility tool forced for `appid` (Steam's per-game "Force the
+/// use of a specific Steam Play compatibility tool"), in a config.vdf
+/// document. None: Steam's default for the game.
+pub fn get_compat_tool(doc: &[(String, Vdf)], appid: &str) -> Option<String> {
+    let mut items = doc;
+    for key in COMPAT_PATH.iter().copied().chain(std::iter::once(appid)) {
+        items = items.iter().find_map(|(k, v)| match v {
+            Vdf::Section(c) if k.eq_ignore_ascii_case(key) => Some(c.as_slice()),
+            _ => None,
+        })?;
+    }
+    items
+        .iter()
+        .find_map(|(k, v)| match v {
+            Vdf::Str(s) if k.eq_ignore_ascii_case("name") => Some(s.clone()),
+            _ => None,
+        })
+        .filter(|s| !s.is_empty())
+}
+
+/// Forces compatibility tool `tool` (its internal name) for `appid`, or with
+/// None goes back to Steam's default.
+pub fn set_compat_tool(doc: &mut Vec<(String, Vdf)>, appid: &str, tool: Option<&str>) {
+    let mut items = doc;
+    for key in COMPAT_PATH {
+        items = child(items, key);
+    }
+    items.retain(|(k, _)| k != appid);
+    if let Some(tool) = tool {
+        // what Steam writes for a per-game choice
+        items.push((
+            appid.to_string(),
+            Vdf::Section(vec![
+                ("name".into(), Vdf::Str(tool.into())),
+                ("config".into(), Vdf::Str(String::new())),
+                ("priority".into(), Vdf::Str("250".into())),
+            ]),
+        ));
+    }
+}
+
+/// Steam's `config/config.vdf` (where per-game compatibility tools live).
+pub fn steam_config() -> Option<PathBuf> {
+    Some(crate::paths::steam_root()?.join("config/config.vdf")).filter(|p| p.is_file())
+}
+
+/// The compatibility tool forced for `appid` in `file`.
+pub fn read_compat_tool(file: &Path, appid: &str) -> Option<String> {
+    let text = std::fs::read_to_string(file).ok()?;
+    get_compat_tool(&parse(&text).ok()?, appid)
+}
+
+/// Writes `appid`'s compatibility tool into `file` (one-time backup next to
+/// it). Steam must be closed: it rewrites the file on exit.
+pub fn write_compat_tool(file: &Path, appid: &str, tool: Option<&str>) -> Result<(), String> {
+    let text = std::fs::read_to_string(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let mut doc = parse(&text).map_err(|e| format!("{}: {e}", file.display()))?;
+    set_compat_tool(&mut doc, appid, tool);
+    let backup = file.with_extension("vdf.rustpaper-backup");
+    if !backup.exists() {
+        std::fs::copy(file, &backup).map_err(|e| format!("{}: {e}", backup.display()))?;
+    }
+    std::fs::write(file, write(&doc)).map_err(|e| format!("{}: {e}", file.display()))
+}
+
 /// Every `userdata/<account>/config/localconfig.vdf` of the Steam install.
 pub fn local_configs() -> Vec<PathBuf> {
     let Some(root) = crate::paths::steam_root() else {
@@ -243,6 +316,24 @@ pub fn steam_running() -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn compat_tool_is_set_read_and_cleared() {
+        let mut doc = parse("\"InstallConfigStore\"\n{\n\t\"Software\"\n\t{\n\t\t\"Valve\"\n\t\t{\n\t\t\t\"Steam\"\n\t\t\t{\n\t\t\t\t\"cip\"\t\t\"x\"\n\t\t\t}\n\t\t}\n\t}\n}\n").unwrap();
+        assert_eq!(get_compat_tool(&doc, "431960"), None);
+        set_compat_tool(&mut doc, "431960", Some("GE-Proton11-13-x86_64"));
+        let text = write(&doc);
+        let back = parse(&text).unwrap();
+        assert_eq!(
+            get_compat_tool(&back, "431960").as_deref(),
+            Some("GE-Proton11-13-x86_64")
+        );
+        assert!(text.contains("\"cip\""), "other keys kept");
+        let mut back = back;
+        set_compat_tool(&mut back, "431960", None);
+        assert_eq!(get_compat_tool(&back, "431960"), None);
+    }
+
     use super::*;
 
     const SAMPLE: &str = "\"UserLocalConfigStore\"\n{\n\t\"Software\"\n\t{\n\t\t\"Valve\"\n\t\t{\n\t\t\t\"Steam\"\n\t\t\t{\n\t\t\t\t\"apps\"\n\t\t\t\t{\n\t\t\t\t\t\"431960\"\n\t\t\t\t\t{\n\t\t\t\t\t\t\"LastPlayed\"\t\t\"1795384941\"\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n\t\"friends\"\n\t{\n\t\t\"name\"\t\t\"a \\\"quoted\\\" name\"\n\t}\n}\n";

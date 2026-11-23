@@ -36,6 +36,7 @@ mod launch;
 mod lock;
 mod mirror;
 mod power;
+mod proton;
 mod stage;
 mod video;
 mod we;
@@ -123,6 +124,10 @@ fn main() {
             .collect();
         println!("{}", serde_json::Value::Array(list));
         std::process::exit(0);
+    }
+    if argv.get(1).map(String::as_str) == Some("we-proton") {
+        let rest: Vec<&str> = argv.iter().skip(2).map(String::as_str).collect();
+        std::process::exit(proton::main(&rest));
     }
     if argv.get(1).map(String::as_str) == Some("setup-steam") {
         match launch::setup_steam() {
@@ -465,8 +470,20 @@ fn reload(
     ctx: &Ctx,
     force: bool,
 ) {
-    if ctx.we_on && !new.performance.is_empty() && we::needs_restart(&new.performance) {
-        eprintln!("reload: new quality settings, restarting Wallpaper Engine");
+    let new_driver = new.wine_wayland != old.wine_wayland;
+    if ctx.we_on
+        && (new_driver || (!new.performance.is_empty() && we::needs_restart(&new.performance)))
+    {
+        // a new Wine driver only applies to a WE started again (through
+        // Steam: the launch option sets its environment)
+        eprintln!(
+            "reload: {}, restarting Wallpaper Engine",
+            if new_driver {
+                "new Wine driver"
+            } else {
+                "new quality settings"
+            }
+        );
         if we::restart(&new.performance) {
             stage.hide_we_ui();
         }
@@ -501,8 +518,17 @@ fn start_we(cfg: &Config, private: Option<&PrivateStage>, stage: &dyn Stage) -> 
         eprintln!("error: Wallpaper Engine is not running (start it from Steam)");
         return false;
     }
+    // on Wine's Wayland driver WE talks to the stage's Wayland socket, on
+    // its X11 driver to the stage's XWayland
+    let on_stage = |p: &PrivateStage| {
+        if cfg.wine_wayland {
+            we::env_var("WAYLAND_DISPLAY").as_deref() == Some(p.wayland_socket())
+        } else {
+            we::display().as_deref() == Some(p.display())
+        }
+    };
     if let Some(p) = private
-        && we::display().as_deref() != Some(p.display())
+        && !on_stage(p)
     {
         // started before this stage (or without it): Steam starts it again
         // through the launch option, which points it at our display
@@ -954,6 +980,7 @@ mod tests {
             performance: Default::default(),
             stage: StageChoice::Private,
             video_player: VideoPlayer::Mpv,
+            wine_wayland: false,
         };
         let is_video = |c: &Choice| c.project.starts_with("video");
         let outs = ["DP-1".to_string(), "HDMI-A-1".to_string()];

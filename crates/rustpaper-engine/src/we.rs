@@ -44,10 +44,16 @@ pub fn pid() -> Option<u32> {
 
 /// The X display the running WE renders on (its `DISPLAY`).
 pub fn display() -> Option<String> {
+    env_var("DISPLAY")
+}
+
+/// Variable `name` of the running WE's environment.
+pub fn env_var(name: &str) -> Option<String> {
     let environ = std::fs::read(format!("/proc/{}/environ", pid()?)).ok()?;
+    let prefix = format!("{name}=");
     environ
         .split(|&b| b == 0)
-        .find_map(|e| e.strip_prefix(b"DISPLAY="))
+        .find_map(|e| e.strip_prefix(prefix.as_bytes()))
         .map(|d| String::from_utf8_lossy(d).into_owned())
 }
 
