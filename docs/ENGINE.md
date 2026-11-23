@@ -143,7 +143,9 @@ the surface of WE's window on that monitor: XWayland turns them into the X
 pointer WE reads, and Wine's Wayland driver reads them directly. A monitor
 sharing another's window points into that window; one showing mpv's video
 sends nothing to WE. The wallpaper gets the pointer only where no window
-covers the desktop, as on Windows. Over it the cursor is the desktop's
+covers the desktop, as on Windows. The lock screen sends its pointer over
+the frame feed and the engine forwards it the same way
+(docs/LOCKSCREEN.md). Over it the cursor is the desktop's
 default (`cursor-shape-v1`; a compositor without it keeps the old empty
 input region, since the cursor would be undefined there). Verified on
 Hyprland with the Wayland driver: 十二时辰-SYKM 3496849678's sundial

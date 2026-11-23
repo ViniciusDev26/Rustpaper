@@ -26,6 +26,7 @@ use wayland_client::protocol::{
     wl_compositor::WlCompositor,
     wl_keyboard::{self, WlKeyboard},
     wl_output::{self, WlOutput},
+    wl_pointer::{self, WlPointer},
     wl_region::WlRegion,
     wl_registry::{self, WlRegistry},
     wl_seat::{self, WlSeat},
@@ -41,6 +42,10 @@ use wayland_protocols::ext::session_lock::v1::client::{
     ext_session_lock_surface_v1::{self, ExtSessionLockSurfaceV1},
     ext_session_lock_v1::{self, ExtSessionLockV1},
 };
+use wayland_protocols::wp::cursor_shape::v1::client::{
+    wp_cursor_shape_device_v1::{Shape, WpCursorShapeDeviceV1},
+    wp_cursor_shape_manager_v1::WpCursorShapeManagerV1,
+};
 use wayland_protocols::wp::linux_dmabuf::zv1::client::{
     zwp_linux_buffer_params_v1::{self, ZwpLinuxBufferParamsV1},
     zwp_linux_dmabuf_v1::{self, ZwpLinuxDmabufV1},
@@ -53,6 +58,7 @@ use xkbcommon::xkb;
 use super::adapter::LockAdapter;
 use super::feed::{FeedClient, FeedEvent, FeedFrame};
 use super::ui::{self, Panel, PanelState, Status};
+use crate::stage::PointerInput;
 
 /// How often a missing engine is looked for again.
 const FEED_RETRY: Duration = Duration::from_secs(2);
@@ -216,6 +222,14 @@ struct State {
     /// Bound for its keyboard (kept for the connection's lifetime).
     _seat: Option<WlSeat>,
     keyboard: Option<WlKeyboard>,
+    /// The pointer: over the wallpaper it goes to the engine (feed.rs), so
+    /// wallpapers that follow the cursor do here too; over the panel it
+    /// does not.
+    pointer: Option<WlPointer>,
+    cursor_shape: Option<WpCursorShapeManagerV1>,
+    cursor_device: Option<WpCursorShapeDeviceV1>,
+    /// The monitor (name, logical size) whose wallpaper the pointer is over.
+    pointer_on: Option<(String, (u32, u32))>,
     xkb_ctx: xkb::Context,
     xkb: Option<xkb::State>,
     password: Secret,
@@ -269,6 +283,10 @@ pub fn run(adapter: &dyn LockAdapter, mut opts: Options) -> Result<(), String> {
         outputs: Vec::new(),
         _seat: globals.bind(&qh, 1..=9, ()).ok(),
         keyboard: None,
+        pointer: None,
+        cursor_shape: globals.bind(&qh, 1..=1, ()).ok(),
+        cursor_device: None,
+        pointer_on: None,
         xkb_ctx: xkb::Context::new(xkb::CONTEXT_NO_FLAGS),
         xkb: None,
         password: Secret::default(),
@@ -1024,13 +1042,103 @@ impl Dispatch<WlSeat, ()> for State {
         _: &Connection,
         qh: &QueueHandle<Self>,
     ) {
-        if let wl_seat::Event::Capabilities {
+        let wl_seat::Event::Capabilities {
             capabilities: WEnum::Value(caps),
         } = e
-            && caps.contains(wl_seat::Capability::Keyboard)
-            && st.keyboard.is_none()
-        {
+        else {
+            return;
+        };
+        if caps.contains(wl_seat::Capability::Keyboard) && st.keyboard.is_none() {
             st.keyboard = Some(seat.get_keyboard(qh, ()));
+        }
+        if caps.contains(wl_seat::Capability::Pointer) && st.pointer.is_none() {
+            let pointer = seat.get_pointer(qh, ());
+            st.cursor_device = st
+                .cursor_shape
+                .as_ref()
+                .map(|m| m.get_pointer(&pointer, qh, ()));
+            st.pointer = Some(pointer);
+        }
+    }
+}
+
+impl State {
+    /// The monitor whose wallpaper `surface` shows: the lock surface or the
+    /// dim layer over it (both cover the monitor at 0,0). None for the panel.
+    fn wallpaper_of(&self, surface: &WlSurface) -> Option<(String, (u32, u32))> {
+        self.outputs
+            .iter()
+            .find(|o| {
+                o.surface.as_ref() == Some(surface)
+                    || o.dim.as_ref().is_some_and(|(s, _, _)| s == surface)
+            })
+            .map(|o| (o.name.clone(), o.size))
+    }
+
+    fn send_pointer(&self, input: PointerInput) {
+        if let (Some(feed), Some((name, _))) = (&self.feed, &self.pointer_on) {
+            feed.pointer(name, input);
+        }
+    }
+}
+
+impl Dispatch<WlPointer, ()> for State {
+    fn event(
+        st: &mut Self,
+        _: &WlPointer,
+        e: wl_pointer::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let motion = |on: &Option<(String, (u32, u32))>, x: f64, y: f64| {
+            let (_, (w, h)) = on.as_ref()?;
+            Some(PointerInput::Motion {
+                x: x / f64::from((*w).max(1)),
+                y: y / f64::from((*h).max(1)),
+            })
+        };
+        match e {
+            wl_pointer::Event::Enter {
+                serial,
+                surface,
+                surface_x,
+                surface_y,
+            } => {
+                if let Some(d) = &st.cursor_device {
+                    d.set_shape(serial, Shape::Default);
+                }
+                st.pointer_on = st.wallpaper_of(&surface);
+                if let Some(m) = motion(&st.pointer_on, surface_x, surface_y) {
+                    st.send_pointer(m);
+                }
+            }
+            wl_pointer::Event::Leave { .. } => {
+                st.send_pointer(PointerInput::Leave);
+                st.pointer_on = None;
+            }
+            wl_pointer::Event::Motion {
+                surface_x,
+                surface_y,
+                ..
+            } => {
+                if let Some(m) = motion(&st.pointer_on, surface_x, surface_y) {
+                    st.send_pointer(m);
+                }
+            }
+            wl_pointer::Event::Button { button, state, .. } => {
+                st.send_pointer(PointerInput::Button {
+                    button,
+                    pressed: state == WEnum::Value(wl_pointer::ButtonState::Pressed),
+                });
+            }
+            wl_pointer::Event::Axis { axis, value, .. } => {
+                st.send_pointer(PointerInput::Axis {
+                    vertical: axis == WEnum::Value(wl_pointer::Axis::VerticalScroll),
+                    value,
+                });
+            }
+            _ => {}
         }
     }
 }
@@ -1130,6 +1238,8 @@ impl Dispatch<ZwpLinuxBufferParamsV1, ()> for State {
 }
 
 delegate_noop!(State: ignore WlCompositor);
+delegate_noop!(State: WpCursorShapeManagerV1);
+delegate_noop!(State: WpCursorShapeDeviceV1);
 delegate_noop!(State: ignore WlSubcompositor);
 delegate_noop!(State: ignore WlSubsurface);
 delegate_noop!(State: ignore WlSurface);
