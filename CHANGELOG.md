@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/ViniciusDev26/Rustpaper/compare/v0.9.0...v0.10.0) (2026-11-23)
+
+
+### Features
+
+* **selector:** choose where a wallpaper goes before applying it ([#53](https://github.com/ViniciusDev26/Rustpaper/issues/53)) ([ebaae6a](https://github.com/ViniciusDev26/Rustpaper/commit/ebaae6a3c1168fb3ddf22d9c5394618bc987c170))
+
 ## [0.9.0](https://github.com/ViniciusDev26/Rustpaper/compare/v0.8.0...v0.9.0) (2026-11-23)
 
 
