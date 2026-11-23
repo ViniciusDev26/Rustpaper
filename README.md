@@ -173,6 +173,20 @@ How it works, measurements and known gaps:
   monitor's wallpaper under fullscreen or tiled windows.
 - **Lower FPS** in the Quality settings: Wallpaper Engine renders scenes at
   that rate.
+- **Same wallpaper on several monitors** renders once (monitors with the
+  same aspect ratio share the largest one's render): nothing to set.
+- **Wine's Wayland driver (advanced, opt-in).** With Steam's own Proton,
+  Wallpaper Engine runs on Wine's X11 driver and an XWayland copies every
+  frame. With GE-Proton it can use Wine's Wayland driver instead, with no
+  XWayland work: measured with a 4K and a 1080p monitor, the CPU went from
+  15.8% to 5.4% of a core and the graphics card from 37.8 W to 33.3 W; on
+  NVIDIA the GPU load stayed the same (its Vulkan driver does the copy
+  instead). Turn it on in the Performance tab ("Wine's Wayland driver") or
+  with `rustpaper we-proton enable`. It uses the newest GE-Proton in
+  Steam's `compatibilitytools.d` or downloads the latest one (~600 MB,
+  checksum verified), makes it Wallpaper Engine's compatibility tool
+  (Steam closes and reopens) and restarts Wallpaper Engine.
+  `rustpaper we-proton disable` gives Wallpaper Engine back Steam's Proton.
 
 ---
 
