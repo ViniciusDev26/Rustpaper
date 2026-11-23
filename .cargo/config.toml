@@ -1,0 +1,11 @@
+# rustpaper-we-helper.exe (crates/rustpaper-we-helper): a no_std Windows
+# program linked by the rust-lld that ships with rustup, without a Windows
+# SDK or C runtime. Needs `rustup target add x86_64-pc-windows-msvc`.
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld"
+rustflags = [
+    "-C", "panic=abort",
+    "-C", "link-arg=/ENTRY:mainCRTStartup",
+    "-C", "link-arg=/SUBSYSTEM:CONSOLE",
+    "-C", "link-arg=/NODEFAULTLIB",
+]

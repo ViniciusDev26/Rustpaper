@@ -7,7 +7,7 @@
 //! instance hands the command to the running WE and exits.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -92,13 +92,31 @@ fn run_in_we(argv: &[String], limit: Duration) -> bool {
     // a stopped WE would never take the command (the watchdog pauses it
     // again on its next tick when nothing needs it)
     set_paused(false);
-    let Some(pid) = pid() else {
-        return false;
-    };
     let args = argv;
-    let Ok(environ) = std::fs::read(format!("/proc/{pid}/environ")) else {
+    let Some(mut child) = spawn_in_we(argv) else {
         return false;
     };
+    // it exits once the command is delivered (~1 s); never hang on it
+    let deadline = Instant::now() + limit;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                eprintln!("we: control command timed out: {args:?}");
+                return false;
+            }
+        }
+    }
+}
+
+/// Starts `wine <argv...>` inside the running WE's container and
+/// wineserver, without waiting for it. None when WE is not running.
+pub fn spawn_in_we(argv: &[String]) -> Option<Child> {
+    let pid = pid()?;
+    let environ = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
     // the wineserver socket / preload settings belong to that process only
     let env: Vec<String> = environ
         .split(|&b| b == 0)
@@ -131,22 +149,11 @@ fn run_in_we(argv: &[String], limit: Duration) -> bool {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn();
-    let Ok(mut child) = child else {
-        eprintln!("we: could not run nsenter (util-linux)");
-        return false;
-    };
-    // it exits once the command is delivered (~1 s); never hang on it
-    let deadline = Instant::now() + limit;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return status.success(),
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                eprintln!("we: control command timed out: {args:?}");
-                return false;
-            }
+    match child {
+        Ok(c) => Some(c),
+        Err(_) => {
+            eprintln!("we: could not run nsenter (util-linux)");
+            None
         }
     }
 }
@@ -401,7 +408,7 @@ pub fn apply_properties(props: &serde_json::Map<String, serde_json::Value>, wind
 
 /// Somewhere both we and WE's container can read (the home is shared with
 /// the Steam Runtime container).
-fn cache_dir() -> Option<PathBuf> {
+pub fn cache_dir() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))?;

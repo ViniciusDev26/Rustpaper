@@ -92,7 +92,8 @@ your own copy of **Wallpaper Engine**, purchased on Steam.
 
    **From source**, for your user: `./scripts/install.sh` (needs a Rust
    toolchain, pinned in `mise.toml`, and Node.js 20+ with npm for the
-   selector's UI).
+   selector's UI; with rustup it also builds the small Windows helper that
+   lets web wallpapers take clicks).
 3. **Let Rustpaper host Wallpaper Engine** (once):
 
    ```sh

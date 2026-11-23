@@ -14,7 +14,9 @@ depends=('gcc-libs' 'glibc' 'gtk3' 'libglvnd' 'libxkbcommon' 'wayland' 'webkit2g
 optdepends=('mpv: plays video wallpapers with hardware decoding instead of Wallpaper Engine'
             'libpulse: pactl, for the volume and mute of Wallpaper Engine (PipeWire or PulseAudio)')
 backup=('etc/pam.d/rustpaper-lock')
-makedepends=('cargo' 'pkgconf' 'nodejs' 'npm')
+# rustup, not the plain rust package: rustpaper-we-helper.exe is built for
+# the x86_64-pc-windows-msvc target, whose standard library only rustup has
+makedepends=('rustup' 'pkgconf' 'nodejs' 'npm')
 conflicts=('rustpaper-bin')
 source=("$pkgname-$pkgver.tar.gz::https://github.com/ViniciusDev26/Rustpaper/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=('SKIP')
@@ -23,6 +25,7 @@ options=('!lto')
 prepare() {
     cd "Rustpaper-$pkgver"
     export RUSTUP_TOOLCHAIN=stable
+    rustup toolchain install stable --profile minimal --target x86_64-pc-windows-msvc
     cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
     # the selector's React UI: its build.rs runs `npm run build` offline
     (cd crates/rustpaper-selector/ui && npm ci --no-audit --no-fund)
@@ -34,6 +37,8 @@ build() {
     export CARGO_TARGET_DIR=target
     cargo build --frozen --release \
         -p rustpaper-engine -p rustpaper-selector -p rustpaper-workshop --bins
+    # run by the engine inside Wallpaper Engine's Proton (no dependencies)
+    cargo build --frozen --release -p rustpaper-we-helper --target x86_64-pc-windows-msvc
 }
 
 package() {
@@ -44,6 +49,8 @@ package() {
     # Steamworks client library (bundled by steamworks-sys, copied by the
     # workshop crate's build.rs) for rustpaper-workshop: RUNPATH ../lib/rustpaper
     install -Dm755 target/release/libsteam_api.so "$pkgdir/usr/lib/rustpaper/libsteam_api.so"
+    install -Dm644 target/x86_64-pc-windows-msvc/release/rustpaper-we-helper.exe \
+        "$pkgdir/usr/lib/rustpaper/rustpaper-we-helper.exe"
     install -Dm644 packaging/rustpaper.desktop "$pkgdir/usr/share/applications/rustpaper.desktop"
     install -Dm644 crates/rustpaper-selector/icons/128x128.png \
         "$pkgdir/usr/share/icons/hicolor/128x128/apps/rustpaper.png"

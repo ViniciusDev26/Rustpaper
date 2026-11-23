@@ -82,8 +82,11 @@ jobs:
     steps:
       - name: Install build dependencies
         run: |
-          pacman -Syu --noconfirm --needed git rust pkgconf github-cli nodejs npm \
+          pacman -Syu --noconfirm --needed git rustup pkgconf github-cli nodejs npm \
             gtk3 webkit2gtk-4.1 libglvnd libxkbcommon wayland pam dbus
+          # rustup, for the Windows target of rustpaper-we-helper.exe
+          rustup toolchain install stable --profile minimal --target x86_64-pc-windows-msvc
+          rustup default stable
       - uses: actions/checkout@v4
       - name: Build the tarball
         run: ./packaging/dist.sh dist

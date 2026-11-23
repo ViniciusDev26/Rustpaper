@@ -2793,6 +2793,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustpaper-we-helper"
+version = "0.10.0"
+
+[[package]]
 name = "rustpaper-workshop"
 version = "0.10.0"
 dependencies = [

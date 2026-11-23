@@ -98,6 +98,12 @@ with the measurement or observation that justified it.
     Desktop-specific lock behaviour (PAM service, look, routing the
     desktop's lock triggers) only in adapters behind `LockAdapter`
     (`adapter.rs`): `omarchy.rs`, `generic.rs`.
+- **`rustpaper-we-helper`**: `rustpaper-we-helper.exe`, a no_std Windows
+  program the engine keeps running inside WE's Proton prefix
+  (`we_helper.rs`): it marks our WE windows as the desktop, without which
+  web wallpapers take no clicks. Build: `cargo build --release -p
+  rustpaper-we-helper --target x86_64-pc-windows-msvc` (rustup target;
+  linked by rust-lld, `.cargo/config.toml`). A stub on the host.
 - **`rustpaper-selector`**: Tauri v2 app, binary **`rustpaper-selector`**.
   The UI lives in `ui/`: React + TypeScript + Tailwind v4 (Vite), Zustand
   stores, Zod-validated command replies (`src/api`). build.rs builds it

@@ -3,9 +3,10 @@
 #   rustpaper-engine   : the live wallpaper (real WE under Proton), binary `rustpaper`
 #   rustpaper-selector : desktop app to browse and apply wallpapers
 #   rustpaper-workshop : Steam Workshop bridge for the selector
+#   rustpaper-we-helper: Windows helper run inside WE's Proton prefix (web wallpaper clicks)
 [workspace]
 resolver = "3"
-members = ["crates/rustpaper-core", "crates/rustpaper-engine", "crates/rustpaper-selector", "crates/rustpaper-workshop"]
+members = ["crates/rustpaper-core", "crates/rustpaper-engine", "crates/rustpaper-selector", "crates/rustpaper-workshop", "crates/rustpaper-we-helper"]
 
 # One version for every crate (and the selector's tauri.conf.json), bumped by
 # release-please from Conventional Commits (docs/RELEASING.md).

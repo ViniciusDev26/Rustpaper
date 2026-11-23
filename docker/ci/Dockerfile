@@ -37,10 +37,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libxdo-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# --profile minimal: no docs/extras, just what CI needs to compile.
+# --profile minimal: no docs/extras, just what CI needs to compile. The
+# Windows target builds rustpaper-we-helper.exe (linked by rust-lld).
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
         sh -s -- -y --profile minimal --default-toolchain stable \
-        --component rustfmt --component clippy \
+        --component rustfmt --component clippy --target x86_64-pc-windows-msvc \
     && chmod -R a+w "$RUSTUP_HOME" "$CARGO_HOME"
 
 # Node.js 22 (NodeSource): rustpaper-selector's build.rs builds its React UI

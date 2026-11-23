@@ -8,6 +8,10 @@
 #   $PREFIX/bin/rustpaper-selector   gallery + customization panel
 #   $PREFIX/bin/rustpaper-workshop   Steam Workshop bridge (selector's store)
 #   $PREFIX/lib/rustpaper/libsteam_api.so  its Steamworks library
+#   $PREFIX/lib/rustpaper/rustpaper-we-helper.exe  run inside WE's Proton
+#                                    (web wallpapers' clicks; built for the
+#                                    x86_64-pc-windows-msvc target, which
+#                                    rustup adds here when missing)
 #   $PREFIX/share/applications/rustpaper.desktop   launcher entry
 #   $PREFIX/share/icons/hicolor/128x128/apps/rustpaper.png
 # PREFIX defaults to ~/.local. DESTDIR is prepended to every path (packaging).
@@ -39,11 +43,22 @@ if [ "${1:-}" = "--uninstall" ]; then
 fi
 
 (cd "$REPO" && cargo build --release -p rustpaper-engine -p rustpaper-selector -p rustpaper-workshop --bins)
+# the Windows helper: optional (without it web wallpapers take no clicks)
+helper=""
+if command -v rustup >/dev/null; then
+    rustup target add x86_64-pc-windows-msvc >/dev/null 2>&1 || true
+fi
+if (cd "$REPO" && cargo build --release -p rustpaper-we-helper --target x86_64-pc-windows-msvc); then
+    helper=$REPO/target/x86_64-pc-windows-msvc/release/rustpaper-we-helper.exe
+else
+    echo "warning: rustpaper-we-helper.exe not built (needs rustup's x86_64-pc-windows-msvc target): web wallpapers will not take clicks" >&2
+fi
 
 install -d "$DEST/bin" "$DEST/share/applications" "$DEST/share/icons/hicolor/128x128/apps"
 for b in "${BINS[@]}"; do install -m 755 "$REPO/target/release/$b" "$DEST/bin/$b"; done
 for b in "${OLD_BINS[@]}"; do rm -f "$DEST/bin/$b"; done
 install -Dm755 "$REPO/target/release/libsteam_api.so" "$DEST/lib/rustpaper/libsteam_api.so"
+[ -n "$helper" ] && install -Dm644 "$helper" "$DEST/lib/rustpaper/rustpaper-we-helper.exe"
 install -m 644 "$REPO/crates/rustpaper-selector/icons/128x128.png" \
     "$DEST/share/icons/hicolor/128x128/apps/rustpaper.png"
 cat > "$DEST/share/applications/rustpaper.desktop" <<DESKTOP
