@@ -22,16 +22,20 @@
 //!   Playback rules pause where the wallpaper is hidden.
 //! - **Service mode** (`config.rs`): `--service` shows the selector's choice
 //!   and reloads it in place on SIGHUP.
+//! - **Lock screen** (`lock/`): `rustpaper lock` and its daemon; the engine
+//!   feeds it the private stage's frames (`lock/feed.rs`).
 
 mod config;
 mod desktop;
 mod gbm;
 mod launch;
+mod lock;
 mod mirror;
 mod power;
 mod stage;
 mod we;
 
+use std::collections::HashMap;
 use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -89,6 +93,12 @@ fn main() {
     let argv: Vec<String> = std::env::args().collect();
     if argv.get(1).map(String::as_str) == Some("we-launch") {
         launch::run(&argv[2..]);
+    }
+    if matches!(
+        argv.get(1).map(String::as_str),
+        Some("lock" | "lock-daemon" | "lock-setup")
+    ) {
+        lock::main(&argv);
     }
     if argv.get(1).map(String::as_str) == Some("setup-steam") {
         match launch::setup_steam() {
@@ -204,26 +214,74 @@ fn main() {
         })
         .collect();
 
+    // the lock screen shows the private stage's frames too (lock/feed.rs)
+    let mut feed = private_stage
+        .as_ref()
+        .and_then(|_| lock::feed::FeedServer::bind());
+    // who still uses each of WE's buffers (lock::feed::holders); a buffer
+    // goes back to WE when neither the mirror nor the lock does
+    let mut holders: HashMap<u64, u8> = HashMap::new();
+
     let mut we_paused = false;
     let mut last_tick = Instant::now() - TICK;
     let mut stats = Instant::now();
     let fd = conn.backend().poll_fd().as_raw_fd();
     while !QUIT.load(Ordering::SeqCst) {
-        let stage_fd = private_stage.as_ref().map(|p| p.notify_fd());
-        if let Err(e) = dispatch(&mut queue, &mut mirrors, fd, stage_fd) {
+        let mut extra = vec![private_stage.as_ref().map_or(-1, |p| p.notify_fd())];
+        extra.extend(feed.as_ref().map_or([-1, -1], |f| f.poll_fds()));
+        if let Err(e) = dispatch(&mut queue, &mut mirrors, fd, &extra) {
             eprintln!("error: Wayland connection lost: {e}");
             break;
         }
         if let Some(p) = &private_stage {
-            // WE's frames to the monitors; released buffers back to WE
+            use lock::feed::holders::{LOCK, MIRROR};
+            // WE's frames to the monitors (and the lock screen); released
+            // buffers back to WE
             for event in p.drain() {
                 match event {
-                    StageEvent::Frame(frame) => mirrors.show(&qh, frame),
-                    StageEvent::BufferGone(key) => mirrors.forget(key),
+                    StageEvent::Frame(frame) => {
+                        if matches!(frame.pixels, stage::FramePixels::Dmabuf { .. }) {
+                            let mut who = MIRROR;
+                            if feed.as_mut().is_some_and(|f| f.send(&frame)) {
+                                who |= LOCK;
+                            }
+                            *holders.entry(frame.key).or_default() |= who;
+                        }
+                        mirrors.show(&qh, frame);
+                    }
+                    StageEvent::BufferGone(key) => {
+                        mirrors.forget(key);
+                        if let Some(f) = &mut feed {
+                            f.gone(key);
+                        }
+                    }
                 }
             }
-            for key in mirrors.take_released() {
-                p.release(key);
+            let mut freed: Vec<(u64, u8)> = mirrors
+                .take_released()
+                .into_iter()
+                .map(|k| (k, MIRROR))
+                .collect();
+            if let Some(f) = &mut feed {
+                let (keys, changed) = f.poll();
+                freed.extend(keys.into_iter().map(|k| (k, LOCK)));
+                if changed {
+                    mirrors.set_locked(&qh, f.active());
+                    // re-decide pausing now (WE must play while locked)
+                    last_tick = Instant::now() - TICK;
+                }
+            }
+            for (key, who) in freed {
+                match holders.get_mut(&key) {
+                    Some(h) => {
+                        *h &= !who;
+                        if *h == 0 {
+                            holders.remove(&key);
+                            p.release(key);
+                        }
+                    }
+                    None => p.release(key),
+                }
             }
         }
         mirrors.pump(&qh);
@@ -253,6 +311,7 @@ fn main() {
                 &mut targets,
                 &mut mirrors,
                 &mut we_paused,
+                feed.as_ref().is_some_and(|f| f.active()),
             );
         }
         if stats.elapsed() >= Duration::from_secs(60) {
@@ -317,31 +376,27 @@ fn other_engine_running() -> bool {
 }
 
 /// One round of Wayland events, waiting at most 250 ms for them (the loop
-/// also runs the watchdog and notices signals).
+/// also runs the watchdog and notices signals). `extra` fds (the private
+/// stage's frames, the lock feed) also end the wait.
 fn dispatch(
     queue: &mut wayland_client::EventQueue<Mirrors>,
     mirrors: &mut Mirrors,
     fd: i32,
-    stage_fd: Option<i32>,
+    extra: &[i32],
 ) -> Result<(), String> {
     queue.dispatch_pending(mirrors).map_err(|e| e.to_string())?;
     queue.flush().map_err(|e| e.to_string())?;
     if let Some(guard) = queue.prepare_read() {
-        // also wake up for the private stage's frames
-        let mut pfds = [
-            libc::pollfd {
+        let mut pfds: Vec<libc::pollfd> = std::iter::once(fd)
+            .chain(extra.iter().copied())
+            .map(|fd| libc::pollfd {
                 fd,
                 events: libc::POLLIN,
                 revents: 0,
-            },
-            libc::pollfd {
-                fd: stage_fd.unwrap_or(-1),
-                events: libc::POLLIN,
-                revents: 0,
-            },
-        ];
-        // SAFETY: two valid pollfds (a negative fd is ignored by poll).
-        let n = unsafe { libc::poll(pfds.as_mut_ptr(), 2, 250) };
+            })
+            .collect();
+        // SAFETY: valid pollfds (a negative fd is ignored by poll).
+        let n = unsafe { libc::poll(pfds.as_mut_ptr(), pfds.len() as libc::nfds_t, 250) };
         if n > 0
             && pfds[0].revents != 0
             && let Err(e) = guard.read()
@@ -393,6 +448,7 @@ fn watchdog(
     targets: &mut [Target],
     mirrors: &mut Mirrors,
     we_paused: &mut bool,
+    locked: bool,
 ) {
     for t in targets.iter_mut() {
         if !stage.tend(&t.output) {
@@ -440,7 +496,9 @@ fn watchdog(
                 .is_some_and(|c| should_pause(&cfg.playback, c, battery));
         }
     }
-    let all = !mirrors.list.is_empty() && mirrors.list.iter().all(|m| m.paused);
+    // while the lock screen shows the wallpaper, WE keeps playing (only the
+    // lock covers the monitors; "display asleep" still pauses each mirror)
+    let all = !locked && !mirrors.list.is_empty() && mirrors.list.iter().all(|m| m.paused);
     if all != *we_paused {
         *we_paused = all;
         we::control(&["-control", if all { "pause" } else { "play" }]);

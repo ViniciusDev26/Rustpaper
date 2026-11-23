@@ -94,6 +94,9 @@ pub struct Mirror {
     pub title: String,
     /// While true no frames are captured (a fullscreen window covers it).
     pub paused: bool,
+    /// The lock screen shows this monitor's frames (private stage): ours
+    /// are hidden under it, so WE's buffers go to the lock only.
+    locked: bool,
     /// Frames shown since the counter was last reset (stats).
     pub frames: u32,
     surface: WlSurface,
@@ -160,6 +163,8 @@ pub struct Mirrors {
     outputs: Vec<(WlOutput, String, (u32, u32))>,
     toplevels: Vec<Toplevel>,
     next_id: u64,
+    /// 1x1 black buffer the surfaces show while locked (see `set_locked`).
+    park: Option<WlBuffer>,
 }
 
 impl Mirrors {
@@ -193,6 +198,7 @@ impl Mirrors {
             outputs: Vec::new(),
             toplevels: Vec::new(),
             next_id: 0,
+            park: None,
         };
         let _list: Option<ExtForeignToplevelListV1> = globals.bind(&qh, 1..=1, ()).ok();
         if let Some(d) = &m.dmabuf {
@@ -263,6 +269,7 @@ impl Mirrors {
             output: output.into(),
             title: title.into(),
             paused: false,
+            locked: false,
             frames: 0,
             surface,
             viewport,
@@ -294,7 +301,7 @@ impl Mirrors {
         let Some(i) = self.list.iter().position(|m| m.output == frame.output) else {
             return release_now(self, &frame);
         };
-        if self.list[i].paused || !self.list[i].configured {
+        if self.list[i].paused || self.list[i].locked || !self.list[i].configured {
             return release_now(self, &frame);
         }
         let size = frame.size;
@@ -428,6 +435,39 @@ impl Mirrors {
         m.surface.commit();
         e.on_screen = true;
         m.frames += 1;
+    }
+
+    /// While the lock screen shows the private stage's frames, our surfaces
+    /// (hidden under the lock) stop taking them and show a 1x1 black buffer
+    /// instead, so the compositor releases the WE buffer they still held:
+    /// WE renders into a few buffers only, and one pinned here for the
+    /// whole lock would leave it fewer to cycle through.
+    pub fn set_locked(&mut self, qh: &QueueHandle<Self>, locked: bool) {
+        if locked && self.park.is_none() {
+            self.park = memfd(4).map(|fd| {
+                let pool: WlShmPool = self.shm.create_pool(fd.as_fd(), 4, qh, ());
+                // (memfd starts zeroed: black, and opaque as XRGB)
+                let b = pool.create_buffer(0, 1, 1, 4, wl_shm::Format::Xrgb8888, qh, (0, u64::MAX));
+                pool.destroy();
+                b
+            });
+        }
+        for m in &mut self.list {
+            if m.capture || m.locked == locked {
+                continue;
+            }
+            m.locked = locked;
+            if locked
+                && m.configured
+                && let Some(park) = &self.park
+            {
+                m.surface.attach(Some(park), 0, 0);
+                m.viewport
+                    .set_destination(m.logical.0 as i32, m.logical.1 as i32);
+                m.surface.damage_buffer(0, 0, 1, 1);
+                m.surface.commit();
+            }
+        }
     }
 
     /// The private stage destroyed its buffer `key`.
@@ -756,6 +796,9 @@ impl Dispatch<WlBuffer, (usize, u64)> for Mirrors {
         _: &QueueHandle<Self>,
     ) {
         if let wl_buffer::Event::Release = e {
+            if i >= s.list.len() {
+                return;
+            }
             if let Some(b) = s.list[i].buffers.iter_mut().find(|b| b.id == id) {
                 b.on_screen = false;
                 s.reap(i, id);
