@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.7.0](https://github.com/ViniciusDev26/Rustpaper/compare/v0.6.0...v0.7.0) (2026-11-23)
+
+
+### Features
+
+* **engine:** opt-in wine wayland driver for wallpaper engine ([#45](https://github.com/ViniciusDev26/Rustpaper/issues/45)) ([2484953](https://github.com/ViniciusDev26/Rustpaper/commit/24849531524076de4c97f821169e88bb93f101a4))
+* **engine:** play video wallpapers in mpv with hardware decoding ([#44](https://github.com/ViniciusDev26/Rustpaper/issues/44)) ([a05f378](https://github.com/ViniciusDev26/Rustpaper/commit/a05f3782441685ef9347478752a45c11764cc023))
+* **engine:** render a wallpaper once for every monitor showing it ([#41](https://github.com/ViniciusDev26/Rustpaper/issues/41)) ([61ce067](https://github.com/ViniciusDev26/Rustpaper/commit/61ce0673ec8dbbb7a6d5ea061fbccb608159541d))
+
+
+### Bug Fixes
+
+* **engine:** respect the desktop's stay-awake switch ([#43](https://github.com/ViniciusDev26/Rustpaper/issues/43)) ([d8fb860](https://github.com/ViniciusDev26/Rustpaper/commit/d8fb860f20d01095f1c27de9d4cd64c0e78279db))
+
 ## [0.6.0](https://github.com/ViniciusDev26/Rustpaper/compare/v0.5.0...v0.6.0) (2026-11-23)
 
 
