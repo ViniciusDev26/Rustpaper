@@ -60,6 +60,8 @@ pub struct Config {
     pub stage: StageChoice,
     /// What plays video wallpapers (video.rs).
     pub video_player: VideoPlayer,
+    /// WE on Wine's Wayland driver (state.json, `rustpaper we-proton`).
+    pub wine_wayland: bool,
 }
 
 impl Config {
@@ -90,7 +92,7 @@ pub enum Source {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: rustpaper <wallpaper folder> [--props properties.json] [--mute] [--volume 0..100] [--output NAME] [--stage auto|desktop|private]\n       rustpaper --service [--output NAME] [--stage ...]   (the selector's choice; SIGHUP re-reads it)\n       rustpaper setup-steam                                (WE's launch option, for the private stage)\n       rustpaper lock | lock-daemon | lock-setup ...       (the lock screen, docs/LOCKSCREEN.md)\n       rustpaper outputs                                    (the monitors, as JSON)\n       rustpaper we-launch <command>                        (that launch option)"
+        "usage: rustpaper <wallpaper folder> [--props properties.json] [--mute] [--volume 0..100] [--output NAME] [--stage auto|desktop|private]\n       rustpaper --service [--output NAME] [--stage ...]   (the selector's choice; SIGHUP re-reads it)\n       rustpaper setup-steam                                (WE's launch option, for the private stage)\n       rustpaper lock | lock-daemon | lock-setup ...       (the lock screen, docs/LOCKSCREEN.md)\n       rustpaper outputs                                    (the monitors, as JSON)\n       rustpaper we-proton enable|disable|status            (WE on Wine's Wayland driver, GE-Proton)\n       rustpaper we-launch <command>                        (that launch option)"
     );
     std::process::exit(2);
 }
@@ -166,6 +168,7 @@ pub fn parse_args() -> (Source, Option<String>) {
         performance: Map::new(),
         stage: stage.unwrap_or_default(),
         video_player: VideoPlayer::default(),
+        wine_wayland: false,
     };
     (Source::Args(Box::new(config)), output)
 }
@@ -225,6 +228,7 @@ pub fn service_config() -> Result<Config, String> {
         performance: performance::sanitize(&st.performance),
         stage: st.stage,
         video_player: st.video_player,
+        wine_wayland: st.wine_wayland,
     })
 }
 
@@ -252,6 +256,7 @@ mod tests {
             performance: Map::new(),
             stage: StageChoice::Auto,
             video_player: VideoPlayer::Mpv,
+            wine_wayland: false,
         };
         assert_eq!(cfg.choice("DP-1", Mode::Desktop), &c("dp"));
         assert_eq!(cfg.choice("HDMI-A-1", Mode::Desktop), &c("all"));
