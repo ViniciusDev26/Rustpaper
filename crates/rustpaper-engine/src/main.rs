@@ -41,6 +41,7 @@ mod proton;
 mod stage;
 mod video;
 mod we;
+mod we_helper;
 
 use std::collections::HashMap;
 use std::os::fd::AsRawFd;
@@ -285,6 +286,8 @@ fn main() {
     // a previous engine killed while WE was paused left it stopped
     we::resume_stale();
     let mut we_audio = audio::WeAudio::default();
+    // web wallpapers' clicks (we_helper.rs)
+    let mut we_helper = we_helper::WeHelper::default();
     let mut last_tick = Instant::now() - TICK;
     let mut stats = Instant::now();
     let fd = conn.backend().poll_fd().as_raw_fd();
@@ -444,6 +447,11 @@ fn main() {
                 mode,
                 we_on,
             );
+            if we_on {
+                we_helper.tend();
+            } else {
+                we_helper.stop();
+            }
         }
         if stats.elapsed() >= Duration::from_secs(60) {
             let dt = stats.elapsed().as_secs_f64();
@@ -466,6 +474,7 @@ fn main() {
         // mpv goes first (a quick kill; the WE stop below may take seconds)
         t.player = None;
     }
+    we_helper.stop();
     if we_on && !other_engine_running() {
         // within systemd's stop timeout (we.rs control_within)
         we::control_within(&["-control", "stop"], Duration::from_secs(8));

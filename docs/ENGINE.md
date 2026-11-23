@@ -153,6 +153,29 @@ followed the mouse, and the clicks reached `rustpaper-HDMI-A-1`
 (2026-11-23). `RUSTPAPER_DEBUG_POINTER=1` logs the stage's leaves and
 buttons. Desktop stages keep the old behaviour (no input).
 
+**Clicks on web wallpapers** (`we_helper.rs`,
+`crates/rustpaper-we-helper`). With the pointer forwarded, web wallpapers
+hovered but ignored every click. WE draws them with an embedded Chromium
+in child windows of its window (`WPEDesktopCEFWindow` >
+`Chrome_WidgetWin_1` > `Chrome_RenderWidgetHostHWND`), and its
+`webwallpaper64.exe` polls the cursor and the left button itself. It
+forwards a click only when `WindowFromPoint` is the Windows desktop
+(`SysListView32`, `SHELLDLL_DefView`, `Progman`) or carries the window
+property `WallpaperEngineParent` = 1 (from its disassembly, WE of
+2026-11-08). Wine has none of those windows, and WE does not set the
+property on the windows of `-playInWindow`. So the engine keeps
+`rustpaper-we-helper.exe` running inside WE's Proton prefix: a no_std
+Windows program of 3 KB that, every 500 ms, sets that property on the
+`rustpaper-*` windows and all their descendants (WE recreates the Chromium
+windows with each wallpaper). It is started like the `-control` commands
+(`we::spawn_in_we`), from a copy in `~/.cache/rustpaper` because WE's
+container does not see `/usr/lib/rustpaper`. Killing the `start.exe` that
+`wine` leaves as our child also ends it. It exits by itself 5 s after the
+last `rustpaper-*` window is gone, so it never keeps WE's prefix alive
+(Steam would refuse to start WE again). It costs ~0.1% of a core.
+Verified on the periodic table 1828698678, Wayland driver: its filter
+took clicks (2026-11-23).
+
 **Stopping WE cleanly** (`we::restart`). Killing only `wallpaper64.exe`
 left Wine's helpers (`wineserver`, `winedevice.exe`, ...) and the embedded
 Chromium's `CrGpuMain` alive in WE's Steam container. Steam then refused

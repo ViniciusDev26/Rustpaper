@@ -124,6 +124,8 @@ jobs:
         with:
           shared-key: rustpaper-clippy
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      # the helper's real code is Windows-only (a stub on the host)
+      - run: cargo clippy -p rustpaper-we-helper --target x86_64-pc-windows-msvc -- -D warnings
 
   # Build and test in ONE job: `cargo test` reuses what `cargo build
   # --all-targets` just compiled (same dev profile) instead of rebuilding the
@@ -140,4 +142,5 @@ jobs:
         with:
           shared-key: rustpaper-build
       - run: cargo build --workspace --all-targets
+      - run: cargo build --release -p rustpaper-we-helper --target x86_64-pc-windows-msvc
       - run: cargo test --workspace

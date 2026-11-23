@@ -61,7 +61,8 @@ CI (`.github/workflows/ci.yml`, job *Conventional Commits*) runs commitlint
    `packaging/dist.sh` and attaches to the release:
    - `rustpaper-X.Y.Z-x86_64-linux.tar.gz` (+ `.sha256`): the three binaries
      (`rustpaper`, `rustpaper-selector`, `rustpaper-workshop`),
-     `lib/rustpaper/libsteam_api.so`, the `.desktop` entry, the icon,
+     `lib/rustpaper/libsteam_api.so`, `lib/rustpaper/rustpaper-we-helper.exe`
+     (see below), the `.desktop` entry, the icon,
      the lock screen's PAM service (`etc/pam.d/rustpaper-lock`), LICENSE
      and README;
    - `rustpaper-bin.PKGBUILD` with that tarball's checksum: download it
@@ -134,6 +135,18 @@ signature checked, and refused a modified package.
 
 To try a PKGBUILD before a release exists, copy it next to a local tarball
 and point `source=` at the file (that is how both were checked).
+
+## The Windows helper
+
+`rustpaper-we-helper.exe` (`crates/rustpaper-we-helper`) runs inside WE's
+Proton prefix (docs/ENGINE.md, "Clicks on web wallpapers"). It is built for
+`x86_64-pc-windows-msvc` and linked by rustup's `rust-lld` without a
+Windows SDK (`.cargo/config.toml`), so every build that ships it needs
+rustup with that target (`rustup target add x86_64-pc-windows-msvc`): the
+CI image, the release job and the source PKGBUILD use rustup instead of
+Arch's `rust` package, whose standard library is Linux-only. On the host
+the crate is a stub, so `cargo build --workspace` needs nothing extra.
+Packages install it as `/usr/lib/rustpaper/rustpaper-we-helper.exe`.
 
 ## Steamworks library
 
