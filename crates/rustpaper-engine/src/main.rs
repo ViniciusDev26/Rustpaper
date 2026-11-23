@@ -344,16 +344,6 @@ fn main() {
                     }
                 }
             }
-            // the user's pointer over a wallpaper, to the WE window it shows
-            // (a monitor sharing another's window points into that one)
-            for (output, input) in mirrors.take_pointer() {
-                let owner = targets
-                    .iter()
-                    .find(|t| t.output.name == output)
-                    .and_then(|t| t.source.clone())
-                    .unwrap_or(output);
-                p.pointer(&owner, input);
-            }
             let mut freed: Vec<(u64, u64)> = mirrors
                 .take_released()
                 .into_iter()
@@ -368,6 +358,18 @@ fn main() {
                 if changed {
                     mirrors.set_locked(&qh, f.active());
                 }
+            }
+            // the user's pointer over a wallpaper (the desktop's, or the lock
+            // screen's), to the WE window it shows (a monitor sharing another's
+            // window points into that one)
+            let lock_pointer = feed.as_mut().map(|f| f.take_pointer()).unwrap_or_default();
+            for (output, input) in mirrors.take_pointer().into_iter().chain(lock_pointer) {
+                let owner = targets
+                    .iter()
+                    .find(|t| t.output.name == output)
+                    .and_then(|t| t.source.clone())
+                    .unwrap_or(output);
+                p.pointer(&owner, input);
             }
             for (key, who) in freed {
                 match holders.get_mut(&key) {

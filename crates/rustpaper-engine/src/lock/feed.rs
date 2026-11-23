@@ -16,6 +16,11 @@
 //!   released the buffer; only then may WE reuse it (the engine also waits
 //!   for the mirror).
 //! - `gone`: WE destroyed the buffer; the key may come back for a new one.
+//! - The client sends `pointer` (monitor and the input, as fractions of the
+//!   monitor) while the user's pointer is over the wallpaper, so it follows
+//!   the cursor on the lock screen too (main.rs hands it to the private
+//!   stage). Only the pointer: the keyboard types the password and never
+//!   leaves the lock.
 //!
 //! Messages are JSON (`serde_json`); modifiers are split into two u32
 //! because JSON numbers lose precision above 2^53.
@@ -31,7 +36,7 @@ use std::path::PathBuf;
 
 use serde_json::{Value, json};
 
-use crate::stage::{Frame, FramePixels};
+use crate::stage::{Frame, FramePixels, PointerInput};
 
 /// Largest message (JSON of one frame is ~200 bytes).
 const MAX_MSG: usize = 4096;
@@ -206,6 +211,8 @@ pub struct FeedServer {
     /// The socket file's inode (to remove only our own on exit).
     inode: u64,
     client: Option<Client>,
+    /// Pointer input from the lock since the last `take_pointer`.
+    pointer: Vec<(String, PointerInput)>,
 }
 
 impl FeedServer {
@@ -245,6 +252,7 @@ impl FeedServer {
             path,
             inode,
             client: None,
+            pointer: Vec::new(),
         })
     }
 
@@ -312,6 +320,11 @@ impl FeedServer {
                             if c.held.remove(&k) {
                                 freed.push(k);
                             }
+                        } else if v["t"] == "pointer"
+                            && let Some(output) = v["output"].as_str()
+                            && let Some(input) = pointer_from_json(&v)
+                        {
+                            self.pointer.push((output.to_string(), input));
                         }
                     }
                     Recv::Empty => break,
@@ -328,6 +341,11 @@ impl FeedServer {
             changed = true;
         }
         (freed, changed)
+    }
+
+    /// Pointer input from the lock screen since the last call.
+    pub fn take_pointer(&mut self) -> Vec<(String, PointerInput)> {
+        std::mem::take(&mut self.pointer)
     }
 
     /// Sends a frame of the private stage. True when the lock now holds
@@ -485,6 +503,46 @@ impl FeedClient {
         let msg = json!({"t": "release", "key": key, "output": output});
         send(self.fd.as_raw_fd(), msg.to_string().as_bytes(), &[]);
     }
+
+    /// The user's pointer over monitor `output`'s wallpaper.
+    pub fn pointer(&self, output: &str, input: PointerInput) {
+        let mut msg = pointer_json(input);
+        msg["t"] = json!("pointer");
+        msg["output"] = json!(output);
+        send(self.fd.as_raw_fd(), msg.to_string().as_bytes(), &[]);
+    }
+}
+
+fn pointer_json(input: PointerInput) -> Value {
+    match input {
+        PointerInput::Motion { x, y } => json!({"kind": "motion", "x": x, "y": y}),
+        PointerInput::Button { button, pressed } => {
+            json!({"kind": "button", "button": button, "pressed": pressed})
+        }
+        PointerInput::Axis { vertical, value } => {
+            json!({"kind": "axis", "vertical": vertical, "value": value})
+        }
+        PointerInput::Leave => json!({"kind": "leave"}),
+    }
+}
+
+fn pointer_from_json(v: &Value) -> Option<PointerInput> {
+    Some(match v["kind"].as_str()? {
+        "motion" => PointerInput::Motion {
+            x: v["x"].as_f64()?,
+            y: v["y"].as_f64()?,
+        },
+        "button" => PointerInput::Button {
+            button: u32::try_from(v["button"].as_u64()?).ok()?,
+            pressed: v["pressed"].as_bool()?,
+        },
+        "axis" => PointerInput::Axis {
+            vertical: v["vertical"].as_bool()?,
+            value: v["value"].as_f64()?,
+        },
+        "leave" => PointerInput::Leave,
+        _ => return None,
+    })
 }
 
 fn parse(msg: &[u8], fds: Vec<OwnedFd>) -> Option<FeedEvent> {
@@ -518,7 +576,8 @@ mod tests {
     use crate::stage::Plane;
 
     /// A frame and its fds survive the socket; later frames of the same
-    /// buffer carry no fds; releases come back; a closed lock frees all.
+    /// buffer carry no fds; releases and pointer input come back; a closed
+    /// lock frees all.
     #[test]
     fn frames_cross_the_socket() {
         let dir = std::env::temp_dir().join(format!("rp-feed-{}", std::process::id()));
@@ -560,6 +619,24 @@ mod tests {
 
         client.release("DP-1", 7);
         assert_eq!(server.poll().0, vec![("DP-1".to_string(), 7)]);
+        let inputs = [
+            PointerInput::Motion { x: 0.25, y: 0.75 },
+            PointerInput::Button {
+                button: 272,
+                pressed: true,
+            },
+            PointerInput::Axis {
+                vertical: true,
+                value: -10.0,
+            },
+            PointerInput::Leave,
+        ];
+        for i in inputs {
+            client.pointer("DP-1", i);
+        }
+        server.poll();
+        let got: Vec<PointerInput> = server.take_pointer().into_iter().map(|(_, i)| i).collect();
+        assert_eq!(got, inputs, "the lock's pointer reaches the engine");
         assert!(server.send(&frame(9)));
         drop(client);
         // (other tests fork: a child may hold the client's fd until its exec)

@@ -14,8 +14,8 @@ lock triggers to route) lives in a lock adapter. Code: `crates/rustpaper-engine/
  │ private stage: WE's dmabufs  │  frames     │ ext-session-lock-v1 surfaces  │
  │   ├─ mirror (layer surfaces) │ ──────────► │   wallpaper (WE's buffers)    │
  │   └─ feed server (feed.rs)   │ ◄────────── │   dim layer + panel (ui.rs)   │
- └──────────────────────────────┘  releases   │ PAM on its own thread         │
-     $XDG_RUNTIME_DIR/rustpaper/              └───────────────────────────────┘
+ └──────────────────────────────┘  releases,  │ PAM on its own thread         │
+     $XDG_RUNTIME_DIR/rustpaper/   pointer    └───────────────────────────────┘
        feed-<WAYLAND_DISPLAY>.sock                   ▲ started by
                                               rustpaper lock  ◄── keybinding, menu,
                                                     ▲             idle daemon
@@ -52,6 +52,16 @@ lock triggers to route) lives in a lock adapter. Code: `crates/rustpaper-engine/
   then the adapter's picture (Omarchy: the theme background); then the
   theme's background color. If the engine goes away mid-lock, its last
   frame stays and the lock reconnects when an engine comes back.
+- **The pointer:** over the wallpaper (the lock surface or the dim layer
+  over it) the lock sends the pointer's position, as a fraction of the
+  monitor, and its buttons and scrolls back over the same socket
+  (`pointer` messages); the engine hands them to WE's window like the
+  desktop's (docs/ENGINE.md, "Pointer"), so wallpapers that follow the
+  cursor do here too. Over the panel nothing is sent. Only the pointer:
+  the keyboard types the password and never leaves the lock. The cursor is
+  the desktop's default (`cursor-shape-v1`). Verified on the real session
+  (the user locked it): 十二时辰-SYKM 3496849678's sundial followed the
+  mouse, and the 8 clicks reached `rustpaper-HDMI-A-1` (2026-11-23).
 - **Keys:** held keys repeat at the compositor's rate and delay
   (`wl_keyboard.repeat_info`), Enter excepted; Ctrl+Backspace, Ctrl+U or
   Escape clear the field. Verified on a nested Sway: a held Backspace
