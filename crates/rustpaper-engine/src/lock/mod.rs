@@ -180,9 +180,10 @@ fn foreground() -> i32 {
     }
 }
 
-/// The chosen wallpaper's preview image (project.json `preview`).
+/// The lock screen wallpaper's preview image (project.json `preview`).
 fn wallpaper_preview() -> Option<PathBuf> {
-    let id = rustpaper_core::state::load().last_id?;
+    let st = rustpaper_core::state::load();
+    let id = st.lock_id.or(st.last_id)?;
     let dir = rustpaper_core::paths::find_wallpaper(&id)?;
     let text = std::fs::read_to_string(dir.join("project.json")).ok()?;
     let v: serde_json::Value = serde_json::from_str(&text).ok()?;
