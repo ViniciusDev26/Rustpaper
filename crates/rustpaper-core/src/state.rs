@@ -116,7 +116,7 @@ impl Default for Screensaver {
     }
 }
 
-/// Where a wallpaper shows (the selector's "Use for").
+/// Where a wallpaper shows (the selector's "Apply to").
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {

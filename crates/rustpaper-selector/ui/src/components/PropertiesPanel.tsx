@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { PropertiesView, Wallpaper } from "../api/schemas";
 import { api, fileUrl } from "../api/tauri";
 import { evalCondition, sameValue } from "../lib/properties";
-import { parsePlacementKey, placementKey, placementsOf, removable, targets } from "../lib/roles";
+import { placementKey, placementsOf, removable, resolveTarget, targets } from "../lib/roles";
 import { useLibrary } from "../store/library";
 import { useRoles } from "../store/roles";
 import { useSettings } from "../store/settings";
@@ -14,34 +14,37 @@ import { errorText, toast } from "../store/toast";
 import { Badge, Button, ConfirmButton, field } from "./common";
 import { PropertyControl } from "./PropertyControl";
 
-/// "Use for": puts the wallpaper on the desktop of one monitor, the lock
-/// screen or the screensaver, and lists (removably) where it already is.
-function UseFor({ wallpaper: w }: { wallpaper: Wallpaper }) {
-  const { roles, assign, clear } = useRoles();
+/// "Apply to": where the wallpaper goes (the desktop of every monitor or
+/// one, the lock screen, the screensaver), chosen before applying, so it
+/// never passes through the desktop first; then the places it already is,
+/// removable. The target is remembered (store/roles).
+function ApplyTo({ wallpaper: w }: { wallpaper: Wallpaper }) {
+  const { roles, targetKey, setTarget, clear } = useRoles();
+  const applyToTarget = useLibrary((s) => s.applyToTarget);
   if (!roles) return null;
   const here = placementsOf(w.id, roles);
   const hereKeys = new Set(here.map(placementKey));
-  const options = targets(roles).filter((t) => !hereKeys.has(placementKey(t)));
+  const target = resolveTarget(targetKey, roles);
+  const already = hereKeys.has(placementKey(target));
   return (
     <div className="px-4 pb-3">
-      <select
-        className={`${field} w-full`}
-        value=""
-        title="Show this wallpaper somewhere else too: one monitor's desktop, the lock screen, or the screensaver"
-        onChange={(e) => {
-          const t = parsePlacementKey(e.currentTarget.value);
-          if (t) void assign(w.id, w.title, t.role, t.output);
-        }}
-      >
-        <option value="" disabled>
-          Use for…
-        </option>
-        {options.map((t) => (
-          <option key={placementKey(t)} value={placementKey(t)}>
-            {t.label}
-          </option>
-        ))}
-      </select>
+      <div className="flex gap-2">
+        <select
+          className={`${field} min-w-0 flex-1`}
+          value={placementKey(target)}
+          title="Where Apply puts this wallpaper: one monitor's desktop, every monitor, the lock screen, or the screensaver"
+          onChange={(e) => setTarget(e.currentTarget.value)}
+        >
+          {targets(roles).map((t) => (
+            <option key={placementKey(t)} value={placementKey(t)}>
+              {hereKeys.has(placementKey(t)) ? `${t.label} (current)` : t.label}
+            </option>
+          ))}
+        </select>
+        <Button onClick={() => void applyToTarget(w)} disabled={already}>
+          {already ? "Applied" : "Apply"}
+        </Button>
+      </div>
       {here.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5">
           {here.map((p) => (
@@ -68,7 +71,6 @@ function UseFor({ wallpaper: w }: { wallpaper: Wallpaper }) {
 const SAVE_DELAY_MS = 700;
 
 export function PropertiesPanel({ wallpaper: w }: { wallpaper: Wallpaper }) {
-  const apply = useLibrary((s) => s.apply);
   const unsubscribe = useLibrary((s) => s.unsubscribe);
   const [view, setView] = useState<PropertiesView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -161,15 +163,14 @@ export function PropertiesPanel({ wallpaper: w }: { wallpaper: Wallpaper }) {
         <h2 className="mb-2 text-[0.95rem] font-semibold [overflow-wrap:anywhere]">{w.title || w.id}</h2>
         <Badge>{w.kind}</Badge>
       </div>
+      <ApplyTo wallpaper={w} />
       <div className="flex flex-wrap gap-2 px-4 pb-3">
-        <Button onClick={() => apply(w)}>Apply</Button>
         <Button variant="secondary" onClick={reset} disabled={!view}>
           Reset
         </Button>
         {themeButton}
         {unsubscribeButton}
       </div>
-      <UseFor wallpaper={w} />
       <div className="px-4 pt-1 pb-5" key={generation}>
         {error ? (
           <div className="text-sm text-muted">{error}</div>

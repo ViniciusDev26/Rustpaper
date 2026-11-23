@@ -1,6 +1,6 @@
 // Where each wallpaper shows: the desktop (every monitor, or one), the lock
 // screen, the screensaver (every monitor, or one). Pure helpers over the
-// backend's RolesView (main.rs get_roles), for the "Use for" menu and the
+// backend's RolesView (main.rs get_roles), for the "Apply to" menu and the
 // badges; state.json's fallbacks are the backend's business.
 import type { Role, RolesView } from "../api/schemas";
 
@@ -52,3 +52,12 @@ export function placementsOf(id: string, r: RolesView): Placement[] {
 /// The desktop for every monitor cannot be removed: everything falls back
 /// to it.
 export const removable = (p: Pick<Placement, "role" | "output">) => !(p.role === "desktop" && p.output === null);
+
+/// The target "Apply" uses: the one chosen last (`key`, a placementKey),
+/// while it still exists (a monitor may be gone), else the desktop of every
+/// monitor.
+export function resolveTarget(key: string | null, r: RolesView): Placement {
+  const all = targets(r);
+  const want = key ? parsePlacementKey(key) : null;
+  return (want && all.find((t) => placementKey(t) === placementKey(want))) ?? all[0];
+}

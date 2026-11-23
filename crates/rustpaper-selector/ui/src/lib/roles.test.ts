@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RolesView } from "../api/schemas";
-import { parsePlacementKey, placementKey, placementsOf, removable, targets } from "./roles";
+import { parsePlacementKey, placementKey, placementsOf, removable, resolveTarget, targets } from "./roles";
 
 const roles = (over: Partial<RolesView> = {}): RolesView => ({
   outputs: [
@@ -45,5 +45,14 @@ describe("wallpaper roles", () => {
     expect(parsePlacementKey("evil:x")).toBeNull();
     expect(removable({ role: "desktop", output: null })).toBe(false);
     expect(removable({ role: "desktop", output: "DP-1" })).toBe(true);
+  });
+
+  it("applies to the last target while it exists, else the desktop", () => {
+    expect(resolveTarget("lock:", roles()).label).toBe("Lock screen");
+    expect(resolveTarget("screensaver:DP-1", roles()).label).toBe("Screensaver · DP-1");
+    const one = roles({ outputs: [{ name: "eDP-1", width: 1920, height: 1200 }] });
+    expect(resolveTarget("desktop:DP-1", one).label).toBe("Desktop");
+    expect(resolveTarget(null, roles()).label).toBe("Desktop");
+    expect(resolveTarget("evil:x", roles()).label).toBe("Desktop");
   });
 });

@@ -3,6 +3,7 @@
 import { create } from "zustand";
 import type { Wallpaper } from "../api/schemas";
 import { api } from "../api/tauri";
+import { resolveTarget } from "../lib/roles";
 import { useRoles } from "./roles";
 import { errorText, toast } from "./toast";
 
@@ -30,7 +31,10 @@ interface LibraryState {
   /// Re-scan after the store downloaded or removed something.
   reload: () => Promise<void>;
   select: (id: string | null) => void;
+  /// Puts `w` on the desktop of every monitor (the Workshop's Apply).
   apply: (w: Wallpaper) => Promise<void>;
+  /// Puts `w` where the panel's "Apply to" says (store/roles targetKey).
+  applyToTarget: (w: Wallpaper) => Promise<void>;
   setSearch: (q: string) => void;
   setSort: (s: SortMode) => Promise<void>;
   unsubscribe: (w: Wallpaper) => Promise<boolean>;
@@ -86,6 +90,13 @@ export const useLibrary = create<LibraryState>((set, get) => ({
     }
     // the badges show where each wallpaper is
     await useRoles.getState().load();
+  },
+  applyToTarget: async (w) => {
+    const { roles, targetKey, assign } = useRoles.getState();
+    if (!roles) return get().apply(w);
+    const t = resolveTarget(targetKey, roles);
+    set({ selectedId: w.id });
+    await assign(w.id, w.title, t.role, t.output);
   },
   setSearch: (search) => set({ search }),
   setSort: async (sort) => {

@@ -97,22 +97,28 @@ The engine binary is the one next to the selector
   test corpus (`rustpaper_core::paths::wallpaper_dirs`), sorted by title, with
   a search box. Previews are served through Tauri's asset protocol; the
   allowed scope is set at startup to exactly those folders.
-- Clicking a card applies it (desktop, every monitor) and opens its panel.
-  Every type is supported: the real Wallpaper Engine plays it
-  (docs/ENGINE.md).
+- Clicking a card selects it and opens its panel; nothing changes on screen
+  until it is applied ("Apply to", below), so a lock screen or screensaver
+  wallpaper never passes through the desktop first (picking one used to
+  apply it to the desktop, then "Use for" moved it: the desktop changed
+  each time). A double click applies it to the panel's target. Every type
+  is supported: the real Wallpaper Engine plays it (docs/ENGINE.md).
 - Each card carries where the wallpaper is used ("Desktop · DP-1", "Lock
   screen", "Screensaver"...).
 
 ## Where each wallpaper shows (desktop, lock screen, screensaver)
 
-The panel's **Use for…** menu puts the selected wallpaper:
-- on the **desktop** of every monitor (what Apply and a card click do), or
-  of one monitor;
+The panel's **Apply to** menu and **Apply** button put the selected
+wallpaper:
+- on the **desktop** of every monitor (the default), or of one monitor;
 - on the **lock screen** (docs/LOCKSCREEN.md);
 - as the **screensaver** of every monitor, or of one.
 
 Per-monitor entries appear with more than one monitor; the names come from
-`rustpaper outputs` (the engine's desktop adapter). Below the menu, the
+`rustpaper outputs` (the engine's desktop adapter). The target is
+remembered (local storage) while it exists, so several wallpapers go to the
+lock screen in a row without choosing again; where the wallpaper already
+is, the entry reads "(current)" and Apply "Applied". Below the menu, the
 places it is used, each removable with ×: the fallback then shows. Each
 role falls back to the next: a monitor's screensaver -> the screensaver for
 all -> that monitor's desktop -> the desktop for all; the lock screen ->

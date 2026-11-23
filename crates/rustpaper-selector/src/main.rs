@@ -446,7 +446,7 @@ fn outputs() -> Vec<OutputView> {
         .unwrap_or_default()
 }
 
-/// Where every wallpaper shows: the "Use for" menu and the badges.
+/// Where every wallpaper shows: the "Apply to" menu and the badges.
 #[derive(Serialize)]
 struct RolesView {
     outputs: Vec<OutputView>,
