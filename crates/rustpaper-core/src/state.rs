@@ -77,6 +77,20 @@ pub enum StageChoice {
     Private,
 }
 
+/// What plays `video` wallpapers (project.json `"type": "video"`).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum VideoPlayer {
+    /// mpv with hardware decoding, on the private stage (when mpv is
+    /// installed; otherwise Wallpaper Engine). Proton decodes WE's videos on
+    /// the CPU: the same 1080p24 video took 22.7% of a core in WE and 1.9%
+    /// in mpv (docs/ENGINE.md).
+    #[default]
+    Mpv,
+    /// Wallpaper Engine, like every other wallpaper.
+    We,
+}
+
 /// The screensaver: after `seconds` without input, every monitor shows its
 /// screensaver wallpaper over the windows until the next input.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -134,6 +148,7 @@ pub struct State {
     pub performance: Map<String, Value>,
     pub playback: Playback,
     pub stage: StageChoice,
+    pub video_player: VideoPlayer,
 }
 
 impl Default for State {
@@ -148,6 +163,7 @@ impl Default for State {
             performance: Map::new(),
             playback: Playback::default(),
             stage: StageChoice::Auto,
+            video_player: VideoPlayer::Mpv,
         }
     }
 }
@@ -302,6 +318,22 @@ mod tests {
         assert_eq!(s.volume, 100);
         assert_eq!(s.playback, Playback::default());
         assert!(s.performance.is_empty());
+        assert_eq!(
+            s.video_player,
+            VideoPlayer::Mpv,
+            "mpv unless chosen otherwise"
+        );
+    }
+
+    #[test]
+    fn video_player_is_lowercase() {
+        let s: State = serde_json::from_str(r#"{"video_player":"we"}"#).unwrap();
+        assert_eq!(s.video_player, VideoPlayer::We);
+        assert!(
+            serde_json::to_string(&State::default())
+                .unwrap()
+                .contains(r#""video_player":"mpv""#)
+        );
     }
 
     #[test]

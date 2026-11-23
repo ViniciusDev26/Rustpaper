@@ -19,6 +19,7 @@ commit).
  │ launch.rs  `we-launch %command%` (WE's Steam launch option), setup-steam│
  │ config.rs  CLI / state.json (--service, SIGHUP reload, --stage)        │
  │ main.rs    targets, reload, watchdog, Playback rules                   │
+ │ video.rs   video wallpapers in mpv (hardware decoding), private stage  │
  │ mirror.rs  layer-shell surfaces on the user's compositor               │
  │ lock/      the animated lock screen; feed.rs hands it the frames       │
  └──────────────┬─────────────────────────────────────┬───────────────────┘
@@ -99,6 +100,14 @@ and constant repairs. The private stage is Rustpaper's own instead:
   feedback (Hyprland's main device gave XWayland glamor).
 - **Measured.** WE on the private stage drew 60.0 fps on both monitors (4K
   and 1080p), with no WE window in Hyprland (2026-11-22).
+- **Wayland clients.** The stage also listens on a Wayland socket of its
+  own, `rustpaper-stage-<pid>` (its name in
+  `$XDG_RUNTIME_DIR/rustpaper/stage-wayland`), with xdg-shell,
+  subsurfaces, viewporter and a seat without devices. An xdg_toplevel
+  titled like a wallpaper window is told to go fullscreen at its monitor's
+  size, and only a dmabuf covering at least 90% of the monitor is
+  forwarded. mpv plays video wallpapers through it (below); Wine's Wayland
+  driver can too (not wired to WE's launch).
 
 Choosing it: `state.json` `stage` (`auto`, `desktop` or `private`), or
 `--stage`. `auto` picks the private stage once WE's launch option is set
@@ -237,6 +246,73 @@ selector's Performance tab).
   back to WE once neither the mirror nor the lock holds it
   (docs/LOCKSCREEN.md).
 
+## Video wallpapers in mpv (`video.rs`)
+
+**The one exception to "fidelity comes from WE".** A video wallpaper
+(project.json `"type": "video"`) is a looping video file, so any player
+shows the same picture. WE under Proton decodes it on the CPU: Proton's
+Media Foundation goes through GStreamer/FFmpeg in software, and NVDEC stays
+at 0%. The same 1080p24 H.264 wallpaper (Gargantua 827148653) on an RTX
+4060 Ti, 2026-11-23:
+
+| player | CPU (one core) | video decoder |
+|---|---|---|
+| WE under Proton (Proton Experimental or GE-Proton) | 22.7% | 0% |
+| `mpv --hwdec=no` | 14.3% | 0% |
+| `mpv --hwdec=auto` | 1.9% | 3% (NVDEC) |
+| Rustpaper's mpv on the private stage (`--vo=gpu`, Vulkan decoding) | 1.85% (+ 0.9% for the debug engine) | 3% |
+
+Scenes and web wallpapers stay on WE.
+
+**How it works.** With the private stage and mpv installed (and the
+selector's "Play videos with" on mpv, the default: `state.json`
+`video_player`, `mpv` or `we`), the engine plays every video wallpaper that
+a monitor *renders* (the owner of a shared group, `share_plan`) in mpv:
+- **The window.** mpv is a Wayland client of the stage (`WAYLAND_DISPLAY`
+  = the stage's socket, `DISPLAY` removed). Its window is titled
+  `rustpaper-mpv-<output>`, never WE's `rustpaper-<output>`; the stage
+  makes it fullscreen at the monitor's size and forwards its dmabufs like
+  WE's, to the mirror and the lock screen.
+- **One feed per monitor.** The engine tells the stage which window each
+  monitor shows (`PrivateStage::set_feed`: WE's or mpv's); the other one's
+  buffers go straight back to it. WE's long-lived window of a monitor that
+  now plays a video is not closed (closing degrades WE), and without this
+  its frames and mpv's would alternate on screen. Verified with a stand-in
+  WE window on the same monitor: only mpv's frames shown, and switching to
+  a scene showed the stand-in again at once.
+- **Options.** `--no-config` (the user's mpv.conf, scripts and shaders stay
+  out), `--vo=gpu`, `--hwdec=auto-safe`, `--loop-file=inf`, no OSC, OSD,
+  input or cursor, `--panscan=1.0` with `--keepaspect-window=no` (cover:
+  fill the monitor, crop the overflow), `--mute` and `--volume` from
+  state.json (mpv takes the real volume, WE only mute), an
+  `--input-ipc-server` socket in `$XDG_RUNTIME_DIR/rustpaper/`.
+- **Over IPC:** another video loads with `loadfile` into the same window;
+  mute and volume change in place; the Playback rules send `pause`.
+- **Watchdog.** An mpv that exits is started again (at most every 10 s).
+  mpv dies with the engine (`PR_SET_PDEATHSIG`; SIGKILL, because after its
+  compositor vanished mpv hung on SIGTERM).
+- **WE only when needed.** WE is started only when some monitor shows, in
+  any mode (desktop, lock, screensaver when enabled), a wallpaper that is
+  not a video; a reload that needs it starts it then. When no monitor shows
+  a WE window, the engine sends WE `-control pause`, so a running WE costs
+  nothing. Pausing is per renderer: each mpv pauses when every monitor it
+  feeds is paused, WE when every monitor showing one of its windows is.
+- **Falls back to WE**: without mpv on PATH, with a desktop stage (mpv
+  needs the stage's Wayland socket), with `video_player: "we"`, or when mpv
+  cannot be started.
+
+`--vo=dmabuf-wayland` (decoded frames handed to the compositor as they are)
+was not used: the stage forwards one buffer per monitor to a layer surface,
+and `--vo=gpu` already costs 1.85% of a core.
+
+Verified on a nested Sway (2026-11-23, `RUSTPAPER_NO_WE=1` and once
+without it, all monitors on videos: WE was left alone): video moving
+between screenshots; switching videos in place; a killed mpv restarted;
+pause under a fullscreen window (mpv 0% CPU) and play after it closed, per
+monitor; two outputs with one video sharing one mpv, two videos with an
+mpv each; the nested lock screen showing the video live and unlocking;
+mpv gone after the engine was killed with SIGKILL.
+
 ## The desktop stage on Hyprland
 
 The original stage, still available (`--stage desktop`, or `auto` without
@@ -355,7 +431,15 @@ on DP-1 (1920x1080), 20 s averages:
   the cursor position the desktop adapter reports. Not done yet.
 - **Explicit sync** (`wp_linux_drm_syncobj`) is not offered to the stage's
   XWayland; implicit sync showed no corruption on NVIDIA so far.
-- **Volume** is only mute/unmute (WE has no volume command).
+- **Volume** is only mute/unmute (WE has no volume command); video
+  wallpapers in mpv take the real volume.
+- **Video wallpapers in mpv**: WE's window of a monitor that switched to a
+  video keeps rendering its old wallpaper while another monitor still needs
+  WE (WE pauses only when no monitor shows one of its windows). Property
+  values of video wallpapers are not mapped to mpv: none of the 30 video
+  wallpapers installed here declares anything but `schemecolor`, so
+  alignment and playback rate would have been guesses; videos cover the
+  monitor.
 - **Degraded WE** (black or pixelated windows, a few fps; seen with the
   desktop stage after dozens of window open/close cycles) is only detected
   when windows stop appearing.

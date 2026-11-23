@@ -1,9 +1,17 @@
 // The Performance tab, like Wallpaper Engine's own: quality settings (WE's
 // presets and each setting; the engine restarts WE with them) and Playback
-// rules (what the engine pauses on). Drawn from the data the backend sends
+// rules (what the engine pauses on), and what plays video wallpapers (mpv or
+// Wallpaper Engine). Drawn from the data the backend sends
 // (rustpaper-core performance.rs): a new WE setting needs no UI code.
 import { useEffect, useRef, useState } from "react";
-import type { PerformanceView as View, Playback, PlaybackAction, QualitySetting, SettingValue } from "../api/schemas";
+import type {
+  PerformanceView as View,
+  Playback,
+  PlaybackAction,
+  QualitySetting,
+  SettingValue,
+  VideoPlayer,
+} from "../api/schemas";
 import { api } from "../api/tauri";
 import { useRoles } from "../store/roles";
 import { errorText, toast } from "../store/toast";
@@ -129,6 +137,7 @@ export function PerformanceView() {
   const [view, setView] = useState<View | null>(null);
   const [values, setValues] = useState<Record<string, SettingValue>>({});
   const [playback, setPlaybackState] = useState<Playback | null>(null);
+  const [videoPlayer, setVideoPlayerState] = useState<VideoPlayer>("we");
   const [error, setError] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
@@ -138,6 +147,7 @@ export function PerformanceView() {
         setView(v);
         setValues(v.values);
         setPlaybackState(v.playback);
+        setVideoPlayerState(v.video_player);
       },
       (e) => setError(errorText(e)),
     );
@@ -163,6 +173,14 @@ export function PerformanceView() {
     setPlaybackState(next);
     api.setPlayback(next).then(
       () => toast("Playback rules saved"),
+      (e) => toast(`Error: ${errorText(e)}`),
+    );
+  };
+
+  const setVideoPlayer = (player: VideoPlayer) => {
+    setVideoPlayerState(player);
+    api.setVideoPlayer(player).then(
+      () => toast(player === "mpv" ? "Video wallpapers play in mpv" : "Video wallpapers play in Wallpaper Engine"),
       (e) => toast(`Error: ${errorText(e)}`),
     );
   };
@@ -193,6 +211,28 @@ export function PerformanceView() {
               <QualityControl s={s} value={values[s.key] ?? s.default} set={(v) => saveQuality({ ...values, [s.key]: v })} />
             </SettingRow>
           ))}
+        </Section>
+        <Section
+          title="Video wallpapers"
+          note="Wallpaper Engine decodes videos on the CPU under Proton; mpv uses the GPU's video decoder for the same picture at a fraction of the cost. Scenes and web wallpapers always play in Wallpaper Engine."
+        >
+          <SettingRow
+            label="Play videos with"
+            hint={
+              view.mpv_installed
+                ? "mpv needs the private stage (rustpaper setup-steam); otherwise Wallpaper Engine plays them."
+                : "mpv is not installed: install it (e.g. pacman -S mpv) to use it. Until then Wallpaper Engine plays videos."
+            }
+          >
+            <select
+              className={`${field} min-w-44`}
+              value={videoPlayer}
+              onChange={(e) => setVideoPlayer(e.currentTarget.value as VideoPlayer)}
+            >
+              <option value="mpv">mpv (hardware decoding)</option>
+              <option value="we">Wallpaper Engine</option>
+            </select>
+          </SettingRow>
         </Section>
         <ScreensaverSection />
         <Section

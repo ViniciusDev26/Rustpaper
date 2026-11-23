@@ -20,6 +20,21 @@
 //! (`rustpaper we-launch %command%`, launch.rs): we publish our display in
 //! `$XDG_RUNTIME_DIR/rustpaper/stage-display`.
 //!
+//! The stage is also a Wayland compositor with a socket of its own
+//! (`stage-wayland` next to it), for Wine's Wayland driver (GE-Proton,
+//! `PROTON_ENABLE_WAYLAND=1`). There WE needs no XWayland at all: Wine's
+//! X11 driver renders WE's Vulkan child window offscreen and XWayland copied
+//! every frame three times (Present into that window, Wine's copy to the
+//! visible window, XWayland's copy into its own buffer: 20% of the GPU and
+//! ~18% of a core at 4K60 + 1080p60, more than WE itself, 2026-11-23). With
+//! the Wayland driver the window is an xdg_toplevel and the Vulkan swapchain
+//! a subsurface whose dmabufs we forward as they are.
+//!
+//! The same socket hosts mpv for video wallpapers (video.rs): its window is
+//! titled `rustpaper-mpv-<output>`. Each monitor shows one [`Feed`], WE's
+//! window or mpv's, set by the engine; the other one's buffers go straight
+//! back to it, so a leftover WE window and mpv never alternate on screen.
+//!
 //! Runs on its own thread (calloop); talks to the main thread through
 //! channels plus a pipe the main loop polls.
 
@@ -31,6 +46,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use smithay::backend::allocator::{Buffer as _, Format, Fourcc, Modifier};
+use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::output::{Mode, Output as WlOutputState, PhysicalProperties, Subpixel};
 use smithay::reexports::calloop::channel::{self, Channel, Sender};
 use smithay::reexports::calloop::generic::Generic;
@@ -50,18 +66,47 @@ use smithay::wayland::dmabuf::{
     DmabufFeedbackBuilder, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier, get_dmabuf,
 };
 use smithay::wayland::output::OutputManagerState;
+use smithay::wayland::shell::xdg::{
+    PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
+    XdgToplevelSurfaceData,
+};
 use smithay::wayland::shm::{ShmHandler, ShmState, with_buffer_contents};
+use smithay::wayland::socket::ListeningSocketSource;
+use smithay::wayland::viewporter::ViewporterState;
 use smithay::wayland::xwayland_shell::{XWaylandShellHandler, XWaylandShellState};
 use smithay::xwayland::xwm::{Reorder, ResizeEdge, WmWindowProperty, X11Window, XwmId};
 use smithay::xwayland::{
     X11Surface, X11Wm, XWayland, XWaylandClientData, XWaylandEvent, XwmHandler,
 };
 use smithay::{
-    delegate_compositor, delegate_dmabuf, delegate_output, delegate_shm, delegate_xwayland_shell,
+    delegate_compositor, delegate_dmabuf, delegate_output, delegate_seat, delegate_shm,
+    delegate_viewporter, delegate_xdg_shell, delegate_xwayland_shell,
 };
 
 use crate::desktop::{Output, Stage, window_title};
-use crate::launch;
+use crate::{launch, video};
+
+/// Which window a monitor shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Feed {
+    /// Wallpaper Engine's `rustpaper-<output>` (X11, or Wine's Wayland driver).
+    #[default]
+    We,
+    /// mpv's `rustpaper-mpv-<output>` (video.rs).
+    Mpv,
+}
+
+impl Feed {
+    fn title(self, output: &str) -> String {
+        match self {
+            Feed::We => window_title(output),
+            Feed::Mpv => video::window_title(output),
+        }
+    }
+}
+
+/// Monitor name -> the feed it shows (absent: WE's).
+type Feeds = Arc<Mutex<HashMap<String, Feed>>>;
 
 /// The dmabuf layouts the user's compositor imports (from its
 /// `zwp_linux_dmabuf_v1` default feedback): advertised to our XWayland, so
@@ -157,12 +202,15 @@ pub enum StageEvent {
 /// The main thread's handle on the stage.
 pub struct PrivateStage {
     display: String,
+    /// The stage's Wayland socket name (for `WAYLAND_DISPLAY`).
+    socket: String,
     events: mpsc::Receiver<StageEvent>,
     /// Readable when `events` has something (the main loop polls it).
     notify: OwnedFd,
     release: Sender<u64>,
-    /// Titles of WE's mapped wallpaper windows.
+    /// Titles of the mapped wallpaper windows (WE's and mpv's).
     windows: Arc<Mutex<HashSet<String>>>,
+    feeds: Feeds,
 }
 
 impl PrivateStage {
@@ -173,9 +221,11 @@ impl PrivateStage {
         let (release, release_rx) = channel::channel::<u64>();
         let (notify, wake) = pipe().map_err(|e| format!("pipe: {e}"))?;
         let windows = Arc::new(Mutex::new(HashSet::new()));
+        let feeds: Feeds = Arc::default();
         let (ready_tx, ready_rx) = mpsc::channel();
         let outputs = outputs.to_vec();
         let shared = windows.clone();
+        let shared_feeds = feeds.clone();
         std::thread::Builder::new()
             .name("rustpaper-stage".into())
             .spawn(move || {
@@ -186,13 +236,14 @@ impl PrivateStage {
                     wake,
                     release_rx,
                     shared,
+                    shared_feeds,
                     ready_tx.clone(),
                 ) {
                     let _ = ready_tx.send(Err(e));
                 }
             })
             .map_err(|e| e.to_string())?;
-        let display = ready_rx
+        let (display, socket) = ready_rx
             .recv_timeout(Duration::from_secs(20))
             .map_err(|_| "the private stage's XWayland did not start".to_string())??;
         if let Some(file) = launch::display_file() {
@@ -204,15 +255,35 @@ impl PrivateStage {
         eprintln!("stage: private, XWayland on {display}");
         Ok(PrivateStage {
             display,
+            socket,
             events,
             notify,
             release,
             windows,
+            feeds,
         })
     }
 
     pub fn display(&self) -> &str {
         &self.display
+    }
+
+    /// The stage's Wayland socket name (relative to `XDG_RUNTIME_DIR`).
+    pub fn wayland_socket(&self) -> &str {
+        &self.socket
+    }
+
+    /// Which window monitor `output` shows from now on.
+    pub fn set_feed(&self, output: &str, feed: Feed) {
+        let old = self
+            .feeds
+            .lock()
+            .unwrap()
+            .insert(output.to_string(), feed)
+            .unwrap_or_default();
+        if old != feed {
+            eprintln!("stage: {output} shows {}", feed.title(output));
+        }
     }
 
     /// The fd to poll for frames.
@@ -243,6 +314,11 @@ impl Drop for PrivateStage {
         {
             let _ = std::fs::remove_file(file);
         }
+        if let Some(file) = launch::wayland_file()
+            && std::fs::read_to_string(&file).is_ok_and(|d| d.trim() == self.socket)
+        {
+            let _ = std::fs::remove_file(file);
+        }
     }
 }
 
@@ -253,11 +329,19 @@ impl Stage for PrivateStage {
     /// WE's UI windows are mapped in our compositor only: never visible.
     fn hide_we_ui(&self) {}
 
+    /// Whether the window of the feed `out` shows exists.
     fn tend(&self, out: &Output) -> bool {
+        let feed = self
+            .feeds
+            .lock()
+            .unwrap()
+            .get(&out.name)
+            .copied()
+            .unwrap_or_default();
         self.windows
             .lock()
             .unwrap()
-            .contains(&window_title(&out.name))
+            .contains(&feed.title(&out.name))
     }
 }
 
@@ -290,6 +374,16 @@ struct State {
     _output_manager: OutputManagerState,
     xwayland_shell: XWaylandShellState,
     xwm: Option<X11Wm>,
+    xdg_shell: XdgShellState,
+    _viewporter: ViewporterState,
+    seat_state: SeatState<State>,
+    _seat: Seat<State>,
+    /// Wine's Wayland windows (xdg_toplevel).
+    toplevels: Vec<ToplevelSurface>,
+    /// Toplevels already told to cover their monitor.
+    placed: HashSet<WlSurface>,
+    /// (surface, role, buffer kind, size) combinations already logged.
+    seen: HashSet<String>,
     /// Monitor name -> its rectangle in our (logical = pixel) space.
     layout: Vec<(String, Rectangle<i32, Logical>)>,
     /// WE's windows we know (to find the window of a committed surface).
@@ -299,6 +393,7 @@ struct State {
     tx: mpsc::Sender<StageEvent>,
     wake: std::fs::File,
     windows: Arc<Mutex<HashSet<String>>>,
+    feeds: Feeds,
     started: Instant,
 }
 
@@ -310,7 +405,8 @@ fn run(
     wake: std::fs::File,
     release_rx: Channel<u64>,
     windows: Arc<Mutex<HashSet<String>>>,
-    ready: mpsc::Sender<Result<String, String>>,
+    feeds: Feeds,
+    ready: mpsc::Sender<Result<(String, String), String>>,
 ) -> Result<(), String> {
     let mut event_loop: EventLoop<'static, State> =
         EventLoop::try_new().map_err(|e| e.to_string())?;
@@ -369,6 +465,9 @@ fn run(
         None
     };
 
+    let mut seat_state = SeatState::new();
+    // a seat without devices: Wine expects one, the wallpaper takes no input
+    let seat = seat_state.new_wl_seat(&dh, "seat0");
     let mut state = State {
         handle: event_loop.handle(),
         dh: dh.clone(),
@@ -379,16 +478,47 @@ fn run(
         _output_manager: OutputManagerState::new_with_xdg_output::<State>(&dh),
         xwayland_shell: XWaylandShellState::new::<State>(&dh),
         xwm: None,
+        xdg_shell: XdgShellState::new::<State>(&dh),
+        _viewporter: ViewporterState::new::<State>(&dh),
+        seat_state,
+        _seat: seat,
+        toplevels: Vec::new(),
+        placed: HashSet::new(),
+        seen: HashSet::new(),
         layout,
         surfaces: Vec::new(),
         held: HashMap::new(),
         tx,
         wake,
         windows,
+        feeds,
         started: Instant::now(),
     };
 
     let handle = event_loop.handle();
+    // Wine's Wayland driver (launch.rs points WE at it) and mpv (video.rs)
+    // connect here
+    let socket =
+        ListeningSocketSource::with_name(&format!("rustpaper-stage-{}", std::process::id()))
+            .map_err(|e| format!("stage Wayland socket: {e}"))?;
+    let socket_name = socket.socket_name().to_string_lossy().into_owned();
+    handle
+        .insert_source(socket, |stream, _, state| {
+            if let Err(e) = state
+                .dh
+                .insert_client(stream, std::sync::Arc::new(OtherClient::default()))
+            {
+                eprintln!("stage: Wayland client refused: {e}");
+            }
+        })
+        .map_err(|e| e.to_string())?;
+    if let Some(file) = launch::wayland_file() {
+        if let Some(dir) = file.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(&file, &socket_name);
+    }
+    eprintln!("stage: Wayland socket {socket_name}");
     handle
         .insert_source(
             Generic::new(display, Interest::READ, CMode::Level),
@@ -425,6 +555,7 @@ fn run(
     )
     .map_err(|e| format!("could not start Xwayland: {e}"))?;
     let ready_once = ready.clone();
+    let socket_name = socket_name.clone();
     handle
         .insert_source(xwayland, move |event, _, state| match event {
             XWaylandEvent::Ready {
@@ -433,7 +564,8 @@ fn run(
             } => match X11Wm::start_wm(state.handle.clone(), x11_socket, client.clone()) {
                 Ok(wm) => {
                     state.xwm = Some(wm);
-                    let _ = ready_once.send(Ok(format!(":{display_number}")));
+                    let _ =
+                        ready_once.send(Ok((format!(":{display_number}"), socket_name.clone())));
                 }
                 Err(e) => {
                     let _ = ready_once.send(Err(format!("X11 window manager: {e}")));
@@ -460,12 +592,24 @@ impl State {
         }
     }
 
-    /// The monitor whose wallpaper window `title` is.
+    /// The monitor whose wallpaper window `title` is (WE's or mpv's).
     fn output_for_title(&self, title: &str) -> Option<(String, Rectangle<i32, Logical>)> {
         self.layout
             .iter()
-            .find(|(name, _)| window_title(name) == title)
+            .find(|(name, _)| [Feed::We, Feed::Mpv].iter().any(|f| f.title(name) == title))
             .cloned()
+    }
+
+    /// Window `title` is the one its monitor shows now.
+    fn is_shown(&self, output: &str, title: &str) -> bool {
+        let feed = self
+            .feeds
+            .lock()
+            .unwrap()
+            .get(output)
+            .copied()
+            .unwrap_or_default();
+        feed.title(output) == title
     }
 
     /// Places a wallpaper window on its monitor (and records it), or leaves
@@ -479,21 +623,65 @@ impl State {
     }
 
     fn refresh_windows(&mut self) {
-        let titles: HashSet<String> = self
+        let mut titles: HashSet<String> = self
             .surfaces
             .iter()
             .filter(|w| w.is_mapped() && self.output_for_title(&w.title()).is_some())
             .map(|w| w.title())
             .collect();
+        titles.extend(
+            self.toplevels
+                .iter()
+                .filter_map(|t| toplevel_title(t.wl_surface()))
+                .filter(|t| self.output_for_title(t).is_some()),
+        );
         *self.windows.lock().unwrap() = titles;
     }
 
-    fn output_of_surface(&self, surface: &WlSurface) -> Option<String> {
-        let w = self
+    /// The monitor of a wallpaper window's surface, and the window's title.
+    fn output_of_surface(&self, surface: &WlSurface) -> Option<(String, String)> {
+        let title = match self
             .surfaces
             .iter()
-            .find(|w| w.wl_surface().as_ref() == Some(surface))?;
-        self.output_for_title(&w.title()).map(|(name, _)| name)
+            .find(|w| w.wl_surface().as_ref() == Some(surface))
+        {
+            Some(w) => w.title(),
+            None => toplevel_title(&wayland_root(surface))?,
+        };
+        self.output_for_title(&title).map(|(name, _)| (name, title))
+    }
+
+    /// A Wayland wallpaper window `root` (Wine's `rustpaper-<output>`,
+    /// mpv's `rustpaper-mpv-<output>`) covers its monitor: fullscreen at its
+    /// size, once.
+    fn place_toplevel(&mut self, root: &WlSurface) {
+        if self.placed.contains(root) {
+            return;
+        }
+        let Some((_, rect)) = toplevel_title(root).and_then(|t| self.output_for_title(&t)) else {
+            return;
+        };
+        let Some(t) = self.toplevels.iter().find(|t| t.wl_surface() == root) else {
+            return;
+        };
+        t.with_pending_state(|s| {
+            s.size = Some(rect.size);
+            s.states
+                .set(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Fullscreen);
+        });
+        t.send_pending_configure();
+        self.placed.insert(root.clone());
+        self.refresh_windows();
+    }
+
+    /// Logs each new kind of surface/buffer of a wallpaper window (how Wine
+    /// presents WE).
+    fn note(&mut self, output: &str, surface: &WlSurface, kind: &str, size: (u32, u32)) {
+        let role = smithay::wayland::compositor::get_role(surface).unwrap_or("none");
+        let key = format!("{output} {role} {kind} {}x{}", size.0, size.1);
+        if self.seen.insert(key.clone()) {
+            eprintln!("stage: {key}");
+        }
     }
 }
 
@@ -523,15 +711,60 @@ impl CompositorHandler for State {
         for cb in callbacks {
             cb.done(now);
         }
+        let x11 = self
+            .surfaces
+            .iter()
+            .any(|w| w.wl_surface().as_ref() == Some(surface));
+        if !x11 {
+            // as soon as it is titled, also on the initial commit (no buffer
+            // yet): mpv then starts at the monitor's size
+            self.place_toplevel(&wayland_root(surface));
+        }
         let Some(BufferAssignment::NewBuffer(buffer)) = buffer else {
             return;
         };
-        let Some(output) = self.output_of_surface(surface) else {
+        let Some((output, title)) = self.output_of_surface(surface) else {
             // WE's UI, dialogs: shown nowhere
             buffer.release();
             return;
         };
+        if !self.is_shown(&output, &title) {
+            // the other feed of this monitor (a leftover WE window while mpv
+            // plays, or the reverse): shown nowhere
+            buffer.release();
+            return;
+        }
         let key = buffer.id().protocol_id() as u64;
+        if !x11 {
+            // Wine's Wayland window: the toplevel holds Wine's own drawing
+            // (shm), the Vulkan swapchain is a subsurface covering it. Only a
+            // dmabuf the size of the monitor is the wallpaper; forwarding
+            // both would alternate them on screen. (mpv draws its dmabufs
+            // into the toplevel itself, at the monitor's size.)
+            let full = self
+                .layout
+                .iter()
+                .find(|(n, _)| *n == output)
+                .map(|(_, r)| (r.size.w as u32, r.size.h as u32))
+                .unwrap_or((0, 0));
+            let dmabuf_size = get_dmabuf(&buffer).ok().map(|d| (d.width(), d.height()));
+            let kind = if dmabuf_size.is_some() {
+                "dmabuf"
+            } else {
+                "shm"
+            };
+            let size = dmabuf_size.unwrap_or_else(|| {
+                with_buffer_contents(&buffer, |_, _, d| (d.width as u32, d.height as u32))
+                    .unwrap_or((0, 0))
+            });
+            self.note(&output, surface, kind, size);
+            let covers =
+                dmabuf_size.is_some_and(|(w, h)| w * 10 >= full.0 * 9 && h * 10 >= full.1 * 9);
+            if !covers {
+                buffer.release();
+                return;
+            }
+        }
         if let Ok(dmabuf) = get_dmabuf(&buffer) {
             let planes: Option<Vec<Plane>> = dmabuf
                 .handles()
@@ -742,8 +975,80 @@ impl XwmHandler for State {
     fn move_request(&mut self, _xwm: XwmId, _window: X11Surface, _button: u32) {}
 }
 
-/// Data of clients other than XWayland (none are expected: the stage has no
-/// socket). Kept so the compositor state lookup is total.
+/// The topmost surface of `surface`'s subsurface tree.
+fn wayland_root(surface: &WlSurface) -> WlSurface {
+    let mut root = surface.clone();
+    while let Some(parent) = smithay::wayland::compositor::get_parent(&root) {
+        root = parent;
+    }
+    root
+}
+
+/// The title of the xdg_toplevel `surface`, if it is one.
+fn toplevel_title(surface: &WlSurface) -> Option<String> {
+    with_states(surface, |states| {
+        states
+            .data_map
+            .get::<XdgToplevelSurfaceData>()?
+            .lock()
+            .ok()?
+            .title
+            .clone()
+    })
+}
+
+impl XdgShellHandler for State {
+    fn xdg_shell_state(&mut self) -> &mut XdgShellState {
+        &mut self.xdg_shell
+    }
+
+    fn new_toplevel(&mut self, surface: ToplevelSurface) {
+        // Wine sizes its windows itself; ours are told once titled (commit)
+        surface.send_configure();
+        self.toplevels.push(surface);
+    }
+
+    fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
+        self.placed.remove(surface.wl_surface());
+        self.toplevels.retain(|t| t != &surface);
+        self.refresh_windows();
+    }
+
+    fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
+        // menus and tooltips of WE's UI: shown nowhere
+        let _ = surface.send_configure();
+    }
+
+    fn grab(
+        &mut self,
+        _surface: PopupSurface,
+        _seat: smithay::reexports::wayland_server::protocol::wl_seat::WlSeat,
+        _serial: smithay::utils::Serial,
+    ) {
+    }
+
+    fn reposition_request(
+        &mut self,
+        surface: PopupSurface,
+        _positioner: PositionerState,
+        token: u32,
+    ) {
+        surface.send_repositioned(token);
+    }
+}
+
+impl SeatHandler for State {
+    type KeyboardFocus = WlSurface;
+    type PointerFocus = WlSurface;
+    type TouchFocus = WlSurface;
+
+    fn seat_state(&mut self) -> &mut SeatState<State> {
+        &mut self.seat_state
+    }
+}
+
+/// Data of clients other than XWayland: Wine's Wayland driver, through the
+/// stage's socket.
 #[derive(Default)]
 struct OtherClient {
     compositor: CompositorClientState,
@@ -761,3 +1066,6 @@ delegate_shm!(State);
 delegate_dmabuf!(State);
 delegate_output!(State);
 delegate_xwayland_shell!(State);
+delegate_xdg_shell!(State);
+delegate_viewporter!(State);
+delegate_seat!(State);

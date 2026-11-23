@@ -112,6 +112,9 @@ export const Playback = z.object({
 });
 export type Playback = z.infer<typeof Playback>;
 
+export const VideoPlayer = z.enum(["mpv", "we"]);
+export type VideoPlayer = z.infer<typeof VideoPlayer>;
+
 export const PerformanceView = z.object({
   settings: z.array(QualitySetting),
   values: z.record(SettingValue),
@@ -119,6 +122,9 @@ export const PerformanceView = z.object({
   preset: z.string(),
   playback: Playback,
   playback_settings: z.array(z.object({ key: Playback.keyof(), label: z.string(), hint: z.string() })),
+  // older backends: Wallpaper Engine plays videos
+  video_player: VideoPlayer.catch("we"),
+  mpv_installed: z.boolean().catch(false),
 });
 export type PerformanceView = z.infer<typeof PerformanceView>;
 

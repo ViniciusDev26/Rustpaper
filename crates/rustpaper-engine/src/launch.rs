@@ -18,6 +18,12 @@ pub fn display_file() -> Option<PathBuf> {
     Some(PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR")?).join("rustpaper/stage-display"))
 }
 
+/// Where an engine with a private stage publishes its Wayland socket name
+/// (for Wine's Wayland driver).
+pub fn wayland_file() -> Option<PathBuf> {
+    Some(PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR")?).join("rustpaper/stage-wayland"))
+}
+
 /// The private stage's display, when one is up (its X socket exists).
 pub fn active_display() -> Option<String> {
     let d = std::fs::read_to_string(display_file()?).ok()?;

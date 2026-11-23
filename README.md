@@ -50,6 +50,7 @@ your own copy of **Wallpaper Engine**, purchased on Steam.
 
 - `Xwayland`, libgbm (mesa) and `nsenter` (util-linux): already there on
   most desktops.
+- Optional: `mpv`, for video wallpapers (below).
 
 ---
 
@@ -116,7 +117,9 @@ override them).
 ## ✨ What works
 
 - **Every wallpaper type WE plays**: scenes, videos, web and application
-  wallpapers, pixel-identical to WE because WE renders them.
+  wallpapers, pixel-identical to WE because WE renders them (video
+  wallpapers play in mpv with hardware decoding when it is installed: the
+  same video for a fraction of the CPU).
 - **Multi-monitor**, each at its native resolution (fractional scaling too),
   60 fps. WE's frames go from its GPU buffers to your desktop without a
   copy.
@@ -154,6 +157,22 @@ Engine as it does on Windows: **not sandboxed**.
 
 How it works, measurements and known gaps:
 [`docs/ENGINE.md`](./docs/ENGINE.md), [`docs/SELECTOR.md`](./docs/SELECTOR.md).
+
+---
+
+## ⚡ Maximizing performance
+
+- **Video wallpapers: install mpv.** Under Proton, Wallpaper Engine decodes
+  videos on the CPU (a 1080p video took 22.7% of a core). With `mpv`
+  installed, Rustpaper plays video wallpapers in mpv with your GPU's video
+  decoder instead (1.9% for the same video), on its private stage; scenes
+  and web wallpapers stay on Wallpaper Engine, and Wallpaper Engine pauses
+  when no monitor needs it. Performance tab -> "Play videos with" switches
+  back to Wallpaper Engine.
+- **Pause when covered**: the Playback rules (Performance tab) pause a
+  monitor's wallpaper under fullscreen or tiled windows.
+- **Lower FPS** in the Quality settings: Wallpaper Engine renders scenes at
+  that rate.
 
 ---
 

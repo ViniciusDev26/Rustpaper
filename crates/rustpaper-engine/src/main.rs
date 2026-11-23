@@ -24,6 +24,10 @@
 //!   and reloads it in place on SIGHUP.
 //! - **Lock screen** (`lock/`): `rustpaper lock` and its daemon; the engine
 //!   feeds it the private stage's frames (`lock/feed.rs`).
+//! - **Video wallpapers** (`video.rs`): on the private stage, mpv with
+//!   hardware decoding plays them instead of WE (Proton decodes video on the
+//!   CPU). WE is started only when some monitor needs it, and paused when
+//!   none does.
 
 mod config;
 mod desktop;
@@ -33,6 +37,7 @@ mod lock;
 mod mirror;
 mod power;
 mod stage;
+mod video;
 mod we;
 
 use std::collections::HashMap;
@@ -43,8 +48,8 @@ use std::time::{Duration, Instant};
 use config::{Choice, Config, Mode, Source};
 use desktop::{Coverage, Desktop, Output, Stage};
 use mirror::Mirrors;
-use rustpaper_core::state::{Action, Playback, StageChoice};
-use stage::{PrivateStage, StageEvent};
+use rustpaper_core::state::{Action, Playback, StageChoice, VideoPlayer};
+use stage::{Feed, PrivateStage, StageEvent};
 
 /// Watchdog period.
 const TICK: Duration = Duration::from_secs(2);
@@ -85,6 +90,8 @@ struct Target {
     /// The monitor whose WE window feeds this one (shared rendering), or
     /// None when it shows its own window.
     source: Option<String>,
+    /// mpv playing this monitor's video wallpaper (video.rs) instead of WE.
+    player: Option<video::Player>,
 }
 
 fn fail(msg: impl std::fmt::Display) -> ! {
@@ -163,7 +170,9 @@ fn main() {
 
     // RUSTPAPER_NO_WE=1 (debugging): only the stage and the mirror run, for
     // testing them with any X client (e.g. a window titled rustpaper-DP-1).
-    let we_on = std::env::var_os("RUSTPAPER_NO_WE").is_none();
+    // mpv still plays video wallpapers.
+    let we_allowed = std::env::var_os("RUSTPAPER_NO_WE").is_none();
+    let we_on = we_allowed;
     // Where WE's windows live: Rustpaper's own compositor (private stage),
     // or the desktop adapter's stage inside the user's compositor.
     let private = match cfg.stage {
@@ -191,22 +200,27 @@ fn main() {
         }),
     };
 
-    if we_on && !we::ensure_running(&cfg.performance) {
+    // video wallpapers in mpv: needs the private stage (mpv is a client of
+    // its Wayland socket) and mpv itself
+    let mpv = video::mpv_installed();
+    if cfg.video_player == VideoPlayer::Mpv {
+        if !mpv {
+            eprintln!("video: mpv is not installed; video wallpapers play in Wallpaper Engine");
+        } else if private_stage.is_none() {
+            eprintln!(
+                "video: mpv needs the private stage; video wallpapers play in Wallpaper Engine"
+            );
+        }
+    }
+    let videos = |c: &Config| private_stage.is_some() && mpv && c.video_player == VideoPlayer::Mpv;
+    let names: Vec<String> = outputs.iter().map(|o| o.name.clone()).collect();
+    // WE only when some monitor shows something else than a video in mpv
+    let mut we_on = we_on && needs_we(&cfg, &names, videos(&cfg), is_video);
+    if we_allowed && !we_on {
+        eprintln!("Wallpaper Engine is not needed: every wallpaper is a video (mpv)");
+    }
+    if we_on && !start_we(&cfg, private_stage.as_ref(), stage) {
         fail("Wallpaper Engine is not running (start it from Steam)");
-    }
-    if we_on
-        && let Some(p) = &private_stage
-        && we::display().as_deref() != Some(p.display())
-    {
-        // started before this stage (or without it): Steam starts it again
-        // through the launch option, which points it at our display
-        eprintln!("stage: moving Wallpaper Engine onto the private stage");
-        we::restart(&cfg.performance);
-    }
-    if we_on {
-        stage.hide_we_ui();
-        // a previous instance may have paused WE (all monitors covered)
-        we::control(&["-control", "play"]);
     }
 
     let mut targets: Vec<Target> = outputs
@@ -221,6 +235,7 @@ fn main() {
                 attempts: 0,
                 configured: false,
                 source: None,
+                player: None,
             };
             mirrors
                 .add(&qh, &t.output.name, &t.title, private_stage.is_none())
@@ -233,7 +248,13 @@ fn main() {
     // window's buffers on several monitors; desktop stages capture each
     // window for its own monitor)
     let share = private_stage.is_some();
-    assign(&cfg, Mode::Desktop, &mut targets, share, true, we_on);
+    let ctx = |c: &Config, we_on: bool| Ctx {
+        share,
+        we_on,
+        private: private_stage.as_ref(),
+        videos: videos(c),
+    };
+    assign(&cfg, Mode::Desktop, &mut targets, &ctx(&cfg, we_on), true);
 
     // the lock screen shows the private stage's frames too (lock/feed.rs)
     let mut feed = private_stage
@@ -351,7 +372,22 @@ fn main() {
                         lock::adapter::detect().hand_over_screensaver(new.screensaver.enabled);
                     }
                     mirrors.set_idle_timeout(&qh, saver_timeout(&new));
-                    reload(stage, &cfg, &new, mode, &mut targets, we_on, share);
+                    let mut force = false;
+                    if we_allowed && !we_on && needs_we(&new, &names, videos(&new), is_video) {
+                        eprintln!("reload: a wallpaper needs Wallpaper Engine, starting it");
+                        we_on = start_we(&new, private_stage.as_ref(), stage);
+                        force = we_on;
+                        we_paused = false;
+                    }
+                    reload(
+                        stage,
+                        &cfg,
+                        &new,
+                        mode,
+                        &mut targets,
+                        &ctx(&new, we_on),
+                        force,
+                    );
                     cfg = new;
                 }
                 Err(e) => eprintln!("reload: {e}"),
@@ -372,18 +408,11 @@ fn main() {
             eprintln!("mode: {now_mode:?}");
             mode = now_mode;
             mirrors.set_screensaver(&qh, mode == Mode::Screensaver);
-            assign(&cfg, mode, &mut targets, share, false, we_on);
+            assign(&cfg, mode, &mut targets, &ctx(&cfg, we_on), false);
             // re-decide pausing now (WE must play while locked or idle)
             last_tick = Instant::now() - TICK;
         }
-        if !we_on && last_tick.elapsed() >= TICK {
-            // debugging without WE: still keep the stage's arrangement
-            last_tick = Instant::now();
-            for t in &targets {
-                stage.tend(&t.output);
-            }
-        }
-        if we_on && last_tick.elapsed() >= TICK {
+        if last_tick.elapsed() >= TICK {
             last_tick = Instant::now();
             watchdog(
                 desktop.as_ref(),
@@ -393,6 +422,7 @@ fn main() {
                 &mut mirrors,
                 &mut we_paused,
                 mode,
+                we_on,
             );
         }
         if stats.elapsed() >= Duration::from_secs(60) {
@@ -412,6 +442,10 @@ fn main() {
     // The windows and hidden outputs stay for the next engine (closing WE's
     // windows is unreliable, see the top). The last engine out stops WE's
     // wallpapers so they cost nothing while no wallpaper is shown.
+    for t in &mut targets {
+        // mpv goes first (a quick kill; the WE stop below may take seconds)
+        t.player = None;
+    }
     if we_on && !other_engine_running() {
         // within systemd's stop timeout (we.rs control_within)
         we::control_within(&["-control", "stop"], Duration::from_secs(8));
@@ -421,19 +455,17 @@ fn main() {
 /// Applies a new Config without restarting the engine (so the desktop never
 /// shows the plain background in between): new quality settings restart WE,
 /// a new wallpaper or new property values load into the same windows.
+/// `force`: load every WE window (WE was just started).
 fn reload(
     stage: &dyn Stage,
     old: &Config,
     new: &Config,
     mode: Mode,
     targets: &mut [Target],
-    we_on: bool,
-    share: bool,
+    ctx: &Ctx,
+    force: bool,
 ) {
-    if !we_on {
-        return;
-    }
-    if !new.performance.is_empty() && we::needs_restart(&new.performance) {
+    if ctx.we_on && !new.performance.is_empty() && we::needs_restart(&new.performance) {
         eprintln!("reload: new quality settings, restarting Wallpaper Engine");
         if we::restart(&new.performance) {
             stage.hide_we_ui();
@@ -441,13 +473,71 @@ fn reload(
         for t in targets.iter_mut() {
             t.attempts = 0;
         }
-        assign(new, mode, targets, share, true, true);
+        assign(new, mode, targets, ctx, true);
         return;
     }
-    assign(new, mode, targets, share, false, true);
-    if new.mute != old.mute {
+    // mpv takes the new mute/volume here too (Player::update)
+    assign(new, mode, targets, ctx, force);
+    if ctx.we_on && new.mute != old.mute {
         we::control(&["-control", if new.mute { "mute" } else { "unmute" }]);
     }
+}
+
+/// What [`assign`] may use.
+struct Ctx<'a> {
+    /// Monitors may show another monitor's window (the private stage).
+    share: bool,
+    /// WE runs (else nothing is asked of it).
+    we_on: bool,
+    private: Option<&'a PrivateStage>,
+    /// Video wallpapers play in mpv (needs `private`).
+    videos: bool,
+}
+
+/// Starts WE (through Steam, when it is not running), on the private stage
+/// when there is one; false when it could not be started.
+fn start_we(cfg: &Config, private: Option<&PrivateStage>, stage: &dyn Stage) -> bool {
+    if !we::ensure_running(&cfg.performance) {
+        eprintln!("error: Wallpaper Engine is not running (start it from Steam)");
+        return false;
+    }
+    if let Some(p) = private
+        && we::display().as_deref() != Some(p.display())
+    {
+        // started before this stage (or without it): Steam starts it again
+        // through the launch option, which points it at our display
+        eprintln!("stage: moving Wallpaper Engine onto the private stage");
+        we::restart(&cfg.performance);
+    }
+    stage.hide_we_ui();
+    // a previous instance may have paused WE (all monitors covered)
+    we::control(&["-control", "play"]);
+    true
+}
+
+/// A video wallpaper mpv can play.
+fn is_video(c: &Choice) -> bool {
+    video::file_of(&c.project).is_some()
+}
+
+/// Whether any monitor (`outputs`) shows, in any mode, a wallpaper WE must
+/// render: everything but videos, when `videos` play in mpv.
+fn needs_we(
+    cfg: &Config,
+    outputs: &[String],
+    videos: bool,
+    is_video: impl Fn(&Choice) -> bool,
+) -> bool {
+    if !videos {
+        return true;
+    }
+    let mut modes = vec![Mode::Desktop, Mode::Lock];
+    if cfg.screensaver.enabled {
+        modes.push(Mode::Screensaver);
+    }
+    outputs
+        .iter()
+        .any(|o| modes.iter().any(|&m| !is_video(cfg.choice(o, m))))
 }
 
 /// Decides what each monitor shows in `mode` and which WE windows render
@@ -458,10 +548,16 @@ fn reload(
 /// (start, WE restarted). Without WE (`RUSTPAPER_NO_WE`) nothing is
 /// loaded, but the sharing still applies (to test it with a stand-in).
 ///
-/// A window that stops being used (its monitor now shares another's) is
-/// not closed: closing WE's windows degrades it (see the top). It keeps
-/// rendering what it had until WE restarts; its frames are dropped.
-fn assign(cfg: &Config, mode: Mode, targets: &mut [Target], share: bool, force: bool, we_on: bool) {
+/// Owners of a video wallpaper (with `ctx.videos`) run mpv instead (one per
+/// group of monitors sharing it), and the stage shows mpv's window for
+/// them; an owner whose wallpaper is no video any more stops its mpv.
+///
+/// A window that stops being used (its monitor now shares another's, or
+/// plays a video in mpv) is not closed: closing WE's windows degrades it
+/// (see the top). It keeps rendering what it had until WE restarts (or WE
+/// pauses: nothing needs it); its frames are dropped.
+fn assign(cfg: &Config, mode: Mode, targets: &mut [Target], ctx: &Ctx, force: bool) {
+    let share = ctx.share;
     let wants: Vec<Choice> = targets
         .iter()
         .map(|t| cfg.choice(&t.output.name, mode).clone())
@@ -490,13 +586,54 @@ fn assign(cfg: &Config, mode: Mode, targets: &mut [Target], share: bool, force: 
             }
             t.source = source;
             t.want = want;
+            if t.player.take().is_some() {
+                eprintln!("{}: mpv stopped", t.output.name);
+            }
             continue;
         }
         let was_shared = t.source.take().is_some();
-        if force || was_shared || want != t.want {
+        let changed = force || was_shared || want != t.want;
+        if let Some(p) = ctx.private.filter(|_| ctx.videos)
+            && let Some(file) = video::file_of(&want.project)
+        {
+            let playback = video::Playback {
+                file,
+                mute: cfg.mute,
+                volume: cfg.volume,
+            };
+            let playing = match &mut t.player {
+                Some(player) => {
+                    player.update(playback);
+                    true
+                }
+                None => match video::Player::spawn(&t.output.name, p.wayland_socket(), playback) {
+                    Ok(player) => {
+                        t.player = Some(player);
+                        true
+                    }
+                    Err(e) => {
+                        eprintln!("{}: {e}; Wallpaper Engine plays it", t.output.name);
+                        false
+                    }
+                },
+            };
+            if playing {
+                p.set_feed(&t.output.name, Feed::Mpv);
+                if changed {
+                    eprintln!("{}: {} (mpv)", t.output.name, want.project.display());
+                }
+                t.want = want;
+                continue;
+            }
+        }
+        let was_video = t.player.take().is_some();
+        if let Some(p) = ctx.private {
+            p.set_feed(&t.output.name, Feed::We);
+        }
+        if changed || was_video {
             eprintln!("{}: {}", t.output.name, want.project.display());
             t.want = want;
-            if we_on {
+            if ctx.we_on {
                 open_window(t);
             }
         }
@@ -613,7 +750,9 @@ fn open_window(t: &mut Target) {
     ]);
 }
 
-/// Keeps every target alive and decides pausing.
+/// Keeps every target alive and decides pausing. Without WE (`we_on`
+/// false) only mpv and the stage's arrangement are tended.
+#[allow(clippy::too_many_arguments)]
 fn watchdog(
     desktop: &dyn Desktop,
     stage: &dyn Stage,
@@ -622,10 +761,20 @@ fn watchdog(
     mirrors: &mut Mirrors,
     we_paused: &mut bool,
     mode: Mode,
+    we_on: bool,
 ) {
     for t in targets.iter_mut() {
         if t.source.is_some() {
             // shows another monitor's window: nothing to keep alive here
+            continue;
+        }
+        if let Some(p) = &mut t.player {
+            // restarted when it died
+            p.tend();
+            continue;
+        }
+        if !we_on {
+            stage.tend(&t.output);
             continue;
         }
         if !stage.tend(&t.output) {
@@ -679,15 +828,59 @@ fn watchdog(
         }
     }
     let locked = mode == Mode::Lock;
-    // while the lock screen shows the wallpaper, WE keeps playing (only the
-    // lock covers the monitors; "display asleep" still pauses each mirror)
-    let all = !locked && !mirrors.list.is_empty() && mirrors.list.iter().all(|m| m.paused);
-    if all != *we_paused {
+    // each renderer (WE's window or mpv) pauses when every monitor it feeds
+    // is paused; while the lock screen shows the wallpaper it keeps playing
+    // (only the lock covers the monitors; "display asleep" still pauses each
+    // mirror)
+    let paused: Vec<bool> = mirrors.list.iter().map(|m| m.paused).collect();
+    let names: Vec<String> = mirrors.list.iter().map(|m| m.output.clone()).collect();
+    let feeds_paused = |owner: &str| {
+        targets
+            .iter()
+            .filter(|t| t.source.as_deref().unwrap_or(&t.output.name) == owner)
+            .all(|t| {
+                names
+                    .iter()
+                    .position(|n| *n == t.output.name)
+                    .is_none_or(|i| paused[i])
+            })
+    };
+    let owners: Vec<(String, bool)> = targets
+        .iter()
+        .filter(|t| t.source.is_none())
+        .map(|t| (t.output.name.clone(), feeds_paused(&t.output.name)))
+        .collect();
+    let mut we_needed = false;
+    let mut we_playing = false;
+    for (t, (_, group_paused)) in targets
+        .iter_mut()
+        .filter(|t| t.source.is_none())
+        .zip(&owners)
+    {
+        match &mut t.player {
+            Some(p) => p.set_paused(!locked && *group_paused),
+            None => {
+                we_needed = true;
+                we_playing |= locked || !group_paused;
+            }
+        }
+    }
+    // no monitor shows a WE window (every one plays a video in mpv): WE
+    // pauses, so it costs nothing
+    let all = !we_needed || !we_playing;
+    if we_on && all != *we_paused {
         *we_paused = all;
         we::control(&["-control", if all { "pause" } else { "play" }]);
     }
+    if !we_on {
+        return;
+    }
     for (i, t) in targets.iter().enumerate() {
-        if t.source.is_none() && !mirrors.capturing(i) && t.opened.elapsed() > OPEN_TIMEOUT {
+        if t.source.is_none()
+            && t.player.is_none()
+            && !mirrors.capturing(i)
+            && t.opened.elapsed() > OPEN_TIMEOUT
+        {
             eprintln!(
                 "{}: window {} is not being captured",
                 t.output.name, t.title
@@ -742,6 +935,43 @@ mod tests {
             share_plan(&[((1920, 1080), &a), ((1920, 1080), &a), ((1920, 1080), &a)]),
             vec![None, Some(0), Some(0)]
         );
+    }
+
+    #[test]
+    fn wallpaper_engine_only_when_something_is_no_video() {
+        let c = |p: &str| Choice {
+            project: std::path::PathBuf::from(p),
+            properties: Default::default(),
+        };
+        let mut cfg = Config {
+            desktop: c("video"),
+            monitors: Default::default(),
+            lock: None,
+            screensaver: Default::default(),
+            mute: false,
+            volume: 100,
+            playback: Playback::default(),
+            performance: Default::default(),
+            stage: StageChoice::Private,
+            video_player: VideoPlayer::Mpv,
+        };
+        let is_video = |c: &Choice| c.project.starts_with("video");
+        let outs = ["DP-1".to_string(), "HDMI-A-1".to_string()];
+        assert!(!needs_we(&cfg, &outs, true, is_video));
+        assert!(needs_we(&cfg, &outs, false, is_video), "videos in WE");
+        cfg.monitors.insert("DP-1".into(), c("scene"));
+        assert!(needs_we(&cfg, &outs, true, is_video), "one monitor's scene");
+        cfg.monitors.clear();
+        cfg.lock = Some(c("scene"));
+        assert!(needs_we(&cfg, &outs, true, is_video), "the lock's scene");
+        cfg.lock = None;
+        cfg.screensaver.all = Some(c("web"));
+        assert!(
+            !needs_we(&cfg, &outs, true, is_video),
+            "a screensaver that is off"
+        );
+        cfg.screensaver.enabled = true;
+        assert!(needs_we(&cfg, &outs, true, is_video));
     }
 
     #[test]

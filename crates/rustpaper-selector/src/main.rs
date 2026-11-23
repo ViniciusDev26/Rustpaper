@@ -7,7 +7,8 @@
 //   save_properties(id, values) -> persists them; the engine reloads them
 //   wallpaper_colors(id) -> dominant colors of its preview (color suggestions)
 //   get_settings / set_autostart / set_volume
-//   get_performance / set_performance / set_playback -> the Performance tab
+//   get_performance / set_performance / set_playback / set_video_player
+//                        -> the Performance tab
 //   workshop_query / workshop_subscribe / workshop_unsubscribe / workshop_status /
 //   workshop_subscriptions -> the Steam Workshop store (workshop.rs)
 //   get_theme            -> the active Omarchy theme (omarchy.rs), + `theme-changed` events
@@ -29,7 +30,7 @@ use std::time::Duration;
 
 use rustpaper_core::performance;
 use rustpaper_core::project::{Project, WallpaperKind};
-use rustpaper_core::state::{self, Playback, Role};
+use rustpaper_core::state::{self, Playback, Role, VideoPlayer};
 use serde::Serialize;
 use serde_json::{Map, Value};
 use tauri::{Emitter, Manager};
@@ -574,7 +575,7 @@ fn set_volume(volume: u8, state: tauri::State<EngineState>) -> Result<(), String
 }
 
 /// The Performance tab: WE's quality settings (with their current values)
-/// and presets, and the Playback rules.
+/// and presets, the Playback rules, and what plays video wallpapers.
 #[derive(Serialize)]
 struct PerformanceView {
     settings: Vec<performance::Setting>,
@@ -583,6 +584,9 @@ struct PerformanceView {
     preset: &'static str,
     playback: Playback,
     playback_settings: Vec<performance::PlaybackSetting>,
+    video_player: VideoPlayer,
+    /// mpv is on PATH (without it, video wallpapers play in WE).
+    mpv_installed: bool,
 }
 
 #[derive(Serialize)]
@@ -605,6 +609,8 @@ fn get_performance() -> PerformanceView {
         values,
         playback: st.playback,
         playback_settings: performance::playback_settings(),
+        video_player: st.video_player,
+        mpv_installed: rustpaper_core::paths::program("mpv").is_some(),
     }
 }
 
@@ -625,6 +631,15 @@ fn set_performance(
 fn set_playback(playback: Playback, state: tauri::State<EngineState>) -> Result<(), String> {
     let mut st = state::load();
     st.playback = playback;
+    state::save(&st).map_err(|e| e.to_string())?;
+    refresh_if_running(&state)
+}
+
+/// What plays video wallpapers: mpv (hardware decoding) or WE.
+#[tauri::command]
+fn set_video_player(player: VideoPlayer, state: tauri::State<EngineState>) -> Result<(), String> {
+    let mut st = state::load();
+    st.video_player = player;
     state::save(&st).map_err(|e| e.to_string())?;
     refresh_if_running(&state)
 }
@@ -728,6 +743,7 @@ fn main() {
             get_performance,
             set_performance,
             set_playback,
+            set_video_player,
             workshop_query,
             workshop_subscribe,
             workshop_unsubscribe,

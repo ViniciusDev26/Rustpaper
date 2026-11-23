@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use rustpaper_core::performance;
-use rustpaper_core::state::{self, Playback, StageChoice};
+use rustpaper_core::state::{self, Playback, StageChoice, VideoPlayer};
 use serde_json::{Map, Value};
 
 /// One wallpaper as WE plays it.
@@ -51,10 +51,15 @@ pub struct Config {
     pub lock: Option<Choice>,
     pub screensaver: ScreensaverConfig,
     pub mute: bool,
+    /// 0..100. WE has no volume command (it plays at its own volume unless
+    /// muted); mpv takes it as is.
+    pub volume: u8,
     pub playback: Playback,
     /// WE quality settings (sanitized); empty = leave WE's as they are.
     pub performance: Map<String, Value>,
     pub stage: StageChoice,
+    /// What plays video wallpapers (video.rs).
+    pub video_player: VideoPlayer,
 }
 
 impl Config {
@@ -95,6 +100,7 @@ pub fn parse_args() -> (Source, Option<String>) {
     let mut dir = None;
     let mut props_file: Option<PathBuf> = None;
     let mut mute = false;
+    let mut volume = 100;
     let mut output = None;
     let mut service = false;
     let mut stage = None;
@@ -112,8 +118,15 @@ pub fn parse_args() -> (Source, Option<String>) {
             "--props" => props_file = args.next().map(PathBuf::from),
             "--mute" | "--no-audio" => mute = true,
             // WE has no volume command: anything above 0 plays at WE's own
-            // volume (set in WE's settings)
-            "--volume" => mute = args.next().and_then(|v| v.parse::<u32>().ok()) == Some(0),
+            // volume (set in WE's settings); mpv plays at this volume
+            "--volume" => {
+                volume = args
+                    .next()
+                    .and_then(|v| v.parse::<u32>().ok())
+                    .unwrap_or(100)
+                    .min(100) as u8;
+                mute = volume == 0;
+            }
             "--output" => output = args.next(),
             // options of the old native renderer, accepted so existing
             // autostart entries keep working
@@ -148,9 +161,11 @@ pub fn parse_args() -> (Source, Option<String>) {
         lock: None,
         screensaver: ScreensaverConfig::default(),
         mute,
+        volume,
         playback: Playback::default(),
         performance: Map::new(),
         stage: stage.unwrap_or_default(),
+        video_player: VideoPlayer::default(),
     };
     (Source::Args(Box::new(config)), output)
 }
@@ -205,9 +220,11 @@ pub fn service_config() -> Result<Config, String> {
             monitors: resolve_map(&st.screensaver.monitors),
         },
         mute: st.volume == 0,
+        volume: st.volume.min(100),
         playback: st.playback,
         performance: performance::sanitize(&st.performance),
         stage: st.stage,
+        video_player: st.video_player,
     })
 }
 
@@ -230,9 +247,11 @@ mod tests {
             lock: None,
             screensaver: ScreensaverConfig::default(),
             mute: false,
+            volume: 100,
             playback: Playback::default(),
             performance: Map::new(),
             stage: StageChoice::Auto,
+            video_player: VideoPlayer::Mpv,
         };
         assert_eq!(cfg.choice("DP-1", Mode::Desktop), &c("dp"));
         assert_eq!(cfg.choice("HDMI-A-1", Mode::Desktop), &c("all"));
