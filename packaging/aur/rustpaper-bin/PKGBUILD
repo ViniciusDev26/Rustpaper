@@ -12,6 +12,8 @@ license=('MIT')
 depends=('gcc-libs' 'glibc' 'gtk3' 'libglvnd' 'libxkbcommon' 'wayland' 'webkit2gtk-4.1'
          'mesa' 'util-linux' 'xorg-xwayland' 'steam' 'pam' 'dbus')
 backup=('etc/pam.d/rustpaper-lock')
+# prebuilt, already stripped binaries: no -debug split package
+options=('!debug')
 provides=('rustpaper')
 conflicts=('rustpaper')
 source=("https://github.com/ViniciusDev26/Rustpaper/releases/download/v$pkgver/rustpaper-$pkgver-x86_64-linux.tar.gz")
