@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.0](https://github.com/ViniciusDev26/Rustpaper/compare/v0.4.0...v0.5.0) (2026-11-23)
+
+
+### Features
+
+* animated lock screen with lock adapters ([4a8fb78](https://github.com/ViniciusDev26/Rustpaper/commit/4a8fb78a7f7bd4ae9696a7075e6bf87e0dfdd566))
+* **core:** wallpapers by role, per monitor ([4d98c1d](https://github.com/ViniciusDev26/Rustpaper/commit/4d98c1d5b7c4e79b7f6af865080ce6aca9ac9b59))
+* **engine:** animated lock screen with lock adapters ([d9569da](https://github.com/ViniciusDev26/Rustpaper/commit/d9569daa8b57d3560a4137a5a16b27c904a4dcc8))
+* **engine:** per-monitor wallpapers, screensaver and lock wallpaper ([c3505ef](https://github.com/ViniciusDev26/Rustpaper/commit/c3505effcc577ceca4e818a15a9c644f2e80cb13))
+* **selector:** animated lock screen switch ([384bc01](https://github.com/ViniciusDev26/Rustpaper/commit/384bc01d28b57f09530b7451f55bad39581dd8c1))
+* **selector:** use a wallpaper for a monitor, the lock screen or the screensaver ([3bcca26](https://github.com/ViniciusDev26/Rustpaper/commit/3bcca26fb1e447f23d79083f434e3baec2881fc6))
+* wallpapers per monitor, lock screen wallpaper and screensaver ([2b2323e](https://github.com/ViniciusDev26/Rustpaper/commit/2b2323e3370a91dafbe0367ffa4e1ebfeb7e0a35))
+
 ## [0.4.0](https://github.com/ViniciusDev26/Rustpaper/compare/v0.3.0...v0.4.0) (2026-11-22)
 
 
