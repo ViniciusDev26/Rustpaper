@@ -7,8 +7,22 @@ import { api } from "../api/tauri";
 import { placementLabel } from "../lib/roles";
 import { errorText, toast } from "./toast";
 
+const TARGET_KEY = "rp-apply-target";
+function savedTarget(): string | null {
+  try {
+    return localStorage.getItem(TARGET_KEY);
+  } catch {
+    return null;
+  }
+}
+
 interface RolesState {
   roles: RolesView | null;
+  /// Where "Apply" puts a wallpaper (a placementKey; lib/roles
+  /// resolveTarget), remembered so several wallpapers go to the lock screen
+  /// in a row without choosing again.
+  targetKey: string | null;
+  setTarget: (key: string) => void;
   load: () => Promise<void>;
   assign: (id: string, title: string, role: Role, output: string | null) => Promise<void>;
   clear: (role: Role, output: string | null) => Promise<void>;
@@ -17,6 +31,15 @@ interface RolesState {
 
 export const useRoles = create<RolesState>((set, get) => ({
   roles: null,
+  targetKey: savedTarget(),
+  setTarget: (key) => {
+    try {
+      localStorage.setItem(TARGET_KEY, key);
+    } catch {
+      /* per-viewer convenience only */
+    }
+    set({ targetKey: key });
+  },
   load: async () => {
     try {
       set({ roles: await api.getRoles() });

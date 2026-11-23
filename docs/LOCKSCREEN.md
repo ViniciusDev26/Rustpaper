@@ -43,7 +43,7 @@ lock triggers to route) lives in a lock adapter. Code: `crates/rustpaper-engine/
   copy, no rendering of its own. The socket is per Wayland display and only
   accepts peers of the same uid.
 - **Its own wallpaper:** the selector can give the lock screen a
-  wallpaper of its own ("Use for → Lock screen"). When the lock connects,
+  wallpaper of its own ("Apply to → Lock screen"). When the lock connects,
   the engine loads it into WE's windows and gives each monitor its desktop
   wallpaper back on unlock (docs/ENGINE.md, "What each monitor shows").
   WE needs 1-3 s to load it: until then the lock shows the desktop's.

@@ -106,15 +106,21 @@ export function Card({
   selected,
   interactive = true,
   onClick,
+  onDoubleClick,
+  title,
 }: {
   children: ReactNode;
   selected?: boolean;
   interactive?: boolean;
   onClick?: () => void;
+  onDoubleClick?: () => void;
+  title?: string;
 }) {
   return (
     <div
       onClick={onClick}
+      onDoubleClick={onDoubleClick}
+      title={title}
       className={`overflow-hidden rounded-[10px] border-2 bg-card transition ${selected ? "border-pink" : "border-transparent"} ${interactive ? "cursor-pointer hover:-translate-y-0.5 hover:border-accent" : ""}`}
     >
       {children}

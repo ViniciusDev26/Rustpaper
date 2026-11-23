@@ -1,7 +1,8 @@
 // The Library tab: the wallpapers found in the Workshop folders and the
-// properties panel of the selected one. Like WE, one click applies a
-// wallpaper and shows its properties: every type plays, since the real
-// Wallpaper Engine renders it.
+// properties panel of the selected one. One click selects a wallpaper (its
+// preview, properties and "Apply to"); nothing changes on screen until it
+// is applied, so a lock screen or screensaver wallpaper never passes
+// through the desktop. A double click applies it to the chosen target.
 import { useMemo } from "react";
 import { fileUrl } from "../api/tauri";
 import { placementsOf } from "../lib/roles";
@@ -11,7 +12,7 @@ import { Badge, Card, Thumb } from "./common";
 import { PropertiesPanel } from "./PropertiesPanel";
 
 export function LibraryView() {
-  const { wallpapers, search, sort, subTimes, selectedId, loading, error, apply } = useLibrary();
+  const { wallpapers, search, sort, subTimes, selectedId, loading, error, select, applyToTarget } = useLibrary();
   const shown = useMemo(
     () => visibleWallpapers({ wallpapers, search, sort, subTimes }),
     [wallpapers, search, sort, subTimes],
@@ -26,7 +27,13 @@ export function LibraryView() {
         {error && <div className="p-5 text-sub">Failed to load: {error}</div>}
         <div className="grid grid-cols-[repeat(auto-fill,minmax(190px,1fr))] gap-3.5 p-5">
           {shown.map((w) => (
-            <Card key={w.id} selected={w.id === selectedId} onClick={() => apply(w)}>
+            <Card
+              key={w.id}
+              selected={w.id === selectedId}
+              onClick={() => select(w.id)}
+              onDoubleClick={() => void applyToTarget(w)}
+              title="Click to select, double-click to apply"
+            >
               <Thumb src={w.preview ? fileUrl(w.preview) : null} />
               <div className="px-2.5 py-2">
                 <div className="truncate text-sm" title={w.title}>

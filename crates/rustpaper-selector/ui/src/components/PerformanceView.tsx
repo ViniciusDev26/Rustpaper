@@ -90,7 +90,7 @@ function presetOf(view: View, values: Record<string, SettingValue>): string {
 }
 
 /// The screensaver switch and its delay (which wallpaper each monitor
-/// shows is chosen in the Library: Use for → Screensaver).
+/// shows is chosen in the Library: Apply to → Screensaver).
 function ScreensaverSection() {
   const { roles, load, setScreensaver } = useRoles();
   const [minutes, setMinutes] = useState<string | null>(null);
@@ -109,7 +109,7 @@ function ScreensaverSection() {
   return (
     <Section
       title="Screensaver"
-      note="After this long without input, each monitor shows its screensaver wallpaper over your windows; any key or the mouse ends it. Pick the wallpapers in the Library (Use for → Screensaver); without one, a monitor shows its desktop wallpaper. While on, it replaces Omarchy's screensaver."
+      note="After this long without input, each monitor shows its screensaver wallpaper over your windows; any key or the mouse ends it. Pick the wallpapers in the Library (Apply to → Screensaver); without one, a monitor shows its desktop wallpaper. While on, it replaces Omarchy's screensaver."
     >
       <SettingRow label="Screensaver" hint="Idle inhibitors (a playing video) hold it off.">
         <div className="flex flex-wrap items-center gap-3">

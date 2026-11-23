@@ -138,7 +138,7 @@ override them).
   wallpaper's colors.
 - **A wallpaper per monitor, per role**: each monitor's desktop, the lock
   screen and a screensaver (each monitor's own) can each show a different
-  wallpaper ("Use for" in the selector). The screensaver covers the windows
+  wallpaper ("Apply to" in the selector). The screensaver covers the windows
   after a delay without input and replaces Omarchy's.
 - **Animated lock screen**: the live wallpaper behind the password prompt,
   on any compositor with `ext-session-lock-v1`. One switch in the selector
