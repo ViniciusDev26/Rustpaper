@@ -10,6 +10,13 @@ on:
   push:
     branches: [main]
 
+# One run at a time, queued, never cancelled: two merges seconds apart once
+# ran release-please twice at once and the lockfile job's push was rejected
+# (the other run had just rewritten the release branch, 2026-11-23).
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 permissions:
   contents: write
   pull-requests: write
