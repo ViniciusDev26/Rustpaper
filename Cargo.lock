@@ -2770,6 +2770,7 @@ dependencies = [
  "image",
  "libc",
  "rustpaper-core",
+ "rustpaper-we-helper",
  "serde_json",
  "smithay",
  "tiny-skia",

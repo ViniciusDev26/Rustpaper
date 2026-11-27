@@ -176,6 +176,68 @@ last `rustpaper-*` window is gone, so it never keeps WE's prefix alive
 Verified on the periodic table 1828698678, Wayland driver: its filter
 took clicks (2026-11-23).
 
+**Media integration** (`media.rs`, `rustpaper_media.dll` in
+`crates/rustpaper-we-helper`). Scenes can show what plays now (album
+art, title, artist, playback state: SceneScript's `mediaThumbnailChanged`,
+`mediaPropertiesChanged`, `mediaPlaybackChanged`...). WE gets it from its
+helper `bin/winrtutil64.exe -parentprocess <WE> -messagehandler
+__WPXProviderAPIMediaControlPID -mediainterface`, which reads Windows'
+media sessions
+(`Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager`,
+"GSMTC"). Proton's Wine has no such class: traced with `WINEDEBUG=+relay`,
+`RoGetActivationFactory` failed (`REGDB_E_CLASSNOTREG`, then
+`CLASS_E_CLASSNOTAVAILABLE` from Wine's windows.media.dll), the helper
+died on the unhandled C++/WinRT exception (c0000409), and a scene's album
+art layer stayed visible with an empty, white texture (Frieren 3443507361,
+2026-11-27). WE starts that helper once, when it starts, and never again
+after it dies.
+
+So the engine provides the class. `rustpaper_media.dll` (no_std, like the
+helper .exe) implements the GSMTC classes WE's helper uses (manager,
+session, media properties, playback info and controls, timeline, the
+album art stream; `gsmtc.rs`), fed by files in `~/.cache/rustpaper/media`
+next to it (`format.rs`): `state` (what plays), `art-<n>.png`, and
+`cmd-<n>` (play, pause, next... from WE). The engine (`media.rs`):
+
+- copies the DLL to `~/.cache/rustpaper` and registers it in WE's prefix
+  (`reg add HKLM\Software\Microsoft\WindowsRuntime\ActivatableClassId\<class>
+  /v DllPath`, in WE's container, like Wine's own classes), once per WE
+  process. The registration needs WE running, so the first one (a new
+  install, or new classes: a marker in the media folder) restarts WE once:
+  its helper already gave up, and C++/WinRT keeps a factory it got;
+- follows the session bus's MPRIS players (`org.mpris.MediaPlayer2.*`,
+  every 500 ms): the one playing (the same one while it plays, else the
+  last to start), else a paused one. It writes `state` when something
+  changes (not when the position merely moves on: WE extrapolates from
+  the position and its time; a jump of more than 2 s is a seek), and the
+  album art when its URL changes (`file://`, or `http(s)://` through
+  `curl`; decoded and saved as PNG, at most 512 px);
+- carries out `cmd-*` files on that player (`Play`, `Pause`, `PlayPause`,
+  `Stop`, `Next`, `Previous`, `SetPosition`, and the `Rate`, `Shuffle`
+  and `LoopStatus` properties).
+
+The DLL reads `state` again when its write time or size changes (checked
+every 250 ms) and fires the session's events (`MediaPropertiesChanged`,
+`PlaybackInfoChanged`, `TimelinePropertiesChanged`; the manager's
+`CurrentSessionChanged` when a player appears or goes). Asynchronous
+operations complete at once. WE's helper reads the album art with
+`DataReader(stream)`, and Wine's `DataReaderFactory::CreateDataReader` is
+a stub (wintypes.dll, GE-Proton 11-13): the DLL is also registered for
+`Windows.Storage.Streams.DataReader` and gives a reader over our stream,
+handing every other stream, and `FromBuffer`, to Wine's factory.
+Verified with an MPRIS test player on a headless output: album art, title
+and artist appeared in the Frieren scene, a new title replaced the old one
+live, and a `pause` from WE's side paused the player (2026-11-27).
+
+Like on Windows, no player means no session. A scene's album art then
+looks as its author made it: Frieren 3443507361 draws a white solid layer
+(100x100) and only paints the cover over it with a `blend` effect that
+`mediaThumbnailChanged` turns on and off (`hasThumbnail`), so it shows a
+white square while nothing plays, on Windows too. Before this, its cover
+never appeared at all. A `media\trace` file next to the DLL makes it log
+every call into its classes to `media\log.txt` (what it lacks, it logs
+anyway).
+
 **Stopping WE cleanly** (`we::restart`). Killing only `wallpaper64.exe`
 left Wine's helpers (`wineserver`, `winedevice.exe`, ...) and the embedded
 Chromium's `CrGpuMain` alive in WE's Steam container. Steam then refused

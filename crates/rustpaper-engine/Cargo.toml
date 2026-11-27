@@ -12,6 +12,8 @@ path = "src/main.rs"
 
 [dependencies]
 rustpaper-core = { path = "../rustpaper-core" }
+# the media folder's file format, shared with rustpaper_media.dll (media.rs)
+rustpaper-we-helper = { path = "../rustpaper-we-helper" }
 serde_json = { version = "1.0.150", features = ["preserve_order"] }
 wayland-client = "0.31"
 # ext-image-copy-capture & co. are in `staging`

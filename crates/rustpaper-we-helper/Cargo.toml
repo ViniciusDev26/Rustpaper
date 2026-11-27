@@ -1,13 +1,26 @@
 [package]
 name = "rustpaper-we-helper"
-description = "Runs inside Wallpaper Engine's Proton prefix: marks Rustpaper's WE windows as the desktop, so web wallpapers take clicks"
+description = "Runs inside Wallpaper Engine's Proton prefix: marks Rustpaper's WE windows as the desktop (web wallpaper clicks), and gives WE's media integration the host's now playing"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
-# A Windows program (built with `--target x86_64-pc-windows-msvc`, linked by
-# rust-lld from .cargo/config.toml): no std, no C runtime, only user32 and
-# kernel32 through raw-dylib, so no Windows SDK is needed. On the host it is
-# a stub, which keeps `cargo build/clippy/test --workspace` working.
+# Two Windows programs (built with `--target x86_64-pc-windows-msvc`, linked
+# by rust-lld from .cargo/config.toml): no std, no C runtime, only Windows
+# DLLs through raw-dylib, so no Windows SDK is needed.
+# - the binary `rustpaper-we-helper.exe` (src/main.rs): web wallpaper clicks;
+# - the library `rustpaper_media.dll` (src/lib.rs): Windows.Media.Control
+#   for WE's media integration, fed by the engine (media.rs).
+# On the host both are stubs, except the library's `format` module (the
+# file format shared with the engine), which keeps `cargo
+# build/clippy/test --workspace` working.
+[lib]
+name = "rustpaper_media"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "rustpaper-we-helper"
+path = "src/main.rs"
+
 [dependencies]

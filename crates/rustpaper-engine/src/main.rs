@@ -35,6 +35,7 @@ mod desktop;
 mod gbm;
 mod launch;
 mod lock;
+mod media;
 mod mirror;
 mod power;
 mod proton;
@@ -288,6 +289,8 @@ fn main() {
     let mut we_audio = audio::WeAudio::default();
     // web wallpapers' clicks (we_helper.rs)
     let mut we_helper = we_helper::WeHelper::default();
+    // WE's media integration: the host's now playing (media.rs)
+    let mut media = media::MediaBridge::default();
     let mut last_tick = Instant::now() - TICK;
     let mut stats = Instant::now();
     let fd = conn.backend().poll_fd().as_raw_fd();
@@ -449,8 +452,21 @@ fn main() {
             );
             if we_on {
                 we_helper.tend();
+                if media.tend() {
+                    // a first registration: WE's media helper started
+                    // without the classes, and only a new WE asks again
+                    eprintln!("media: restarting Wallpaper Engine for its media integration");
+                    if we::restart(&cfg.performance) {
+                        stage.hide_we_ui();
+                    }
+                    for t in &mut targets {
+                        t.attempts = 0;
+                    }
+                    assign(&cfg, mode, &mut targets, &ctx(&cfg, we_on), true);
+                }
             } else {
                 we_helper.stop();
+                media.stop();
             }
         }
         if stats.elapsed() >= Duration::from_secs(60) {
@@ -475,6 +491,7 @@ fn main() {
         t.player = None;
     }
     we_helper.stop();
+    media.stop();
     if we_on && !other_engine_running() {
         // within systemd's stop timeout (we.rs control_within)
         we::control_within(&["-control", "stop"], Duration::from_secs(8));
