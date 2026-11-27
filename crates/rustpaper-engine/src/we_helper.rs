@@ -62,7 +62,7 @@ impl WeHelper {
     /// The helper copied where WE's container sees it, refreshed when the
     /// installed one differs. None (logged once) when it is not installed.
     fn installed(&mut self) -> Option<PathBuf> {
-        let Some(src) = source() else {
+        let Some(src) = installed_file(EXE) else {
             if !self.missing {
                 self.missing = true;
                 eprintln!("we: {EXE} not found; web wallpapers will not take clicks");
@@ -89,20 +89,21 @@ impl Drop for WeHelper {
     }
 }
 
-/// The installed .exe: next to the engine, in `../lib/rustpaper` (/usr/bin
-/// -> /usr/lib/rustpaper), or, in a cargo build, under the Windows target's
+/// A Windows file of rustpaper-we-helper (`EXE`, or media.rs's DLL) as
+/// installed: next to the engine, in `../lib/rustpaper` (/usr/bin ->
+/// /usr/lib/rustpaper), or, in a cargo build, under the Windows target's
 /// directory of the same profile (target/release ->
 /// target/x86_64-pc-windows-msvc/release).
-fn source() -> Option<PathBuf> {
+pub fn installed_file(name: &str) -> Option<PathBuf> {
     let me = std::env::current_exe().ok()?;
     let dir = me.parent()?;
-    let mut candidates = vec![dir.join(EXE), dir.join("../lib/rustpaper").join(EXE)];
+    let mut candidates = vec![dir.join(name), dir.join("../lib/rustpaper").join(name)];
     if let (Some(profile), Some(target)) = (dir.file_name(), dir.parent()) {
         candidates.push(
             target
                 .join("x86_64-pc-windows-msvc")
                 .join(profile)
-                .join(EXE),
+                .join(name),
         );
     }
     candidates.into_iter().find(|p| p.is_file())

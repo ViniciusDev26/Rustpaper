@@ -90,6 +90,10 @@ with the measurement or observation that justified it.
     ext-image-copy-capture into GBM dmabufs (desktop stages). It also reads
     the host's dmabuf formats for the stage's XWayland.
   - `gbm.rs`: minimal libgbm FFI.
+  - `media.rs`: WE's media integration: installs and registers
+    `rustpaper_media.dll` in WE's prefix, writes what the host's MPRIS
+    players play into `~/.cache/rustpaper/media`, carries out WE's
+    play/pause/next.
   - `power.rs`: on battery or not.
   - `lock/`: the animated lock screen (`rustpaper lock`, `lock-daemon`,
     `lock-setup`). `screen.rs` is the `ext-session-lock-v1` client, `ui.rs`
@@ -98,12 +102,18 @@ with the measurement or observation that justified it.
     Desktop-specific lock behaviour (PAM service, look, routing the
     desktop's lock triggers) only in adapters behind `LockAdapter`
     (`adapter.rs`): `omarchy.rs`, `generic.rs`.
-- **`rustpaper-we-helper`**: `rustpaper-we-helper.exe`, a no_std Windows
-  program the engine keeps running inside WE's Proton prefix
-  (`we_helper.rs`): it marks our WE windows as the desktop, without which
-  web wallpapers take no clicks. Build: `cargo build --release -p
-  rustpaper-we-helper --target x86_64-pc-windows-msvc` (rustup target;
-  linked by rust-lld, `.cargo/config.toml`). A stub on the host.
+- **`rustpaper-we-helper`**: no_std Windows artifacts the engine runs
+  inside WE's Proton prefix (Windows-only code, stubs on the host). Build
+  both: `cargo build --release -p rustpaper-we-helper --target
+  x86_64-pc-windows-msvc` (rustup target; linked by rust-lld,
+  `.cargo/config.toml`, entry points in its build.rs).
+  - `rustpaper-we-helper.exe` (`main.rs`, run by `we_helper.rs`): marks our
+    WE windows as the desktop, without which web wallpapers take no clicks.
+  - `rustpaper_media.dll` (`lib.rs`): Windows' media session API
+    (`gsmtc.rs`) and a DataReader for its album art (`datareader.rs`, a
+    stub in Wine), hand-written COM in `com.rs`. `format.rs` (built on the
+    host too) is the file format shared with the engine's `media.rs`. A
+    `media\trace` file next to the DLL logs every call to `media\log.txt`.
 - **`rustpaper-selector`**: Tauri v2 app, binary **`rustpaper-selector`**.
   The UI lives in `ui/`: React + TypeScript + Tailwind v4 (Vite), Zustand
   stores, Zod-validated command replies (`src/api`). build.rs builds it

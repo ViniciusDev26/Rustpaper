@@ -26,8 +26,10 @@ package() {
     install -Dm755 -t "$pkgdir/usr/bin" bin/*
     # Steamworks client library for rustpaper-workshop (RUNPATH ../lib/rustpaper)
     install -Dm755 lib/rustpaper/libsteam_api.so "$pkgdir/usr/lib/rustpaper/libsteam_api.so"
-    # run by the engine inside Wallpaper Engine's Proton (web wallpapers' clicks)
+    # run by the engine inside Wallpaper Engine's Proton (web wallpapers'
+    # clicks; the media integration)
     install -Dm644 lib/rustpaper/rustpaper-we-helper.exe "$pkgdir/usr/lib/rustpaper/rustpaper-we-helper.exe"
+    install -Dm644 lib/rustpaper/rustpaper_media.dll "$pkgdir/usr/lib/rustpaper/rustpaper_media.dll"
     install -Dm644 share/applications/rustpaper.desktop "$pkgdir/usr/share/applications/rustpaper.desktop"
     install -Dm644 share/icons/hicolor/128x128/apps/rustpaper.png \
         "$pkgdir/usr/share/icons/hicolor/128x128/apps/rustpaper.png"

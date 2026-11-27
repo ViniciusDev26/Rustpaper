@@ -8,6 +8,7 @@
 #     rustpaper-<version>/bin/{rustpaper,rustpaper-selector,rustpaper-workshop}
 #     rustpaper-<version>/lib/rustpaper/libsteam_api.so   (Steamworks, for rustpaper-workshop)
 #     rustpaper-<version>/lib/rustpaper/rustpaper-we-helper.exe   (run inside WE's Proton)
+#     rustpaper-<version>/lib/rustpaper/rustpaper_media.dll       (loaded inside WE's Proton)
 #     rustpaper-<version>/share/applications/rustpaper.desktop
 #     rustpaper-<version>/share/icons/hicolor/128x128/apps/rustpaper.png
 #     rustpaper-<version>/etc/pam.d/rustpaper-lock          (the lock screen's PAM service)
@@ -42,6 +43,8 @@ install -m 755 "$repo/target/release/libsteam_api.so" "$root/lib/rustpaper/libst
 # started by the engine inside WE's Proton (web wallpapers' clicks)
 install -m 644 "$repo/target/x86_64-pc-windows-msvc/release/rustpaper-we-helper.exe" \
     "$root/lib/rustpaper/rustpaper-we-helper.exe"
+install -m 644 "$repo/target/x86_64-pc-windows-msvc/release/rustpaper_media.dll" \
+    "$root/lib/rustpaper/rustpaper_media.dll"
 install -m 644 "$repo/packaging/rustpaper.desktop" "$root/share/applications/rustpaper.desktop"
 # the lock screen's PAM service (/etc/pam.d/rustpaper-lock)
 install -Dm644 "$repo/packaging/pam/rustpaper-lock" "$root/etc/pam.d/rustpaper-lock"
