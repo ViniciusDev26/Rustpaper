@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/sugomi-dev/rustpaper/compare/v0.12.0...v0.13.0) (2026-11-27)
+
+
+### Features
+
+* **engine:** run the new binary after an update ([#63](https://github.com/sugomi-dev/rustpaper/issues/63)) ([7b4e9b9](https://github.com/sugomi-dev/rustpaper/commit/7b4e9b9af946c972b1fc1df68d756fe73ff40be9))
+
 ## [0.12.0](https://github.com/sugomi-dev/rustpaper/compare/v0.11.0...v0.12.0) (2026-11-27)
 
 
