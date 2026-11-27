@@ -42,7 +42,11 @@ pub fn main(argv: &[String]) -> ! {
         "lock" if rest.contains(&"--foreground") => foreground(),
         "lock" => lock(),
         "lock-daemon" => match daemon::run(adapter::detect()) {
-            Ok(()) => 0,
+            // it returns only for an update: on into the new binary
+            Ok(()) => {
+                crate::upgrade::exec_if_replaced();
+                0
+            }
             Err(e) => {
                 eprintln!("lock-daemon: {e}");
                 1

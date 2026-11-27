@@ -84,9 +84,14 @@ pub fn run(adapter: Box<dyn LockAdapter>) -> Result<(), String> {
             " (no inhibitor: logind refused)"
         }
     );
+    let mut upgrade = crate::upgrade::Watch::default();
     loop {
         conn.process(Duration::from_secs(5))
             .map_err(|e| format!("system bus: {e}"))?;
+        if upgrade.replaced() {
+            // the binary was updated: lock::main runs the new one
+            return Ok(());
+        }
         while let Ok(e) = rx.try_recv() {
             match e {
                 Event::Sleep(true) => {
