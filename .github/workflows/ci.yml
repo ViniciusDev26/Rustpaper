@@ -12,7 +12,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  IMAGE: ghcr.io/viniciusdev26/rustpaper-ci
+  IMAGE: ghcr.io/sugomi-dev/rustpaper-ci
 
 # Cancel older runs of the same branch/PR when a new push arrives.
 concurrency:

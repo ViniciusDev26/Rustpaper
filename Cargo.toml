@@ -14,4 +14,4 @@ members = ["crates/rustpaper-core", "crates/rustpaper-engine", "crates/rustpaper
 version = "0.11.0"
 edition = "2024"
 license = "MIT"
-repository = "https://github.com/ViniciusDev26/Rustpaper"
+repository = "https://github.com/sugomi-dev/Rustpaper"

@@ -6,8 +6,8 @@
 <p align="center"><i>Your Wallpaper Engine wallpapers on your Linux desktop.</i></p>
 
 <p align="center">
-  <a href="https://github.com/ViniciusDev26/Rustpaper/actions/workflows/ci.yml">
-    <img alt="CI" src="https://github.com/ViniciusDev26/Rustpaper/actions/workflows/ci.yml/badge.svg">
+  <a href="https://github.com/sugomi-dev/Rustpaper/actions/workflows/ci.yml">
+    <img alt="CI" src="https://github.com/sugomi-dev/Rustpaper/actions/workflows/ci.yml/badge.svg">
   </a>
   <img alt="Rust" src="https://img.shields.io/badge/rust-stable-orange?logo=rust">
   <img alt="Platform" src="https://img.shields.io/badge/platform-linux%20%2F%20wayland-blue">
@@ -64,10 +64,10 @@ your own copy of **Wallpaper Engine**, purchased on Steam.
    ```sh
    # the repository's signing key (its fingerprint is in the notes of the
    # pacman-repo release: compare it before signing it locally)
-   curl -sL https://github.com/ViniciusDev26/Rustpaper/releases/download/pacman-repo/rustpaper.gpg -o /tmp/rustpaper.gpg
+   curl -sL https://github.com/sugomi-dev/Rustpaper/releases/download/pacman-repo/rustpaper.gpg -o /tmp/rustpaper.gpg
    sudo pacman-key --add /tmp/rustpaper.gpg
    sudo pacman-key --lsign-key <fingerprint>
-   printf '\n[rustpaper]\nServer = https://github.com/ViniciusDev26/Rustpaper/releases/download/pacman-repo\n' \
+   printf '\n[rustpaper]\nServer = https://github.com/sugomi-dev/Rustpaper/releases/download/pacman-repo\n' \
      | sudo tee -a /etc/pacman.conf
    sudo pacman -Sy rustpaper-bin
    ```
@@ -77,12 +77,12 @@ your own copy of **Wallpaper Engine**, purchased on Steam.
    installing with `pacman -Sy rustpaper-bin` is fine).
 
    Or without the repository (no automatic updates): each
-   [GitHub release](https://github.com/ViniciusDev26/Rustpaper/releases)
+   [GitHub release](https://github.com/sugomi-dev/Rustpaper/releases)
    carries a ready `rustpaper-bin.PKGBUILD`:
 
    ```sh
    mkdir rustpaper && cd rustpaper
-   curl -LO https://github.com/ViniciusDev26/Rustpaper/releases/latest/download/rustpaper-bin.PKGBUILD
+   curl -LO https://github.com/sugomi-dev/Rustpaper/releases/latest/download/rustpaper-bin.PKGBUILD
    mv rustpaper-bin.PKGBUILD PKGBUILD && makepkg -si
    ```
 

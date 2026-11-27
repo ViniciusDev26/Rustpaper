@@ -7,7 +7,7 @@ pkgver=0.11.0 # x-release-please-version
 pkgrel=1
 pkgdesc="Wallpaper Engine wallpapers on Wayland: the real WE under Proton, mirrored onto the desktop (+ selector)"
 arch=('x86_64')
-url="https://github.com/ViniciusDev26/Rustpaper"
+url="https://github.com/sugomi-dev/Rustpaper"
 license=('MIT')
 depends=('gcc-libs' 'glibc' 'gtk3' 'libglvnd' 'libxkbcommon' 'wayland' 'webkit2gtk-4.1'
          'mesa' 'util-linux' 'xorg-xwayland' 'steam' 'pam' 'dbus')
@@ -18,7 +18,7 @@ backup=('etc/pam.d/rustpaper-lock')
 options=('!debug')
 provides=('rustpaper')
 conflicts=('rustpaper')
-source=("https://github.com/ViniciusDev26/Rustpaper/releases/download/v$pkgver/rustpaper-$pkgver-x86_64-linux.tar.gz")
+source=("https://github.com/sugomi-dev/Rustpaper/releases/download/v$pkgver/rustpaper-$pkgver-x86_64-linux.tar.gz")
 sha256sums=('SKIP')
 
 package() {
