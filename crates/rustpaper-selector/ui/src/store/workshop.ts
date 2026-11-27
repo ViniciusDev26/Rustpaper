@@ -127,7 +127,9 @@ export const useWorkshop = create<WorkshopState>((set, get) => {
       }
     },
     more: () => {
-      if (get().page * PAGE_SIZE >= get().total) return;
+      // while a page loads, load() would ignore the call but the page
+      // number would already have moved on, skipping a page
+      if (get().loading || get().page * PAGE_SIZE >= get().total) return;
       set({ page: get().page + 1 });
       void get().load(false);
     },

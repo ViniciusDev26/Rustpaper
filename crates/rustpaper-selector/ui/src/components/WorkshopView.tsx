@@ -1,6 +1,7 @@
 // The Workshop tab: search and filters, result cards with Subscribe /
-// Unsubscribe / Apply and download progress, Load more.
-import { useEffect, useState } from "react";
+// Unsubscribe / Apply and download progress. The next page loads by itself
+// when the end of the results scrolls into view.
+import { useEffect, useRef, useState } from "react";
 import type { WorkshopItem, WorkshopKind, WorkshopSort } from "../api/schemas";
 import { useLibrary } from "../store/library";
 import { fmtCount, fmtSize, hasMore, isDownloading, useWorkshop } from "../store/workshop";
@@ -58,6 +59,29 @@ export function WorkshopView({ onApplied }: { onApplied: () => void }) {
   const [search, setSearch] = useState(ws.search);
   useEffect(() => ws.open(), []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Infinite scroll: a sentinel after the results, watched within the
+  // scroll container with a margin, so the next page starts loading before
+  // the end shows up.
+  const scroller = useRef<HTMLDivElement>(null);
+  const sentinel = useRef<HTMLDivElement>(null);
+  const [nearEnd, setNearEnd] = useState(false);
+  useEffect(() => {
+    const el = sentinel.current;
+    if (!el) return;
+    const io = new IntersectionObserver(([e]) => setNearEnd(e.isIntersecting), {
+      root: scroller.current,
+      rootMargin: "0px 0px 800px 0px",
+    });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+  // also after each page: on a tall window one page may not fill it, and the
+  // observer only reports changes
+  const more = hasMore(ws);
+  useEffect(() => {
+    if (nearEnd && more && !ws.loading) ws.more();
+  }, [nearEnd, more, ws.loading, ws.items.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const applyInstalled = (id: string) => {
     const w = wallpapers.find((x) => x.id === id);
     if (!w) return;
@@ -66,7 +90,7 @@ export function WorkshopView({ onApplied }: { onApplied: () => void }) {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto">
+    <div ref={scroller} className="flex-1 overflow-y-auto">
       <div className="flex flex-wrap items-center gap-2.5 px-5 pt-3.5">
         <input
           type="search"
@@ -123,13 +147,9 @@ export function WorkshopView({ onApplied }: { onApplied: () => void }) {
           </Card>
         ))}
       </div>
-      {hasMore(ws) && (
-        <div className="pb-6 text-center">
-          <Button variant="secondary" disabled={ws.loading} onClick={ws.more}>
-            Load more
-          </Button>
-        </div>
-      )}
+      <div ref={sentinel} className="pb-6 text-center text-sm text-sub">
+        {more && ws.loading && "Loading more…"}
+      </div>
     </div>
   );
 }
