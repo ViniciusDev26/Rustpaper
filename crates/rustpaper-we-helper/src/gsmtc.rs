@@ -102,13 +102,14 @@ fn reload() {
     if old.seq == new.seq && old.status == new.status {
         return;
     }
-    // As Windows does: no player, no session (GetCurrentSession null). A
-    // session that stayed Closed without properties, or a thumbnail that is
-    // an empty stream, changed nothing for WE: it never fires
-    // `mediaThumbnailChanged` with `hasThumbnail` false (the event is about
-    // the image changing), so a scene that hides its album art only that
-    // way keeps showing an empty, white texture once nothing plays, as it
-    // would on Windows (tried 2026-11-27).
+    // As Windows does: no player, no session (GetCurrentSession null).
+    // A scene's album art then looks as its author made it: Frieren
+    // 3443507361 draws a white solid layer and only paints the cover over
+    // it (a `blend` effect toggled by `mediaThumbnailChanged`'s
+    // `hasThumbnail`), so it shows a white square while nothing plays, as
+    // on Windows. Variants that made no difference there: a Closed
+    // session without properties, an empty thumbnail stream; a failing
+    // OpenReadAsync made WE's helper drop the whole update (2026-11-27).
     if old.present() != new.present() {
         let m = manager().ptr();
         // SAFETY: the manager singleton (slot 0).

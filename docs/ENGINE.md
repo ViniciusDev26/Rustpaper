@@ -173,6 +173,8 @@ container does not see `/usr/lib/rustpaper`. Killing the `start.exe` that
 `wine` leaves as our child also ends it. It exits by itself 5 s after the
 last `rustpaper-*` window is gone, so it never keeps WE's prefix alive
 (Steam would refuse to start WE again). It costs ~0.1% of a core.
+Verified on the periodic table 1828698678, Wayland driver: its filter
+took clicks (2026-11-23).
 
 **Media integration** (`media.rs`, `rustpaper_media.dll` in
 `crates/rustpaper-we-helper`). Scenes can show what plays now (album
@@ -227,15 +229,14 @@ Verified with an MPRIS test player on a headless output: album art, title
 and artist appeared in the Frieren scene, a new title replaced the old one
 live, and a `pause` from WE's side paused the player (2026-11-27).
 
-Like on Windows, no player means no session. WE fires
-`mediaThumbnailChanged` only when the image changes, never with
-`hasThumbnail` false (tried: no session, a closed session without
-properties, an empty thumbnail stream): a scene that hides its album art
-only that way shows an empty, white square while nothing plays. A
-`media\trace` file next to the DLL makes it log every call into its
-classes to `media\log.txt` (what it lacks, it logs anyway).
-Verified on the periodic table 1828698678, Wayland driver: its filter
-took clicks (2026-11-23).
+Like on Windows, no player means no session. A scene's album art then
+looks as its author made it: Frieren 3443507361 draws a white solid layer
+(100x100) and only paints the cover over it with a `blend` effect that
+`mediaThumbnailChanged` turns on and off (`hasThumbnail`), so it shows a
+white square while nothing plays, on Windows too. Before this, its cover
+never appeared at all. A `media\trace` file next to the DLL makes it log
+every call into its classes to `media\log.txt` (what it lacks, it logs
+anyway).
 
 **Stopping WE cleanly** (`we::restart`). Killing only `wallpaper64.exe`
 left Wine's helpers (`wineserver`, `winedevice.exe`, ...) and the embedded
