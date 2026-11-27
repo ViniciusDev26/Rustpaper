@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.12.0](https://github.com/sugomi-dev/rustpaper/compare/v0.11.0...v0.12.0) (2026-11-27)
+
+
+### Features
+
+* **engine:** media integration for Wallpaper Engine scenes ([#61](https://github.com/sugomi-dev/rustpaper/issues/61)) ([aaf5d16](https://github.com/sugomi-dev/rustpaper/commit/aaf5d161d8621352e77c98fd11fb6d77decb638d))
+* **selector:** load the next Workshop page while scrolling ([#60](https://github.com/sugomi-dev/rustpaper/issues/60)) ([4ba38dd](https://github.com/sugomi-dev/rustpaper/commit/4ba38dd7993b7a244ad3548aece62cc59f86aa4c))
+
+
+### Bug Fixes
+
+* **engine:** keep Wallpaper Engine's audio off winepulse ([#58](https://github.com/sugomi-dev/rustpaper/issues/58)) ([dd0535c](https://github.com/sugomi-dev/rustpaper/commit/dd0535c9125af92a2e0b4475d430574e60e91d40))
+* **selector:** keep WebKit's GPU rendering on NVIDIA ([#59](https://github.com/sugomi-dev/rustpaper/issues/59)) ([73c3276](https://github.com/sugomi-dev/rustpaper/commit/73c32768a01ac046455db90eb172c5bf95c48bd5))
+
 ## [0.11.0](https://github.com/ViniciusDev26/Rustpaper/compare/v0.10.0...v0.11.0) (2026-11-23)
 
 
