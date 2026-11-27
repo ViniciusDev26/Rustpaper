@@ -58,6 +58,15 @@ pub fn env_var(name: &str) -> Option<String> {
         .map(|d| String::from_utf8_lossy(d).into_owned())
 }
 
+/// The audio driver of the running WE (launch.rs); None when WE is not
+/// running.
+pub fn audio() -> Option<crate::launch::WeAudio> {
+    pid()?;
+    Some(crate::launch::WeAudio::of(
+        env_var("WINEDLLOVERRIDES").as_deref(),
+    ))
+}
+
 /// Linux path -> the same file as Wine sees it (`Z:` is the host root; the
 /// Steam library drive letter is not mapped in every Proton session).
 pub fn wine_path(p: &Path) -> String {

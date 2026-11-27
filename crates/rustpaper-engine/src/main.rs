@@ -497,8 +497,13 @@ fn reload(
     force: bool,
 ) {
     let new_driver = new.wine_wayland != old.wine_wayland;
+    // the volume going to or from 0 turns WE's audio device off or on
+    // (launch.rs), which also only applies to a WE started again
+    let new_audio = new.mute != old.mute && audio_mismatch();
     if ctx.we_on
-        && (new_driver || (!new.performance.is_empty() && we::needs_restart(&new.performance)))
+        && (new_driver
+            || new_audio
+            || (!new.performance.is_empty() && we::needs_restart(&new.performance)))
     {
         // a new Wine driver only applies to a WE started again (through
         // Steam: the launch option sets its environment)
@@ -506,6 +511,8 @@ fn reload(
             "reload: {}, restarting Wallpaper Engine",
             if new_driver {
                 "new Wine driver"
+            } else if new_audio {
+                "audio turned on or off"
             } else {
                 "new quality settings"
             }
@@ -558,9 +565,24 @@ fn start_we(cfg: &Config, private: Option<&PrivateStage>, stage: &dyn Stage) -> 
         // through the launch option, which points it at our display
         eprintln!("stage: moving Wallpaper Engine onto the private stage");
         we::restart(&cfg.performance);
+    } else if audio_mismatch() {
+        eprintln!(
+            "audio: Wallpaper Engine runs with {:?} audio, not {:?}: restarting it",
+            we::audio(),
+            launch::WeAudio::wanted()
+        );
+        we::restart(&cfg.performance);
     }
     stage.hide_we_ui();
     true
+}
+
+/// The running WE has another audio driver than the launch option would
+/// give it now (launch.rs: none at volume 0, else ALSA, never winepulse;
+/// a WE started before this or by hand has winepulse), and the launch
+/// option runs us: a restart through Steam then fixes it.
+fn audio_mismatch() -> bool {
+    we::audio().is_some_and(|a| a != launch::WeAudio::wanted()) && launch::configured()
 }
 
 /// A video wallpaper mpv can play.

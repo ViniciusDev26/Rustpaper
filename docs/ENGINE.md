@@ -272,7 +272,9 @@ says (`rustpaper_core::state`). It re-reads it on SIGHUP
 - a new wallpaper or new property values load into the same windows
   (only the windows whose wallpaper changed);
 - new quality settings restart WE (see below);
-- a volume or mute change reaches WE's audio streams on the next tick.
+- a volume or mute change reaches WE's audio streams on the next tick;
+  the volume going to or from 0 restarts WE (no audio driver at 0, see
+  "Never winepulse").
 
 The process never restarts, so the desktop never shows the plain
 background. With nothing chosen yet it exits 0, so the service does not
@@ -492,7 +494,25 @@ the watchdog sets WE's audio streams (`application.name` "Wallpaper
 Engine") in the user's sound server through `pactl` (`audio.rs`): the
 user's volume, muted at 0 and while no monitor shows a WE window (a window
 a video in mpv left behind keeps playing its old wallpaper, music
-included). WE opens a stream per wallpaper, hence a check every tick.
+included). WE opens a stream per wallpaper, so one `pactl subscribe`
+watches the sink inputs and the streams are listed again after a new or
+changed one, or a new volume. Listing them every tick (2 s) had made ~187k
+pactl connections in 4.6 days.
+
+**Never winepulse.** The launch option (`launch.rs`) gives WE Wine's ALSA
+driver (`WINEDLLOVERRIDES=winepulse.drv=d`), or no audio driver at all at
+volume 0 (`winepulse.drv=d;winealsa.drv=d`: no stream). Through winepulse,
+a WE the watchdog paused (SIGSTOP, `we::set_paused`; e.g. the whole time a
+video wallpaper plays in mpv) with its stream open made pipewire-pulse
+1.6.9 grow by the stream's rate (float32 2ch 48 kHz; measured ~440 kB/s,
+~40 MB in 90 s): 37 GB in 4.6 days, returned only by restarting
+pipewire-pulse. The same stream with WE running stayed flat, and through
+winealsa (which the Steam runtime routes to pipewire-pulse too, as "ALSA
+plug-in [wine64-preloader]") it stayed flat paused as well (90 s each,
+2026-11-27). That stream no longer carries WE's name; `audio.rs` finds it
+by `application.process.id`, WE's host pid. A WE with another driver than
+the volume calls for (started before, or the volume went to or from 0) is
+restarted through Steam, once per engine start or volume change.
 
 ## Measurements (desktop stage, 2026-11-22, RTX 4060 Ti, Hyprland 0.56.2)
 
