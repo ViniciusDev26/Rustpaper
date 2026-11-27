@@ -54,7 +54,7 @@ pub fn unit_text(engine: &Path) -> String {
         "# Written by rustpaper-selector; rewritten when the engine moves.
 [Unit]
 Description=Rustpaper live wallpaper (Wallpaper Engine under Proton)
-Documentation=https://github.com/ViniciusDev26/Rustpaper
+Documentation=https://github.com/sugomi-dev/Rustpaper
 PartOf=graphical-session.target
 After=graphical-session.target
 Requisite=graphical-session.target
