@@ -13,6 +13,17 @@
 //! compatibility tool is then GE-Proton) WE uses Wine's Wayland driver on
 //! the stage's Wayland socket instead (`PROTON_ENABLE_WAYLAND=1`, no
 //! `DISPLAY`), with no XWayland in between (docs/ENGINE.md).
+//!
+//! WE's audio never goes through Wine's PulseAudio driver ([`WeAudio`]).
+//! The watchdog pauses WE with SIGSTOP (we::set_paused), and a stopped
+//! winepulse client made pipewire-pulse 1.6.9 grow by the rate of its
+//! stream (float32 2ch 48 kHz, 384 kB/s; measured ~440 kB/s) for as long as
+//! WE stayed stopped: 37 GB in 4.6 days with a video wallpaper (WE paused
+//! the whole time), returned only by restarting pipewire-pulse. Running,
+//! the same stream stayed flat; through Wine's ALSA driver (which the Steam
+//! runtime routes to pipewire-pulse too, "ALSA plug-in [wine64-preloader]")
+//! it stayed flat stopped as well (90 s each, 2026-11-27). With the volume
+//! at 0 WE gets no audio driver at all, so it opens no stream.
 
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
@@ -137,6 +148,59 @@ fn stage_env(
     }
 }
 
+/// WE's audio driver, chosen by the launch option through Wine's DLL
+/// overrides (the module docs say why never winepulse).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WeAudio {
+    /// No driver: no stream at all (volume 0).
+    Off,
+    /// Wine's ALSA driver.
+    Alsa,
+    /// Wine's default, PulseAudio: a WE not started by this launch option.
+    Pulse,
+}
+
+/// `WINEDLLOVERRIDES` entries that leave Wine's ALSA driver as WE's.
+const NO_PULSE: &str = "winepulse.drv=d";
+/// `WINEDLLOVERRIDES` entries that leave WE without audio (Proton ships
+/// winepulse and winealsa).
+const NO_AUDIO: &str = "winepulse.drv=d;winealsa.drv=d";
+
+impl WeAudio {
+    /// What the launch option gives WE: the selector's volume 0 turns
+    /// audio off.
+    pub fn wanted() -> Self {
+        if rustpaper_core::state::load().volume == 0 {
+            Self::Off
+        } else {
+            Self::Alsa
+        }
+    }
+
+    /// The driver of a WE started with `WINEDLLOVERRIDES` = `overrides`.
+    pub fn of(overrides: Option<&str>) -> Self {
+        match overrides {
+            Some(o) if o.contains(NO_AUDIO) => Self::Off,
+            Some(o) if o.contains(NO_PULSE) => Self::Alsa,
+            _ => Self::Pulse,
+        }
+    }
+
+    /// `WINEDLLOVERRIDES` for WE: `current` (the user's own overrides,
+    /// kept) plus ours.
+    fn overrides(self, current: Option<String>) -> Option<String> {
+        let ours = match self {
+            Self::Off => NO_AUDIO,
+            Self::Alsa => NO_PULSE,
+            Self::Pulse => return current,
+        };
+        Some(match current.filter(|c| !c.is_empty()) {
+            Some(c) => format!("{c};{ours}"),
+            None => ours.to_string(),
+        })
+    }
+}
+
 pub fn run(command: &[String]) -> ! {
     let Some((program, args)) = command.split_first() else {
         eprintln!(
@@ -156,6 +220,12 @@ pub fn run(command: &[String]) -> ! {
     }
     for k in remove {
         cmd.env_remove(k);
+    }
+    // Proton appends its own overrides to ours
+    let audio = WeAudio::wanted();
+    if let Some(o) = audio.overrides(std::env::var("WINEDLLOVERRIDES").ok()) {
+        eprintln!("rustpaper we-launch: Wallpaper Engine's audio: {audio:?}");
+        cmd.env("WINEDLLOVERRIDES", o);
     }
     let err = cmd.exec();
     eprintln!("rustpaper we-launch: {program}: {err}");
@@ -185,5 +255,29 @@ mod tests {
             stage_env(None, None, true).0.is_empty(),
             "no stage: untouched"
         );
+    }
+
+    #[test]
+    fn we_audio_never_uses_winepulse() {
+        assert_eq!(WeAudio::Off.overrides(None).as_deref(), Some(NO_AUDIO));
+        assert_eq!(
+            WeAudio::Off.overrides(Some("d3d11=n".into())).as_deref(),
+            Some("d3d11=n;winepulse.drv=d;winealsa.drv=d")
+        );
+        assert_eq!(
+            WeAudio::Alsa.overrides(Some(String::new())).as_deref(),
+            Some(NO_PULSE)
+        );
+        assert_eq!(
+            WeAudio::Alsa.overrides(Some("d3d11=n".into())).as_deref(),
+            Some("d3d11=n;winepulse.drv=d")
+        );
+        // read back from a running WE's environment (Proton appended its own)
+        for a in [WeAudio::Off, WeAudio::Alsa] {
+            let env = format!("{};nvapi=n", a.overrides(Some("x=n".into())).unwrap());
+            assert_eq!(WeAudio::of(Some(&env)), a);
+        }
+        assert_eq!(WeAudio::of(Some("nvapi=n")), WeAudio::Pulse);
+        assert_eq!(WeAudio::of(None), WeAudio::Pulse);
     }
 }
