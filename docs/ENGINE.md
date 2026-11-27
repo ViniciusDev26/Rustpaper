@@ -353,6 +353,21 @@ When an engine exits:
 The systemd service avoids both by reloading in place. Without systemd, the
 selector starts the next engine before stopping the old one.
 
+**Updates** (`upgrade.rs`). A package update replaces `/usr/bin/rustpaper`
+under the running engine and lock daemon, which ran on the old binary until
+restarted by hand or at the next login: 0.12.0's media integration seemed
+not to work after `omarchy update` (2026-11-27). The file a process runs
+then shows as `<path> (deleted)` in `/proc/self/exe`. Once a new file has
+been at that path for 10 s (the rest of the update, `/usr/lib/rustpaper`,
+lands meanwhile), the engine leaves its loop as on SIGTERM, cleaning up as
+usual, and replaces itself with the new binary and the same arguments
+(`exec`): the same PID, so systemd sees no restart; the desktop shows the
+plain background while the new engine starts its stage and WE again, as
+with `systemctl --user restart rustpaper`. The lock daemon does the same
+between its D-Bus waits. Verified by replacing a running engine's binary
+the way pacman does (written aside, renamed over): 10 s later it logged the
+update and came back in the same process on the new file.
+
 A **watchdog** runs every 2 s. It lets the stage repair itself (`tend`:
 workspace and fullscreen state on desktop stages), and asks WE again for a
 window that is missing after 40 s. After two

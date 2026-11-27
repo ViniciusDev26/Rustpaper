@@ -94,6 +94,8 @@ with the measurement or observation that justified it.
     `rustpaper_media.dll` in WE's prefix, writes what the host's MPRIS
     players play into `~/.cache/rustpaper/media`, carries out WE's
     play/pause/next.
+  - `upgrade.rs`: after a package update replaced the binary, the engine
+    and the lock daemon exec the new one (same PID).
   - `power.rs`: on battery or not.
   - `lock/`: the animated lock screen (`rustpaper lock`, `lock-daemon`,
     `lock-setup`). `screen.rs` is the `ext-session-lock-v1` client, `ui.rs`

@@ -40,6 +40,7 @@ mod mirror;
 mod power;
 mod proton;
 mod stage;
+mod upgrade;
 mod video;
 mod we;
 mod we_helper;
@@ -104,6 +105,12 @@ fn fail(msg: impl std::fmt::Display) -> ! {
 }
 
 fn main() {
+    run();
+    // updated meanwhile: on into the new binary (upgrade.rs)
+    upgrade::exec_if_replaced();
+}
+
+fn run() {
     // the Steam launch option for WE (launch.rs): exec, never returns
     let argv: Vec<String> = std::env::args().collect();
     if argv.get(1).map(String::as_str) == Some("we-launch") {
@@ -291,6 +298,8 @@ fn main() {
     let mut we_helper = we_helper::WeHelper::default();
     // WE's media integration: the host's now playing (media.rs)
     let mut media = media::MediaBridge::default();
+    // the package manager replacing this binary (upgrade.rs)
+    let mut upgrade = upgrade::Watch::default();
     let mut last_tick = Instant::now() - TICK;
     let mut stats = Instant::now();
     let fd = conn.backend().poll_fd().as_raw_fd();
@@ -450,6 +459,10 @@ fn main() {
                 mode,
                 we_on,
             );
+            if upgrade.replaced() {
+                // leave as on SIGTERM; main then runs the new binary
+                QUIT.store(true, Ordering::SeqCst);
+            }
             if we_on {
                 we_helper.tend();
                 if media.tend() {
