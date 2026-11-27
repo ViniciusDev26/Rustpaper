@@ -794,12 +794,23 @@ fn main() {
         .expect("failed to run the Tauri app");
 }
 
-/// WebKitGTK workarounds. DMABUF rendering breaks on the NVIDIA driver
-/// (blank window), so it is off unless the user set the variable already.
+/// WebKitGTK workaround for the NVIDIA driver: WebKit's DMABUF renderer
+/// hands the compositor the GPU's dmabufs, and the selector died at once
+/// with "Error 71 (Protocol error) dispatching to Wayland display"
+/// (Hyprland, NVIDIA open 615.78, webkit2gtk 2.54.1, 2026-11-27). Turning
+/// the renderer off (`WEBKIT_DISABLE_DMABUF_RENDERER=1`, what we did
+/// before, from the devcontainer days) paints on the CPU: the gallery's ~35
+/// animated GIF previews kept the web process at 100% of a core and
+/// scrolling lagged (1.7% with no GIFs on screen). With `FORCE_SHM` the GPU
+/// still renders and only the hand-over goes through shared memory: no
+/// protocol error, and scrolling is smooth. Left alone when the user set
+/// either variable.
 fn setup_linux_env() {
-    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none()
+        && std::env::var_os("WEBKIT_DMABUF_RENDERER_FORCE_SHM").is_none()
+    {
         // SAFETY: called first thing in main, before any thread exists.
-        unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
+        unsafe { std::env::set_var("WEBKIT_DMABUF_RENDERER_FORCE_SHM", "1") };
     }
 }
 
